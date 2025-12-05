@@ -18,6 +18,7 @@ dependencies = [
     "supabase==2.22.3",
     "python-dotenv>=1.0.0",
     "harbor",
+    "dynamic-semaphore @ git+https://github.com/penfever/dynamic-semaphore",
     "google-cloud-storage",
     "h5py",
     "certifi",
