@@ -4,11 +4,11 @@ Welcome to OT-Agent, a large-scale research project dedicated to creating the be
 
 ## Links
 
-Project Website: Coming Soon
+[Project Website](http://openthoughts.ai/agent)
 
-[OT-Agent Leaderboard](https://ot-agent-leaderboard.replit.app/)
+[Leaderboard](https://ot-agent-leaderboard.replit.app/)
 
-[OT-Agent Trace Viewer](https://dcagents-trace-viewer.replit.app/)
+[Trace Viewer](https://dcagents-trace-viewer.replit.app/)
 
 ## Warning!
 
@@ -260,4 +260,12 @@ Please reach out to someone on the [terminal-bench Discord](https://discord.gg/6
 
 ## Citation
 
-Coming Soon
+```
+@misc{openthoughts-agent,
+  author = {Team, OpenThoughts-Agent},
+  month = Dec,
+  title = {{OpenThoughts-Agent}},
+  howpublished = {https://open-thoughts.ai/agent},
+  year = {2025}
+}
+```
