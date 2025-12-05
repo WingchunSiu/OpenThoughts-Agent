@@ -23,7 +23,7 @@ Notes:
 - Auth to HF via HF_TOKEN env var or pass --token.
 
 Example:
-    python open-thoughts-agent/scripts/daytona/validate_and_upload_from_hf.py \
+    python OpenThoughts-Agent/scripts/daytona/validate_and_upload_from_hf.py \
         --repo_id org/dataset \
         --revision main \
         --extract_dir ./data/tmp_tasks \

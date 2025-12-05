@@ -13,7 +13,7 @@ set -euo pipefail
 singularity exec --nv /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif /bin/bash <<'EOF'
 source ~/.bashrc
 source ~/secrets.env
-cd $SCRATCH/open-thoughts-agent
+cd $SCRATCH/OpenThoughts-Agent
 source hpc/dotenv/nyutorch.env
 git pull
 conda activate dcagent

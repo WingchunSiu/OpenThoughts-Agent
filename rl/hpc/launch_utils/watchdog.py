@@ -12,9 +12,9 @@ import sys
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
-# Add open-thoughts-agent root to path for database imports
-# watchdog.py is at: open-thoughts-agent/rl/hpc/launch_utils/watchdog.py
-# So we need to go up 3 levels to get to open-thoughts-agent root
+# Add OpenThoughts-Agent root to path for database imports
+# watchdog.py is at: OpenThoughts-Agent/rl/hpc/launch_utils/watchdog.py
+# So we need to go up 3 levels to get to OpenThoughts-Agent root
 DC_AGENT_ROOT = Path(__file__).resolve().parents[3]
 if str(DC_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(DC_AGENT_ROOT))

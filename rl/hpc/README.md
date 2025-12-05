@@ -2,13 +2,13 @@
 
 (NOTE: this README, along with the docs in the `docs/` folder can be outdated. Use with caution.)
 
-This directory contains a unified command-line interface for launching open-thoughts-agent training jobs on multiple HPC clusters, similar to the DCFT HPC system.
+This directory contains a unified command-line interface for launching OpenThoughts-Agent training jobs on multiple HPC clusters, similar to the DCFT HPC system.
 ## OT-Agent Directories
 Locations for codebases:
 
-JSC: ```/p/project/laionize/marianna/terminal_bench/open-thoughts-agent```
+JSC: ```/p/project/laionize/marianna/terminal_bench/OpenThoughts-Agent```
 
-TACC: ```/scratch/08134/negin/open-thoughts-agent-shared/open-thoughts-agent```
+TACC: ```/scratch/08134/negin/OpenThoughts-Agent-shared/OpenThoughts-Agent```
 ## Quick Start
 All you need to begin is 
 ```bash

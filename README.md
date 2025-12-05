@@ -121,6 +121,7 @@ Datagen jobs are launched via the generic HPC launcher and use `--job_type datag
    $DCFT_ACTIVATE_ENV
    cd "$DCFT"
    ```
+   The dotenvs now export `PYTHONPATH="${DCFT_PRIVATE:-$DCFT}:$PYTHONPATH"` so `python -m hpc.launch` resolves even on clusters that strip the working directory from `sys.path`. If you maintain a custom dotenv, mirror this line to keep the launcher importable.
 3. Choose or write a datagen script under `data/...` implementing `BaseDataGenerator` (see `data/generation/base.py` and existing generators for examples).
 4. Run the launcher from a login node:
    ```bash
@@ -190,7 +191,7 @@ RL training currently uses cluster-specific scripts under `rl/` rather than the 
 Adding a new cluster involves defining its resources, sbatch templates, and a dotenv file so `hpc.launch` can target it.
 
 1. **Create a dotenv for your cluster** under `hpc/dotenv/`, following `tacc.env` as a template. At a minimum, define:
-   - `DCFT` (path to your open-thoughts-agent checkout on the cluster)
+   - `DCFT` (path to your OpenThoughts-Agent checkout on the cluster)
    - `DCFT_ACTIVATE_ENV` (command to activate the Python env)
    - paths for `EXPERIMENTS_DIR`, `DATASETS_DIR`, `MODELS_DIR`, and any cluster-specific SIF/Apptainer images.
 2. **Register basic cluster metadata** by exporting `HPC_NAME` and related fields in your dotenv or by passing them on the CLI:

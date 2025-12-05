@@ -1,5 +1,5 @@
 #!/bin/bash
-# Status monitoring script for open-thoughts-agent jobs
+# Status monitoring script for OpenThoughts-Agent jobs
 
 LINES=${1:-1}
 
