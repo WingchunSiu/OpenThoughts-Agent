@@ -48,7 +48,7 @@ done
 export HF_HOME="/tmp/hf_home"
 #srun rsync -az $SCRATCH/hf_home /tmp
 
-# export HF_TOKEN=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
+# export HF_TOKEN=YOUR_HF_TOKEN_HERE
 
 export NCCL_PROTO=simple
 export NCCL_DEBUG=INFO
