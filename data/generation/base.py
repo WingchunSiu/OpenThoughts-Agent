@@ -1042,6 +1042,49 @@ class BaseDataGenerator(ABC):
             job_config_for_run.environment.override_storage_mb = int(sandbox_disk) * 1024
 
         job_dir = trace_jobs_dir / job_config_for_run.job_name
+        if requires_endpoint:
+            existing_config_path = job_dir / "config.json"
+            existing_values: dict[str, str | None] = {}
+            if existing_config_path.exists():
+                try:
+                    existing_payload = json.loads(existing_config_path.read_text())
+                    existing_agent = ((existing_payload.get("agents") or [{}])[0]) or {}
+                    existing_kwargs = existing_agent.get("kwargs") or {}
+                    existing_values = {
+                        "api_base": (existing_kwargs.get("api_base") or "").strip() or None,
+                        "metrics_endpoint": (existing_kwargs.get("metrics_endpoint") or "").strip() or None,
+                    }
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.logger.warning(
+                        "[traces] Failed to inspect existing Harbor config at %s (%s)",
+                        existing_config_path,
+                        exc,
+                    )
+            desired_api_base = (agent_kwargs.get("api_base") or "").strip() or None
+            desired_metrics = (agent_kwargs.get("metrics_endpoint") or "").strip() or None
+            if existing_values and desired_api_base:
+                old_api = existing_values.get("api_base")
+                old_metrics = existing_values.get("metrics_endpoint")
+                mismatch_api = bool(
+                    old_api
+                    and old_api.rstrip("/") != desired_api_base.rstrip("/")
+                )
+                mismatch_metrics = bool(
+                    old_metrics
+                    and desired_metrics
+                    and old_metrics.rstrip("/") != desired_metrics.rstrip("/")
+                )
+                if mismatch_api or mismatch_metrics:
+                    raise InputValidationError(
+                        "Existing trace job config at "
+                        f"{existing_config_path} still references Pinggy URL "
+                        f"{old_api or '<unset>'} (metrics {old_metrics or '<unset>'}) "
+                        f"but the current vLLM endpoint is {desired_api_base} "
+                        f"(metrics {desired_metrics or '<unset>'}). Delete the stale "
+                        "trace_jobs directory or pick a fresh --experiments_dir/--job_name "
+                        "to avoid reusing mismatched Harbor configs."
+                    )
+
         base_artifacts = {
             "trace_jobs_dir": str(trace_jobs_dir),
             "trace_job_name": job_config_for_run.job_name,
