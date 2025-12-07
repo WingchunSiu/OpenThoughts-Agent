@@ -955,8 +955,15 @@ def display_args(exp_args, name):
         print(f"{key}: {value}")
     print()
 
-def _build_vllm_env_vars(exp_args: dict) -> tuple[dict, dict]:
-    """Return environment variables used to configure vLLM processes."""
+def _build_vllm_env_vars(exp_args: dict, *, include_pinggy: bool = True) -> tuple[dict, dict]:
+    """Return environment variables used to configure vLLM processes.
+
+    Args:
+        exp_args: Experiment arguments (mutated in-place with defaults).
+        include_pinggy: Whether to export Pinggy-related env vars. Only the
+            standalone vLLM server needs these; datagen/trace jobs derive their
+            API base directly from the endpoint JSON.
+    """
     env: dict[str, str] = {}
     cfg = exp_args.get("_datagen_vllm_server_config")
     if not cfg:
@@ -996,36 +1003,37 @@ def _build_vllm_env_vars(exp_args: dict) -> tuple[dict, dict]:
     if cfg.reasoning_parser:
         env["VLLM_REASONING_PARSER"] = cfg.reasoning_parser
 
-    explicit_cli_keys = set(exp_args.get("_explicit_cli_keys", []) or [])
-    pinggy_fields = (
-        ("PINGGY_PERSISTENT_URL", "pinggy_persistent_url"),
-        ("PINGGY_SSH_COMMAND", "pinggy_ssh_command"),
-        ("PINGGY_DEBUGGER_URL", "pinggy_debugger_url"),
-    )
-    for env_key, arg_key in pinggy_fields:
-        candidate = exp_args.get(arg_key)
-        explicit = arg_key in explicit_cli_keys
-        if isinstance(candidate, str):
-            candidate = candidate.strip()
-        fallback_allowed = not explicit
-        if candidate in (None, "", "None"):
-            if fallback_allowed:
-                fallback = os.environ.get(env_key)
-                if isinstance(fallback, str):
-                    fallback = fallback.strip()
-                candidate = fallback
-            else:
-                os.environ.pop(env_key, None)
-                if arg_key in exp_args:
-                    exp_args = update_exp_args(exp_args, {arg_key: None}, explicit_keys={arg_key})
+    if include_pinggy:
+        explicit_cli_keys = set(exp_args.get("_explicit_cli_keys", []) or [])
+        pinggy_fields = (
+            ("PINGGY_PERSISTENT_URL", "pinggy_persistent_url"),
+            ("PINGGY_SSH_COMMAND", "pinggy_ssh_command"),
+            ("PINGGY_DEBUGGER_URL", "pinggy_debugger_url"),
+        )
+        for env_key, arg_key in pinggy_fields:
+            candidate = exp_args.get(arg_key)
+            explicit = arg_key in explicit_cli_keys
+            if isinstance(candidate, str):
+                candidate = candidate.strip()
+            fallback_allowed = not explicit
+            if candidate in (None, "", "None"):
+                if fallback_allowed:
+                    fallback = os.environ.get(env_key)
+                    if isinstance(fallback, str):
+                        fallback = fallback.strip()
+                    candidate = fallback
+                else:
+                    os.environ.pop(env_key, None)
+                    if arg_key in exp_args:
+                        exp_args = update_exp_args(exp_args, {arg_key: None}, explicit_keys={arg_key})
+                    continue
+            if candidate in (None, "", "None"):
                 continue
-        if candidate in (None, "", "None"):
-            continue
-        candidate_str = str(candidate)
-        env[env_key] = candidate_str
-        os.environ[env_key] = candidate_str
-        if exp_args.get(arg_key) != candidate:
-            exp_args = update_exp_args(exp_args, {arg_key: candidate})
+            candidate_str = str(candidate)
+            env[env_key] = candidate_str
+            os.environ[env_key] = candidate_str
+            if exp_args.get(arg_key) != candidate:
+                exp_args = update_exp_args(exp_args, {arg_key: candidate})
 
     max_output_tokens = (
         exp_args.get("trace_max_tokens")
@@ -1200,7 +1208,7 @@ def launch_vllm_server(exp_args: dict, hpc) -> str:
     if not vllm_cfg:
         raise ValueError("vLLM server launch requested but no vllm_server configuration provided.")
 
-    vllm_env_vars, exp_args = _build_vllm_env_vars(exp_args)
+    vllm_env_vars, exp_args = _build_vllm_env_vars(exp_args, include_pinggy=True)
 
     model_path = vllm_cfg.model_path
 
@@ -1327,7 +1335,7 @@ def launch_task_job(exp_args: dict, hpc, vllm_job_id: str = None) -> str:
         backend = "none"
         datagen_env_vars["DATAGEN_BACKEND"] = backend
         exp_args = update_exp_args(exp_args, {"datagen_backend": backend})
-    vllm_env_vars, exp_args = _build_vllm_env_vars(exp_args)
+    vllm_env_vars, exp_args = _build_vllm_env_vars(exp_args, include_pinggy=False)
     datagen_env_vars.update(vllm_env_vars)
 
     if is_ray_backend:
@@ -1951,7 +1959,7 @@ def launch_trace_job(
 
     backend = str(trace_env_vars["TRACE_BACKEND"]).lower()
     is_trace_ray_backend = backend == "ray"
-    vllm_trace_env, exp_args = _build_vllm_env_vars(exp_args)
+    vllm_trace_env, exp_args = _build_vllm_env_vars(exp_args, include_pinggy=False)
     vllm_cfg = exp_args.get("_datagen_vllm_server_config")
     backend_cfg = exp_args.get("_datagen_backend_config")
     trace_env_vars.update(vllm_trace_env)
@@ -2552,7 +2560,7 @@ def main():
                         exp_args = update_exp_args(exp_args, {"vllm_job_id": vllm_job_id})
                 elif backend == "ray":
                     print("Mode: Ray-backed local VLLM inference for task generation")
-                    _, exp_args = _build_vllm_env_vars(exp_args)
+                    _, exp_args = _build_vllm_env_vars(exp_args, include_pinggy=False)
                 else:
                     raise ValueError(f"Unsupported datagen backend: {backend}")
             else:
