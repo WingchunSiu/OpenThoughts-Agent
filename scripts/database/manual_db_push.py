@@ -21,9 +21,9 @@ if str(REPO_ROOT) not in sys.path:
 from database.unified_db.utils import register_trained_model  # noqa: E402
 
 
-HF_MODEL_ID = "DCAgent2/swesmith-stackseq"
-WANDB_RUN = "dogml/OpenThoughts-Agent/81en31zw"
-DATASET_NAME = "penfever/GLM-4.6-stackexchange-overflow-sandboxes-32eps-65k,penfever/GLM-4.6-swesmith-32ep-131k-nosumm-reasoning"
+HF_MODEL_ID = "laion/glm-4_6-stackexchange-tezos-32ep-131k"
+WANDB_RUN = "dogml/dc-agent/0jrogb6k"
+DATASET_NAME = "penfever/glm-4.6-stackexchange-tezos-32ep-131k"
 BASE_MODEL = "Qwen/Qwen3-8B"
 TRAINING_TYPE = "SFT"
 

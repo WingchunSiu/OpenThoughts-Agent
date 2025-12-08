@@ -26,6 +26,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from scripts.harbor.run_and_export_traces import _finalize_trace_dataset
+
 
 def _install_safe_episode_guard() -> None:
     """Patch Harbor's episode discovery to skip invalid agent directories."""
@@ -140,6 +142,7 @@ def main() -> None:
         success_filter=success_filter,
         include_reasoning=bool(args.include_reasoning),
     )
+    ds = _finalize_trace_dataset(ds)
 
     # Push to HF and optionally register in DB
     print(f"[trace-export] Exported {len(ds)} rows. Uploading to {args.repo_id}...")

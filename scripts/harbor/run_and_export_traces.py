@@ -14,7 +14,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 import importlib
 import inspect
 import os
@@ -616,7 +616,7 @@ def run_dataset_to_traces(
         success_filter=export_filter,
         include_reasoning=include_reasoning,
     )
-    return _sanitize_bash_warnings(ds)
+    return _finalize_trace_dataset(ds)
 
 def only_export_traces(
     job_dir: Path | str,
@@ -642,7 +642,7 @@ def only_export_traces(
         success_filter=success_filter,
         include_reasoning=include_reasoning,
     )
-    return _sanitize_bash_warnings(ds)
+    return _finalize_trace_dataset(ds)
 
 
 _BASH_JOB_CONTROL_WARNING = (
@@ -676,6 +676,97 @@ def _sanitize_bash_warnings(dataset):
     if isinstance(dataset, Dataset):
         return dataset.map(_sanitize_record, load_from_cache_file=False)
     return dataset
+
+
+def _finalize_trace_dataset(dataset):
+    """Apply final cleanup/formatting before returning a dataset."""
+    dataset = _sanitize_bash_warnings(dataset)
+    dataset = _ensure_sharegpt_conversations(dataset)
+    return dataset
+
+
+def _ensure_sharegpt_conversations(dataset):
+    """Guarantee conversation columns conform to ShareGPT expectations."""
+    try:
+        from datasets import Dataset, DatasetDict
+    except Exception:
+        return dataset
+
+    def _map_record(record):
+        conversations = record.get("conversations")
+        if not isinstance(conversations, list):
+            return record
+        return {"conversations": _squash_system_turns(conversations)}
+
+    if isinstance(dataset, DatasetDict):
+        return DatasetDict(
+            {
+                split: ds.map(_map_record, load_from_cache_file=False)
+                for split, ds in dataset.items()
+            }
+        )
+    if isinstance(dataset, Dataset):
+        return dataset.map(_map_record, load_from_cache_file=False)
+    return dataset
+
+
+def _squash_system_turns(conversations):
+    """
+    Merge consecutive system messages into user turns so the final transcript alternates
+    user/assistant as expected by ShareGPT loaders.
+    """
+    if not isinstance(conversations, list):
+        return conversations
+
+    cleaned: list[dict[str, Any]] = []
+    system_buffer: list[str] = []
+
+    def _drain_buffer() -> Optional[str]:
+        nonlocal system_buffer
+        if not system_buffer:
+            return None
+        text = "\n\n".join(piece for piece in system_buffer if piece)
+        system_buffer = []
+        return text
+
+    def _merge_buffer_with_user(content: str) -> str:
+        prefix = _drain_buffer()
+        if not prefix:
+            return content
+        if content:
+            return f"{prefix}\n\n{content}"
+        return prefix
+
+    for message in conversations:
+        role = message.get("role")
+        content = message.get("content") or ""
+
+        if role == "system":
+            system_buffer.append(content)
+            continue
+
+        if role == "user":
+            merged_content = _merge_buffer_with_user(content)
+            cleaned.append({**message, "role": "user", "content": merged_content})
+            continue
+
+        buffered = _drain_buffer()
+        if buffered:
+            cleaned.append({"role": "user", "content": buffered})
+        cleaned.append(dict(message))
+
+    leftover = _drain_buffer()
+    if leftover:
+        if cleaned and cleaned[-1].get("role") == "user":
+            existing = cleaned[-1].get("content") or ""
+            cleaned[-1]["content"] = f"{existing}\n\n{leftover}" if existing else leftover
+        else:
+            cleaned.append({"role": "user", "content": leftover})
+
+    if cleaned and cleaned[0].get("role") != "user":
+        cleaned.insert(0, {"role": "user", "content": ""})
+
+    return cleaned
 
 def _compute_hdf5_checksum(hdf5_path: Path) -> str:
     """
@@ -902,7 +993,7 @@ def run_dataset_to_traces_hdf5(
         success_filter=export_filter,
         include_reasoning=include_reasoning,
     )
-    return _sanitize_bash_warnings(ds)
+    return _finalize_trace_dataset(ds)
 
 
 __all__ = ["run_dataset_to_traces", "run_dataset_to_traces_hdf5"]
