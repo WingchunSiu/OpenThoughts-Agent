@@ -124,6 +124,12 @@ SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,TRITON_CC=${TRITON_CC:-}"
 SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,TRITON_LIBCUDA_PATH=${TRITON_LIBCUDA_PATH:-}"
 SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,HF_HOME=${HF_HOME:-}"
 SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,PYTHONPATH=${PYTHONPATH:-}"
+# Ray control-plane stability knobs (prevent backlog storms / exporter hangs)
+SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,RAY_report_worker_backlog_to_raylet=0"
+SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,RAY_metrics_export_port=8090"
+SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,RAY_gcs_server_request_timeout_seconds=300"
+SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,RAY_raylet_heartbeat_timeout_milliseconds=600000"
+SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,RAY_worker_heartbeat_timeout_milliseconds=600000"
 export SRUN_EXPORT_ENV
 
 # =============================================================================
