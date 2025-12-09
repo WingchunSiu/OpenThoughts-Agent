@@ -66,6 +66,20 @@ echo "FLASH_ATTN_BUILD_DIR=${FLASH_ATTN_BUILD_DIR}"
 echo
 nvidia-smi || true
 
+echo
+echo "=== CUDA paths ==="
+echo "CUDA_HOME=${CUDA_HOME:-<unset>}"
+echo "CUDA_PATH=${CUDA_PATH:-<unset>}"
+echo "CUDATOOLKIT_ROOT_DIR=${CUDATOOLKIT_ROOT_DIR:-<unset>}"
+echo "PATH entries with CUDA:"
+tr ':' '\n' <<< "${PATH}" | grep -i 'cuda' || true
+if command -v nvcc >/dev/null 2>&1; then
+    echo "nvcc=$(command -v nvcc)"
+    nvcc --version || true
+else
+    echo "nvcc=<not found in PATH>"
+fi
+
 mkdir -p "$FLASH_ATTN_BUILD_DIR"
 _sync_repo "$FLASH_ATTN_BUILD_DIR"
 
