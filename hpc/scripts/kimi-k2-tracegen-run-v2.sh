@@ -394,12 +394,9 @@ TRACE_CMD=(
     --trace-harbor-config "$TRACE_HARBOR_CONFIG"
     --trace-jobs-dir "$TRACE_JOBS_DIR"
     --trace-model "$TRACE_MODEL"
-    --trace-engine "$TRACE_ENGINE"
-    --trace-backend "$TRACE_BACKEND"
     --trace-episodes "$TRACE_EPISODES"
     --trace-export-filter "$TRACE_EXPORT_FILTER"
     --trace-dataset-type "$TRACE_DATASET_TYPE"
-    --trace-use-gpu
 )
 
 [[ -n "${TRACE_AGENT_NAME:-}" ]] && TRACE_CMD+=(--trace-agent-name "$TRACE_AGENT_NAME")
