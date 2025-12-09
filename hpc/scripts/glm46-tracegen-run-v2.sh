@@ -221,22 +221,43 @@ nodes_array=($nodes)
 head_node=${nodes_array[0]}
 NUM_NODES=${SLURM_JOB_NUM_NODES:-1}
 CPUS_PER_NODE=${SLURM_CPUS_PER_TASK:-32}
-# Allow overriding per-step memory; if unset/zero, default to head node RealMemory.
+# Allow overriding per-step memory; if unset/zero, default to min(node RealMemory, job allocation).
+HEADROOM_MB=8192
 if [[ -z "${SRUN_MEM_PER_STEP:-}" || "$SRUN_MEM_PER_STEP" == "0" ]]; then
     node_info=$(scontrol show node "$head_node" 2>/dev/null || true)
     node_mem=$(echo "$node_info" | awk -F= '/RealMemory/ {print $2}' | awk '{print $1}')
-    SRUN_MEM_PER_STEP="${node_mem:-0}"
+    job_mem=$(scontrol show job "${SLURM_JOB_ID:-}" 2>/dev/null | awk -F= '/MinMemoryNode/ {print $2}' | awk '{print $1}')
+    node_mem=${node_mem//[^0-9]/}
+    job_mem=${job_mem//[^0-9]/}
+    node_mem=${node_mem:-0}
+    job_mem=${job_mem:-0}
+    if [[ "$job_mem" -gt 0 ]]; then
+        if [[ "$node_mem" -gt 0 && "$node_mem" -lt "$job_mem" ]]; then
+            SRUN_MEM_PER_STEP="$node_mem"
+        else
+            SRUN_MEM_PER_STEP="$job_mem"
+        fi
+    else
+        SRUN_MEM_PER_STEP="$node_mem"
+    fi
 fi
 SRUN_MEM_PER_STEP="${SRUN_MEM_PER_STEP:-0}"
+if [[ "$SRUN_MEM_PER_STEP" -gt "$HEADROOM_MB" ]]; then
+    SRUN_MEM_PER_STEP=$((SRUN_MEM_PER_STEP - HEADROOM_MB))
+fi
+if [[ "$SRUN_MEM_PER_STEP" -lt 1024 ]]; then
+    SRUN_MEM_PER_STEP=1024
+fi
 echo "Using SRUN_MEM_PER_STEP=${SRUN_MEM_PER_STEP} MB"
 
 # Get head node IP
-if head_node_ip=$(srun --export="$SRUN_EXPORT_ENV" --nodes=1 --ntasks=1 --mem="$SRUN_MEM_PER_STEP" --overlap -w "$head_node" hostname --ip-address 2>/dev/null | head -1); then
-    :
-else
+head_ip_output=$(srun --export="$SRUN_EXPORT_ENV" --nodes=1 --ntasks=1 --overlap -w "$head_node" hostname --ip-address 2>&1)
+if [[ $? -ne 0 ]]; then
+    echo "$head_ip_output"
     echo "ERROR: Failed to resolve head node IP via srun"
     exit 1
 fi
+head_node_ip=$(echo "$head_ip_output" | head -n1)
 head_node_ip=${head_node_ip%% *}
 
 if [[ -z "$head_node_ip" || "$head_node_ip" == "127.0.0.1" ]]; then
