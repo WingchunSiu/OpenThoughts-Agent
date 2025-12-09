@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=glm46-tracegen
 #SBATCH --account=torch_pr_40_tandon_advanced
+#SBATCH --partition=h200_tandon
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --constraint="h200"
