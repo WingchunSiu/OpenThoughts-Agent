@@ -19,13 +19,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pyarrow as pa
+import yaml
 from datasets import (
     Dataset,
     get_dataset_config_names,
     get_dataset_split_names,
     load_dataset,
 )
-from huggingface_hub import snapshot_download
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from scripts.harbor.tasks_parquet_converter import (
     convert_logs_to_parquet,
     convert_to_parquet,
@@ -566,6 +567,7 @@ def upload_traces_to_hf(
     """
     dataset = clean_empty_structs(dataset)
     dataset.push_to_hub(repo_id)
+    _sync_hf_dataset_card_metadata(dataset, repo_id)
     register_hf_dataset(
         repo_name=repo_id,
         dataset_type=dataset_type
@@ -822,6 +824,86 @@ def clean_empty_structs(dataset: Dataset) -> Dataset:
         print("No empty struct columns found")
 
     return dataset
+
+def _split_readme_front_matter(content: str) -> tuple[str, str]:
+    """Return (front_matter, body) from a README that may use YAML front matter."""
+    if not content:
+        return "", ""
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            return parts[1], parts[2]
+    return "", content
+
+
+def _sync_hf_dataset_card_metadata(dataset: Dataset, repo_id: str) -> None:
+    """Ensure README dataset_info sizes match actual uploaded artifact sizes."""
+    api = HfApi()
+    try:
+        repo_entries = list(
+            api.list_repo_tree(repo_id, repo_type="dataset", recursive=True)
+        )
+    except Exception as exc:
+        print(f"[trace-export] Warning: could not inspect {repo_id}: {exc}")
+        return
+
+    data_bytes = sum(
+        getattr(entry, "size", 0) or 0
+        for entry in repo_entries
+        if getattr(entry, "path", "").startswith("data/")
+    )
+    if data_bytes <= 0:
+        return
+
+    try:
+        readme_path = hf_hub_download(
+            repo_id, "README.md", repo_type="dataset"
+        )
+        raw_readme = Path(readme_path).read_text(encoding="utf-8")
+    except Exception:
+        raw_readme = ""
+
+    front_matter, body = _split_readme_front_matter(raw_readme)
+    try:
+        parsed = yaml.safe_load(front_matter) if front_matter.strip() else {}
+    except Exception:
+        parsed = {}
+    if parsed is None:
+        parsed = {}
+
+    dataset_info = parsed.get("dataset_info") or {}
+    splits = dataset_info.get("splits") or [{"name": "train"}]
+    for split in splits:
+        split_name = split.get("name", "train")
+        if split_name == "train":
+            split["num_examples"] = len(dataset)
+            split["num_bytes"] = data_bytes
+    dataset_info["splits"] = splits
+    dataset_info["download_size"] = data_bytes
+    dataset_info["dataset_size"] = data_bytes
+    parsed["dataset_info"] = dataset_info
+    if "configs" not in parsed or not parsed["configs"]:
+        parsed["configs"] = [
+            {
+                "config_name": "default",
+                "data_files": [{"split": "train", "path": "data/train-*"}],
+            }
+        ]
+
+    new_front = yaml.safe_dump(parsed, sort_keys=False).strip()
+    updated = f"---\n{new_front}\n---\n"
+    if body:
+        updated += body.lstrip("\n")
+
+    try:
+        api.upload_file(
+            path_or_fileobj=updated.encode("utf-8"),
+            path_in_repo="README.md",
+            repo_id=repo_id,
+            repo_type="dataset",
+        )
+    except Exception as exc:
+        print(f"[trace-export] Warning: failed to update README for {repo_id}: {exc}")
 
 async def can_daytona_start(task_path: str) -> bool:
     """
@@ -1708,6 +1790,3 @@ def decontaminate_questions(
     if return_mask:
         return clean_questions, combined_mask
     return clean_questions
-
-
-
