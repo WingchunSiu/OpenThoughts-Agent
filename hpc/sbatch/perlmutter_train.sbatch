@@ -51,6 +51,20 @@ else
   export LIBRARY_PATH="$CUDA_HOME/lib64"
 fi
 
+if [ -n "${CUDA_HOME:-}" ]; then
+  _cuda_sdk_root="$(dirname "$(dirname "$CUDA_HOME")")"
+  _cuda_version="$(basename "$CUDA_HOME")"
+  _cuda_math_lib_path="$_cuda_sdk_root/math_libs/$_cuda_version/lib64"
+  if [ -d "$_cuda_math_lib_path" ]; then
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+      export LD_LIBRARY_PATH="$_cuda_math_lib_path:$LD_LIBRARY_PATH"
+    else
+      export LD_LIBRARY_PATH="$_cuda_math_lib_path"
+    fi
+  fi
+  unset _cuda_sdk_root _cuda_version _cuda_math_lib_path
+fi
+
 if [ -n "${CONDA_PREFIX:-}" ]; then
   export CC="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc"
   export CXX="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++"
@@ -65,6 +79,9 @@ if [ -n "${CONDA_PREFIX:-}" ]; then
 else
   echo "Warning: CONDA_PREFIX is not set; compiler environment variables were not configured." >&2
 fi
+
+echo "CUDA_HOME=${CUDA_HOME:-<unset>}"
+echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
 
 SECRET_FILE="${DC_AGENT_SECRET_ENV:-${KEYS:-}}"
 if [[ -n "${SECRET_FILE}" ]]; then
