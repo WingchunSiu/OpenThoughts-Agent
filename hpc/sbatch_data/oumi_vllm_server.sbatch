@@ -41,6 +41,11 @@ fi
 export NCCL_DEBUG=INFO
 export OMP_NUM_THREADS=1
 export PYTORCH_CUDA_ALLOC_CONF="garbage_collection_threshold:0.6,max_split_size_mb:128"
+export VLLM_USE_DEEP_GEMM=0  # ATM, this line is a "must" for Hopper devices
+export TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1
+export VLLM_USE_FLASHINFER_MOE_FP16=1
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export OMP_NUM_THREADS=4
 
 # Project directory
 cd "$DCFT"
@@ -76,13 +81,7 @@ echo "Endpoint JSON: $ENDPOINT_JSON_PATH"
 if [ -n "$HF_OVERRIDES" ]; then
   echo "HF Overrides: $HF_OVERRIDES"
 fi
-if [ "${VLLM_USE_DEEP_GEMM:-0}" = "1" ]; then
-  export VLLM_USE_DEEP_GEMM=1
-  echo "DeepGEMM: enabled"
-else
-  unset VLLM_USE_DEEP_GEMM
-  echo "DeepGEMM: disabled"
-fi
+
 if [ -n "$MAX_NUM_SEQS" ]; then
   echo "Max num seqs: $MAX_NUM_SEQS"
 fi
