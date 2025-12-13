@@ -32,8 +32,6 @@ vllm_server:
   - mistral
   - --load_format
   - mistral
-  - --dtype
-  - bfloat16
   - --kv-cache-dtype
   - fp8
   - --enable-prefix-caching
