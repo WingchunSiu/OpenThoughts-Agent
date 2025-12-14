@@ -38,7 +38,7 @@ vllm_server:
   - '16'
   - --enable-chunked-prefill
   - --max-num-partial-prefills
-  - '4'
+  - '1'
   - --enable-prefix-caching
   - --max-num-batched-tokens
   - '16384'
