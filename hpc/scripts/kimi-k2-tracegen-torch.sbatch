@@ -48,15 +48,15 @@ USAGE
 }
 
 # Defaults
-EXPERIMENTS_DIR_DEFAULT="${SCRATCH:-$HOME}/OpenThoughts-Agent/experiments/kimi-k2-swesmith_with_plain_docker-sandboxes-maxeps-32k"
+EXPERIMENTS_DIR_DEFAULT="${SCRATCH:-$HOME}/OpenThoughts-Agent/experiments/kimi-k2-swegym-tasks-maxeps-32k"
 DATAGEN_CONFIG_DEFAULT="hpc/datagen_yaml/kimi_k2_vllm_serve_torch_h200.yaml"
 TRACE_SCRIPT_DEFAULT="data/freelancer/generate_abstract.py"
-TRACE_TARGET_REPO_DEFAULT="DCAgent2/kimi-k2-swesmith_with_plain_docker-sandboxes-maxeps-32k"
+TRACE_TARGET_REPO_DEFAULT="DCAgent2/kimi-k2-swegym-tasks-maxeps-32k"
 TRACE_HARBOR_CONFIG_DEFAULT="hpc/harbor_yaml/trace_default_ctx32k.yaml"
 TRACE_MODEL_DEFAULT="moonshotai/Kimi-K2-Thinking"
 TRACE_ENGINE_DEFAULT="vllm_local"
 TRACE_BACKEND_DEFAULT="ray"
-TASKS_REPO_DEFAULT="mlfoundations-dev/swesmith_with_plain_docker-sandboxes"
+TASKS_REPO_DEFAULT="DCAgent2/swegym-tasks"
 TASKS_REVISION_DEFAULT=""
 PARQUET_NAME_DEFAULT=""
 GPUS_PER_NODE_DEFAULT=8
