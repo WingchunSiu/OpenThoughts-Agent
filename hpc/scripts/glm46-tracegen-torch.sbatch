@@ -9,6 +9,8 @@
 #SBATCH --mem=1536G
 #SBATCH --time=47:59:00
 #SBATCH --comment="preemption=yes;requeue=true"
+#SBATCH --mail-type=END,TIME_LIMIT,FAIL
+#SBATCH --mail-user=bf996@nyu.edu
 
 set -euo pipefail
 
