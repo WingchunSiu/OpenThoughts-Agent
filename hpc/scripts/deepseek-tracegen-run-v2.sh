@@ -15,6 +15,7 @@ if [[ -z "${DEEPSEEK_APPTAINER_ACTIVE:-}" ]]; then
         echo "ERROR: apptainer is required to enter $APPTAINER_IMAGE" >&2
         exit 1
     fi
+    SCONTROL_BIN="$(command -v scontrol 2>/dev/null || true)"
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     bind_args=(--bind /tmp:/tmp --bind "$script_dir:$script_dir")
     if [[ -n "${SCRATCH:-}" ]]; then
@@ -25,6 +26,10 @@ if [[ -z "${DEEPSEEK_APPTAINER_ACTIVE:-}" ]]; then
         for entry in "${extra_binds[@]}"; do
             [[ -n "$entry" ]] && bind_args+=(--bind "$entry")
         done
+    fi
+    if [[ -n "$SCONTROL_BIN" ]]; then
+        bind_args+=(--bind "$SCONTROL_BIN:$SCONTROL_BIN")
+        export SCONTROL_BIN
     fi
     echo ">>> Entering apptainer image: $APPTAINER_IMAGE"
     export "${APPTAINER_FLAG}=1"
@@ -57,6 +62,11 @@ set -u
 
 # Ensure scripts module is importable
 export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
+SCONTROL_BIN="${SCONTROL_BIN:-$(command -v scontrol 2>/dev/null || true)}"
+if [[ -z "$SCONTROL_BIN" ]]; then
+    echo "ERROR: scontrol command not available. Ensure the host Slurm binaries are bind-mounted into the container." >&2
+    exit 1
+fi
 
 echo "=== Environment Setup ==="
 echo "SCRATCH: $SCRATCH"
@@ -295,7 +305,7 @@ echo ">>> Setting up Ray cluster with srun"
 set -x
 
 # Get node info
-nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes=$("$SCONTROL_BIN" show hostnames "$SLURM_JOB_NODELIST")
 nodes_array=($nodes)
 head_node=${nodes_array[0]}
 NUM_NODES=${SLURM_JOB_NUM_NODES:-1}
