@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --account={account}
-#SBATCH --partition={partition}
 #SBATCH --nodes={num_nodes}
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task={cpus_per_node}

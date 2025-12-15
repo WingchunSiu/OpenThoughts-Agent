@@ -121,7 +121,7 @@ capella = HPC(
     hostname_pattern=r"c\d",
     train_sbatch_filename="zih_capella_train.sbatch",
     dotenv_filename="zih_capella.env",
-    account="p_finetuning",
+    account="p_agents_finetuning",
     partition="capella",
     gpus_per_node=4,
     cpus_per_node=32,
@@ -313,6 +313,12 @@ def set_environment(hpc_name: HPC) -> None:
         # Legacy compatibility: treat DC_AGENT as the canonical repo root when DCFT is unset.
         if "DCFT" not in os.environ and os.environ.get("DC_AGENT"):
             os.environ["DCFT"] = os.environ["DC_AGENT"]
+
+        # Capella account is project-specific; respect DCFT_GROUP when available.
+        if hpc_name.name.lower() == "capella":
+            env_account = os.environ.get("DCFT_GROUP")
+            if env_account:
+                hpc_name.account = env_account
     else:
         print(
             f"Warning: No dotenv file found for {hpc_name.name} in {dotenv}. Skipping environment variable setup."
