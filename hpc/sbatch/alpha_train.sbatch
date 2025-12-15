@@ -22,9 +22,8 @@ if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/alpha.env" ]; then
   source "$DCFT/hpc/dotenv/alpha.env"
 fi
 
-module load release/24.04 GCCcore/12.3.0
-module load CUDA/12.1.1
-module load NCCL/2.18.3-CUDA-12.1.1
+module load CUDA/12.6.0
+module load cuDNN/9.5.0.50-CUDA-12.6.0
 
 if [ -n "${DCFT_ACTIVATE_ENV:-}" ]; then
   set +u
