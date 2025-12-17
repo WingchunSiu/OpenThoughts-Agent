@@ -390,8 +390,9 @@ def _escape_template_braces(text: str) -> str:
 
 def _escape_bash_variables(text: str) -> str:
     """
-    Escape `${...}` sequences (including nested braces) so `str.format`
-    leaves them untouched.
+    Escape `${...}` sequences so `str.format` leaves the shell variable syntax
+    untouched while still allowing template placeholders **inside** the default
+    portions (e.g. `$FOO/{experiments_dir}`) to be substituted.
     """
     result: list[str] = []
     i = 0
@@ -407,9 +408,10 @@ def _escape_bash_variables(text: str) -> str:
                 elif text[j] == "}":
                     depth -= 1
                 j += 1
-            segment = text[start:j]
-            escaped = segment.replace("{", "{{").replace("}", "}}")
-            result.append(escaped)
+            # Recursively escape nested `${...}` blocks but leave template braces alone.
+            inner = text[i + 2 : j - 1]
+            escaped_inner = _escape_bash_variables(inner)
+            result.append("${{" + escaped_inner + "}}")
             i = j
         else:
             result.append(text[i])
