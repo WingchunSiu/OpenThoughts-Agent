@@ -4,10 +4,19 @@ Utility helpers shared across HPC launch entry points.
 
 from __future__ import annotations
 
+import os
 import re
+import socket
+import shutil
+from collections import defaultdict
 from typing import Any, Mapping, Optional
 
+from hpc.hpc import detect_hpc
+
 from .job_name_ignore_list import JOB_NAME_IGNORE_KEYS
+from .arguments import JobType
+from .datagen_launch_utils import derive_datagen_job_name
+from .sft_launch_utils import build_accelerate_config_block
 
 
 def sanitize_repo_for_job(repo_id: str) -> str:
@@ -30,8 +39,8 @@ def sanitize_repo_component(value: Optional[str]) -> Optional[str]:
 def get_job_name(cli_args: Mapping[str, Any]) -> str:
     """Derive a stable job name from user-provided CLI arguments."""
 
-    job_type = str(cli_args.get("job_type", "train") or "train").lower()
-    if job_type == "consolidate":
+    job_type = str(cli_args.get("job_type", JobType.default_value()) or JobType.default_value()).lower()
+    if job_type == JobType.CONSOLIDATE.value:
         repo_id = (
             cli_args.get("consolidate_repo_id")
             or cli_args.get("consolidate_base_repo")
@@ -41,6 +50,8 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
         if len(job_name) > 96:
             job_name = job_name[:96]
         return job_name
+    if job_type == JobType.DATAGEN.value:
+        return derive_datagen_job_name(cli_args)
 
     job_name_components: list[str] = []
     job_name_suffix: Optional[str] = None
@@ -102,4 +113,126 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
     return job_name
 
 
-__all__ = ["get_job_name", "sanitize_repo_for_job", "sanitize_repo_component"]
+def check_exists(local_path: str | os.PathLike[str]) -> bool:
+    """Return True when ``local_path`` exists."""
+
+    return os.path.exists(local_path)
+
+
+def extract_template_keys(file_path: str) -> list[str]:
+    with open(file_path, "r") as f:
+        file = f.read()
+    return re.findall(r"(?<!\$)\{([^{}]*)\}", file)
+
+
+def fill_template(file_path: str, exp_args: dict, new_file_path: str) -> None:
+    with open(file_path, "r") as f:
+        file = f.read()
+
+    file = re.sub(r"(?<!\$)\{([^{}]*)\}", lambda m: exp_args[m.group(1)], file)
+
+    with open(new_file_path, "w") as f:
+        f.write(file)
+
+
+def _escape_bash_variables(text: str) -> str:
+    result: list[str] = []
+    i = 0
+    length = len(text)
+    while i < length:
+        if text[i] == "$" and i + 1 < length and text[i + 1] == "{":
+            start = i
+            depth = 1
+            j = i + 2
+            while j < length and depth > 0:
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                j += 1
+            inner = text[i + 2 : j - 1]
+            escaped_inner = _escape_bash_variables(inner)
+            result.append("${{" + escaped_inner + "}}")
+            i = j
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
+
+
+def construct_sbatch_script(exp_args: dict) -> str:
+    base_script_path = exp_args["train_sbatch_path"]
+    with open(base_script_path, "r") as f:
+        base_script = f.read()
+
+    kwargs = defaultdict(str, **exp_args)
+    kwargs["accelerate_config_block"] = build_accelerate_config_block(exp_args)
+
+    json_files_cat = re.findall(r"cat.*?<<EOT >.*?EOT", base_script, re.DOTALL)
+    json_filenames = []
+    for json_file in json_files_cat:
+        json_file_name = re.match(
+            r"cat.*?<<EOT >.*?(\S+).*?EOT", json_file, re.DOTALL
+        ).group(1)
+        json_filenames.append(json_file_name)
+
+        base_script = re.sub(
+            r"cat.*?<<EOT >.*?" + json_file_name.replace("$", "\\$") + r".*?EOT",
+            f"cat {json_file_name}",
+            base_script,
+            count=1,
+            flags=re.DOTALL,
+        )
+
+    base_script = _escape_bash_variables(base_script)
+
+    time_limit = kwargs.get("time_limit")
+    if time_limit is None:
+        time_limit = "01:00:00"
+        kwargs["time_limit"] = time_limit
+
+    hpc = detect_hpc()
+    hpc_name = hpc.name
+    if hpc_name == "jureca" or hpc_name == "juwels":
+        login_node = socket.gethostname().split(".")[0] + "i"
+        if "{login_node}" in base_script:
+            if kwargs.get("internet_node", False):
+                if not shutil.which("proxychains4"):
+                    raise RuntimeError("proxychains4 not found, please install it to use internet_node")
+            base_script = base_script.replace("{login_node}", login_node)
+
+    sbatch_script = base_script.format(**kwargs)
+    sbatch_script = _ensure_dependency_directive(sbatch_script, exp_args.get("dependency"))
+
+    env_block = {
+        "DISABLE_VERSION_CHECK": "1",
+    }
+    stage_value = str(exp_args.get("stage") or "").lower()
+    if exp_args.get("use_mca") and stage_value == "sft":
+        env_block["USE_MCA"] = "1"
+        os.environ.setdefault("USE_MCA", "1")
+
+    sbatch_script = _inject_env_block(sbatch_script, env_block)
+
+    for json_file, json_file_name in zip(json_files_cat, json_filenames):
+        sbatch_script = sbatch_script.replace(f"cat {json_file_name}", json_file)
+
+    sbatch_dir = os.path.join(kwargs["experiments_dir"], "sbatch_scripts")
+    os.makedirs(sbatch_dir, exist_ok=True)
+    sbatch_script_path = os.path.join(sbatch_dir, f"{kwargs['job_name']}.sbatch")
+    with open(sbatch_script_path, "w") as f:
+        f.write(sbatch_script)
+        print(f"Wrote sbatch script to {sbatch_script_path}")
+
+    return sbatch_script_path
+
+
+__all__ = [
+    "check_exists",
+    "construct_sbatch_script",
+    "extract_template_keys",
+    "fill_template",
+    "get_job_name",
+    "sanitize_repo_for_job",
+    "sanitize_repo_component",
+]

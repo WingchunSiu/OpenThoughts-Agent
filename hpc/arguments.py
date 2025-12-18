@@ -1,8 +1,9 @@
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional, Mapping
 import argparse
 import sys
+from enum import Enum
 
 
 def _str_to_bool(value):
@@ -311,19 +312,6 @@ class LlamaFactoryArgs:
     )
 
 @dataclass
-class EvalArgs:
-    """Arguments for evaluation"""
-    eval_tasks: Optional[str] = field(
-        default=None, metadata={"help": "Comma-separated list of tasks to evaluate"}
-    )
-    eval_num_nodes: Optional[int] = field(
-        default=None, metadata={"help": "Number of nodes to evaluate"}
-    )
-    eval_time_limit: Optional[int] = field(
-        default=None, metadata={"help": "Time limit for evaluation"}
-    )
-
-@dataclass
 class LaunchArgs:
     """Arguments for job launching"""
 
@@ -443,8 +431,12 @@ class DataGenArgs:
 
     # Job type
     job_type: Optional[str] = field(
-        default="train",
-        metadata={"help": "Job type: 'train', 'datagen', or 'consolidate'"}
+        default=None,
+        metadata={
+            "help": "Job type: 'sft', 'sft_mca', 'pretokenize', 'datagen', 'consolidate', or 'rl'",
+            "choices": JobType.choices(),
+            "required": True,
+        },
     )
 
     # Data generation specific
@@ -631,30 +623,43 @@ def _add_dataclass_arguments(arg_group, dataclass_type, exclude_fields=None):
             continue
 
         option_strings = _option_strings(field.name)
+        help_text = field.metadata.get("help")
+        choices = field.metadata.get("choices")
+        required = field.metadata.get("required", False)
+
         if field.metadata.get("store_true"):
             arg_group.add_argument(
                 *option_strings,
                 dest=field.name,
                 action="store_true",
-                help=field.metadata.get("help"),
+                help=help_text,
                 default=field.default,
             )
         elif isinstance(field.default, bool):
-            arg_group.add_argument(
-                *option_strings,
-                dest=field.name,
-                type=_str_to_bool,
-                help=field.metadata.get("help"),
-                default=field.default,
-            )
+            kwargs = {
+                "dest": field.name,
+                "type": _str_to_bool,
+                "help": help_text,
+                "default": field.default,
+            }
+            if choices:
+                kwargs["choices"] = choices
+            if required:
+                kwargs["required"] = True
+            arg_group.add_argument(*option_strings, **kwargs)
         else:
-            arg_group.add_argument(
-                *option_strings,
-                dest=field.name,
-                type=type(field.default) if field.default is not None else str,
-                help=field.metadata.get("help"),
-                default=field.default,
-            )
+            arg_type = type(field.default) if field.default is not None else str
+            kwargs = {
+                "dest": field.name,
+                "type": arg_type,
+                "help": help_text,
+                "default": field.default,
+            }
+            if choices:
+                kwargs["choices"] = choices
+            if required:
+                kwargs["required"] = True
+            arg_group.add_argument(*option_strings, **kwargs)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Launch HPC jobs for dcft experiment")
@@ -679,7 +684,6 @@ def parse_args():
     launch_group = parser.add_argument_group("Launch Arguments")
     hpc_group = parser.add_argument_group("HPC Arguments")
     train_group = parser.add_argument_group("Training Arguments")
-    eval_group = parser.add_argument_group("Evaluation Arguments")
     datagen_group = parser.add_argument_group("Data Generation Arguments")
 
     # Add LaunchArgs arguments
@@ -719,10 +723,68 @@ def parse_args():
     # Add LlamaFactoryArgs arguments
     _add_dataclass_arguments(train_group, LlamaFactoryArgs)
 
-    # Add EvalArgs arguments
-    _add_dataclass_arguments(eval_group, EvalArgs, exclude_fields=["tasks"])
-
     args = parser.parse_args()
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     args_dict["_explicit_cli_keys"] = explicit_cli_keys
+    literal_none_keys = {"datagen_engine", "trace_engine", "datagen_backend", "trace_backend"}
+    args_dict = _coerce_str_bool_none(args_dict, literal_none_keys)
+    args_dict = _coerce_numeric_cli_values(args_dict)
     return args_dict
+
+
+def _coerce_str_bool_none(args_dict: dict[str, Any], literal_none_keys: set[str]) -> dict[str, Any]:
+    for key, value in list(args_dict.items()):
+        if isinstance(value, str):
+            lowered = value.lower()
+            if lowered == "false":
+                args_dict[key] = False
+            elif lowered == "true":
+                args_dict[key] = True
+            elif lowered == "none":
+                if key not in literal_none_keys:
+                    args_dict[key] = None
+                else:
+                    args_dict[key] = lowered
+    return args_dict
+
+
+def _coerce_numeric_cli_values(args_dict: dict[str, Any]) -> dict[str, Any]:
+    numeric_fields = {
+        "adam_beta1": float,
+        "adam_beta2": float,
+        "learning_rate": float,
+        "warmup_ratio": float,
+        "weight_decay": float,
+        "max_grad_norm": float,
+        "num_train_epochs": float,
+        "max_steps": int,
+        "chunk_size": int,
+    }
+    for key, caster in numeric_fields.items():
+        if key not in args_dict or args_dict[key] is None:
+            continue
+        value = args_dict[key]
+        if isinstance(value, (int, float)):
+            continue
+        try:
+            args_dict[key] = caster(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Expected {key} to be {caster.__name__}-like, got {value!r}") from exc
+    return args_dict
+class JobType(str, Enum):
+    """Enumerates supported HPC launcher job categories."""
+
+    SFT = "sft"
+    SFT_MCA = "sft_mca"
+    PRETOKENIZE = "pretokenize"
+    DATAGEN = "datagen"
+    CONSOLIDATE = "consolidate"
+    RL = "rl"
+
+    @classmethod
+    def choices(cls) -> list[str]:
+        return [member.value for member in cls]
+
+    @classmethod
+    def default_value(cls) -> str:
+        return cls.SFT.value

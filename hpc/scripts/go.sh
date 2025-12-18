@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to launch train and eval for specified pipeline experiment 
+# Script to launch training for a specified pipeline experiment 
 # Usage: ./go.sh <experiment_name>
 
 if [ -z "$1" ]; then
@@ -12,9 +12,8 @@ experiment=$1
 
 cd $DCFT_PRIVATE
 python3 -m hpc.launch \
+    --job_type sft \
     --train_config_path sft/hp_settings/paper/reasoning_medium.yaml \
     --time_limit $DEFAULT_TIME_LIMIT \
     --num_nodes $NUM_NODES_FAST \
-    --dataset mlfoundations-dev/${experiment} \
-    --eval_tasks AIME24,AMC23,MATH500,MMLUPro,JEEBench,GPQADiamond,LiveCodeBench,CodeElo,CodeForces \
-    --eval_num_nodes $NUM_NODES_FAST
+    --dataset mlfoundations-dev/${experiment}

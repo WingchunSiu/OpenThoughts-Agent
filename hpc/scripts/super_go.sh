@@ -126,35 +126,22 @@ calculate_shards_and_duration() {
 # Execute based on mode
 if [ "$MODE" == "traineval" ] || [ "$MODE" == "train" ]; then
     echo "Starting training job for $EXPERIMENT with ${SIZE} HP config using ${NODES} nodes"
-    
-    # Determine if we should set up evaluation as part of the train command
+
     if [ "$MODE" == "traineval" ]; then
-        # Calculate shards and duration using the shared function
-        read NUM_EVAL_SHARDS EVAL_DURATION <<< $(calculate_shards_and_duration $NODES)
-        
-        # Format as HH:00:00 for eval_time_limit
-        EVAL_TIME_LIMIT="${EVAL_DURATION}:00:00"
-        
-        EVAL_CMD="python3 -m hpc.launch \
-            --train_config_path \"$HP_CONFIG\" \
-            --time_limit $DEFAULT_TIME_LIMIT \
-            --num_nodes $NODES \
-            --dataset \"mlfoundations-dev/${EXPERIMENT}\" \
-            --eval_tasks \"$EVAL_TASKS\" \
-            --eval_num_nodes $NODES \
-            --eval_time_limit \"$EVAL_TIME_LIMIT\""
-    else
-        EVAL_CMD="python3 -m hpc.launch \
-            --train_config_path \"$HP_CONFIG\" \
-            --time_limit $DEFAULT_TIME_LIMIT \
-            --num_nodes $NODES \
-            --dataset \"mlfoundations-dev/${EXPERIMENT}\""
+        echo "Note: embedded evaluation has been removed from hpc.launch; run MODE=eval separately if needed."
     fi
 
-    echo "Running: $EVAL_CMD"
-    
+    TRAIN_CMD="python3 -m hpc.launch \
+        --job_type sft \
+        --train_config_path \"$HP_CONFIG\" \
+        --time_limit $DEFAULT_TIME_LIMIT \
+        --num_nodes $NODES \
+        --dataset \"mlfoundations-dev/${EXPERIMENT}\""
+
+    echo "Running: $TRAIN_CMD"
+
     # Execute the command
-    eval $EVAL_CMD
+    eval $TRAIN_CMD
 fi
 
 # Handle separate evaluation if needed

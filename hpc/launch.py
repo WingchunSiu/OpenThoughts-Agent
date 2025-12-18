@@ -6,37 +6,44 @@ import yaml
 import subprocess
 import dataclasses
 import shlex
-import importlib.util
 import shutil
-import textwrap
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from collections import defaultdict
-
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import HFValidationError
-import wandb
-
 from datasets import load_dataset
 
-from hpc.arguments import LlamaFactoryArgs, parse_args
+from hpc.arguments import JobType, LlamaFactoryArgs, parse_args
 from hpc.launch_utils import (
+    check_exists,
+    construct_sbatch_script,
+    extract_template_keys,
+    fill_template,
     get_job_name,
     sanitize_repo_component,
     sanitize_repo_for_job,
 )
+from hpc.pretokenize_launch_utils import schedule_pretokenize, should_run_pretokenize
+from hpc.sft_launch_utils import (
+    apply_mca_training_template,
+    build_accelerate_config_block,
+    build_training_parameters_link,
+)
+from hpc.wandb_launch_utils import collect_wandb_metadata
 from hpc.hpc import detect_hpc, set_environment
 from harbor.models.environment_type import EnvironmentType
 from hpc.datagen_launch_utils import (
     TraceChunkPlan,
     _build_vllm_env_vars,
+    _detect_gpu_required,
     _discover_task_entries,
     _format_chunk_target_repo,
     _maybe_set_ray_cgraph_env,
     _prepare_datagen_configuration,
     _prepare_trace_chunk_plans,
     _snapshot_datagen_config,
+    _validate_sbatch_templates,
     default_vllm_endpoint_path,
     resolve_harbor_config_path,
 )
@@ -61,63 +68,102 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 HARBOR_MODEL_PLACEHOLDER = "placeholder/override-at-runtime"
 
 
-def _detect_gpu_required(datagen_script: str) -> bool:
-    """Best-effort detection of GPU requirement for a datagen script."""
+def _normalize_job_type(exp_args: dict) -> str:
+    """Return the normalized job_type string with a default of SFT."""
 
+    raw_value = exp_args.get("job_type") or JobType.default_value()
+    return str(raw_value).strip().lower()
+
+
+def _parse_optional_int(value: Any, label: str) -> Optional[int]:
+    if value in (None, "", "None"):
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be an integer, got boolean {value!r}")
+    if isinstance(value, (int, float)):
+        return int(value)
     try:
-        script_path = os.path.abspath(datagen_script)
-        if not os.path.exists(script_path):
-            return False
-
-        spec = importlib.util.spec_from_file_location("datagen_module", script_path)
-        if spec is None or spec.loader is None:
-            return False
-
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore[attr-defined]
-
-        generator_cls = None
-        for attr in dir(module):
-            obj = getattr(module, attr)
-            if (
-                isinstance(obj, type)
-                and issubclass(obj, BaseDataGenerator)
-                and obj is not BaseDataGenerator
-            ):
-                generator_cls = obj
-                break
-
-        if not generator_cls:
-            return False
-
-        generator = generator_cls()
-        run_fn = getattr(generator, "run_task_generation", None)
-        return bool(getattr(run_fn, "_gpu_required", False))
-    except Exception:
-        return False
+        return int(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be an integer, got {value!r}") from exc
 
 
-def _validate_sbatch_templates(hpc_obj) -> None:
-    import json
-    from pathlib import Path
+def _apply_env_overrides(exp_args: dict, cli_args_filtered: dict, hpc) -> tuple[dict, str, Optional[Any]]:
+    """Normalize resource overrides, defaults, and job-type specific toggles."""
 
-    req_path = Path(__file__).parent / "sbatch_data_requirements.json"
-    if not req_path.exists():
-        return
+    gpus_per_node_norm = _parse_optional_int(exp_args.get("gpus_per_node"), "--gpus_per_node") or 0
+    exp_args = update_exp_args(exp_args, {"gpus_per_node": gpus_per_node_norm})
 
-    data = json.loads(req_path.read_text())
-    entries = data.get(hpc_obj.name.lower())
-    if not entries:
-        raise ValueError(
-            f"No sbatch templates registered for cluster '{hpc_obj.name}'. "
-            "Please add entries to hpc/sbatch_data_requirements.json."
+    cpus_per_node_norm = _parse_optional_int(exp_args.get("cpus_per_node"), "--cpus_per_node")
+    if cpus_per_node_norm is not None:
+        exp_args = update_exp_args(exp_args, {"cpus_per_node": cpus_per_node_norm})
+
+    cpus_per_gpu_norm = _parse_optional_int(exp_args.get("cpus_per_gpu"), "--cpus_per_gpu")
+    if cpus_per_gpu_norm is not None:
+        exp_args = update_exp_args(exp_args, {"cpus_per_gpu": cpus_per_gpu_norm})
+
+    cpus_per_node_cli_norm = _parse_optional_int(cli_args_filtered.get("cpus_per_node"), "--cpus_per_node")
+    cpus_per_gpu_cli_norm = _parse_optional_int(cli_args_filtered.get("cpus_per_gpu"), "--cpus_per_gpu")
+
+    if cpus_per_gpu_cli_norm is not None:
+        if cpus_per_node_cli_norm is not None:
+            raise ValueError("Provide only one of --cpus_per_node or --cpus_per_gpu, not both.")
+        if gpus_per_node_norm <= 0:
+            raise ValueError("--cpus_per_gpu requires --gpus_per_node to be greater than zero.")
+        cpus_per_node_norm = cpus_per_gpu_cli_norm * gpus_per_node_norm
+        exp_args = update_exp_args(
+            exp_args,
+            {
+                "cpus_per_gpu": cpus_per_gpu_cli_norm,
+                "cpus_per_node": cpus_per_node_norm,
+            },
+        )
+        cpus_per_gpu_norm = cpus_per_gpu_cli_norm
+    else:
+        if cpus_per_node_norm is None and cpus_per_gpu_norm is not None and gpus_per_node_norm > 0:
+            cpus_per_node_norm = cpus_per_gpu_norm * gpus_per_node_norm
+            exp_args = update_exp_args(exp_args, {"cpus_per_node": cpus_per_node_norm})
+        elif (
+            cpus_per_node_norm is not None
+            and (cpus_per_gpu_norm is None or cpus_per_gpu_norm == 0)
+            and gpus_per_node_norm > 0
+        ):
+            derived_cpus_per_gpu = max(1, math.ceil(cpus_per_node_norm / gpus_per_node_norm))
+            exp_args = update_exp_args(exp_args, {"cpus_per_gpu": derived_cpus_per_gpu})
+            cpus_per_gpu_norm = derived_cpus_per_gpu
+
+    job_creator = str(exp_args.get("job_creator", "mlfoundations-dev") or "mlfoundations-dev").strip()
+    if not job_creator:
+        raise ValueError("--job_creator must be a non-empty string.")
+    if len(job_creator) > 96:
+        raise ValueError("--job_creator must be 96 characters or fewer.")
+    exp_args = update_exp_args(exp_args, {"job_creator": job_creator})
+
+    if exp_args.get("time_limit") in (None, "",):
+        default_time = os.path.expandvars(os.environ.get("DEFAULT_TIME_LIMIT", "24:00:00"))
+        exp_args = update_exp_args(exp_args, {"time_limit": default_time})
+        print(f"Using default time_limit: {default_time}")
+
+    job_type = _normalize_job_type(exp_args)
+    exp_args = update_exp_args(exp_args, {"job_type": job_type})
+
+    if exp_args.get("use_mca") and job_type == JobType.SFT.value:
+        job_type = JobType.SFT_MCA.value
+        exp_args = update_exp_args(exp_args, {"job_type": job_type})
+
+    if job_type == JobType.SFT_MCA.value:
+        exp_args = update_exp_args(exp_args, {"use_mca": True})
+        exp_args = apply_mca_training_template(
+            exp_args,
+            hpc,
+            update_exp_args_fn=update_exp_args,
         )
 
-    missing = [entry["path"] for entry in entries if not Path(entry["path"]).exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Missing sbatch templates for datagen: " + ", ".join(missing)
-        )
+    datagen_runtime = None
+    if job_type == JobType.DATAGEN.value or exp_args.get("datagen_script"):
+        datagen_runtime = _prepare_datagen_configuration(exp_args)
+
+    return exp_args, job_type, datagen_runtime
 
 
 def _inject_env_block(text: str, env_map: dict) -> str:
@@ -188,12 +234,6 @@ def _merge_dependencies(*deps: Optional[str]) -> Optional[str]:
     return ",".join(merged)
 
 
-def check_exists(local_path):
-    if os.path.exists(local_path):
-        return True
-    else:
-        return False
-
 def launch_sbatch(sbatch_script_path, dependency=None, array: str | None = None) -> str:
     extra_args: list[str] = []
     if dependency is not None:
@@ -226,87 +266,13 @@ def launch_sbatch(sbatch_script_path, dependency=None, array: str | None = None)
     )
     return job_id
 
-def wandb_init(kwargs):
-    wandb_run_name = "_".join([str(value) for key, value in kwargs.items()])
-    wandb_run_name = wandb_run_name.replace("/", "_")
-    wandb_project = os.path.expandvars(os.environ.get("WANDB_PROJECT", "dcft"))
-    wandb.init(project=wandb_project, name=wandb_run_name, config=kwargs)
-
 def _extract_agent_name(dataset_name: str):
     return sanitize_repo_component(dataset_name)
 
 
-def _build_training_parameters_link(hub_model_id: str):
-    if not hub_model_id:
-        return None
-    hub_model_id = hub_model_id.strip("/")
-    return f"https://huggingface.co/{hub_model_id}/blob/main/config.json"
-
-
-def _fetch_wandb_times(entity: str, project: str, run_name: str):
-    if not entity or not project or not run_name:
-        return None, None
-    try:
-        api = wandb.Api()
-    except Exception:
-        return None, None
-
-    try:
-        runs = api.runs(f"{entity}/{project}", filters={"display_name": run_name})
-    except TypeError:
-        runs = api.runs(f"{entity}/{project}")
-    except Exception:
-        return None, None
-
-    try:
-        for run in runs:
-            run_display = getattr(run, "display_name", None)
-            run_name_attr = getattr(run, "name", None)
-            if run_display == run_name or run_name_attr == run_name:
-                start = getattr(run, "created_at", None)
-                end = getattr(run, "finished_at", None)
-                if end is None:
-                    end = getattr(run, "updated_at", None)
-                start_iso = start.isoformat() if hasattr(start, "isoformat") else start
-                end_iso = end.isoformat() if hasattr(end, "isoformat") else end
-                return start_iso, end_iso
-    except ValueError:
-        # Happens when the project does not exist or is not accessible.
-        return None, None
-    return None, None
-
-
-def _collect_wandb_metadata(exp_args, train_config):
-    report_to = train_config.get("report_to", "")
-    wandb_enabled = False
-    if isinstance(report_to, str):
-        wandb_enabled = report_to.lower() == "wandb"
-    elif isinstance(report_to, (list, tuple, set)):
-        wandb_enabled = any(str(item).lower() == "wandb" for item in report_to)
-
-    if not wandb_enabled:
-        return None, None, None
-
-    project = os.path.expandvars(os.environ.get("WANDB_PROJECT", "dcft"))
-    entity = (
-        os.environ.get("WANDB_ENTITY")
-        or os.environ.get("WANDB_USERNAME")
-        or exp_args.get("job_creator")
-    )
-    run_name_value = train_config.get("run_name") or exp_args.get("job_name")
-    run_name = str(run_name_value) if run_name_value else None
-
-    wandb_link = None
-    if entity and project and run_name:
-        wandb_link = f"https://wandb.ai/{entity}/{project}/runs/{run_name}"
-
-    training_start, training_end = _fetch_wandb_times(entity, project, run_name)
-    return wandb_link, training_start, training_end
-
-
 def write_run_summary(exp_args, train_config):
-    job_type = str(exp_args.get("job_type", "train") or "train").lower()
-    if job_type not in ("train", "rl"):
+    job_type = _normalize_job_type(exp_args)
+    if job_type not in (JobType.SFT.value, JobType.SFT_MCA.value, JobType.RL.value):
         return
 
     output_dir = train_config.get("output_dir") or exp_args.get("output_dir")
@@ -319,11 +285,11 @@ def write_run_summary(exp_args, train_config):
     agent_name = _extract_agent_name(dataset_name) if dataset_name else None
 
     hub_model_id = train_config.get("hub_model_id") or exp_args.get("hub_model_id")
-    training_parameters_link = _build_training_parameters_link(hub_model_id)
+    training_parameters_link = build_training_parameters_link(hub_model_id)
 
-    wandb_link, training_start, training_end = _collect_wandb_metadata(exp_args, train_config)
+    wandb_link, training_start, training_end = collect_wandb_metadata(exp_args, train_config)
 
-    training_type = "SFT" if job_type != "rl" else "RL"
+    training_type = "SFT" if job_type != JobType.RL.value else "RL"
 
     summary_payload = {
         "agent_name": agent_name,
@@ -345,257 +311,6 @@ def write_run_summary(exp_args, train_config):
 
 
 # Curly braces but not those within ${...}
-curly_brace_pattern = r"(?<!\$)\{([^{}]*)\}"
-
-def extract_template_keys(file_path):
-    with open(file_path, "r") as f:
-        file = f.read()
-    return re.findall(curly_brace_pattern, file)
-
-def fill_template(file_path, exp_args, new_file_path):
-    with open(file_path, "r") as f:
-        file = f.read()
-
-    file = re.sub(curly_brace_pattern, lambda m: exp_args[m.group(1)], file)
-
-    with open(new_file_path, "w") as f:
-        f.write(file)
-
-
-def _escape_template_braces(text: str) -> str:
-    """
-    Escape braces for str.format() except when part of bash-style ${var} blocks.
-    """
-    result: list[str] = []
-    i = 0
-    length = len(text)
-    while i < length:
-        char = text[i]
-        if char == "$" and i + 1 < length and text[i + 1] == "{":
-            # Preserve bash variable references (${VAR}) exactly.
-            j = i + 2
-            while j < length and text[j] != "}":
-                j += 1
-            if j < length:
-                result.append(text[i : j + 1])
-                i = j + 1
-                continue
-        if char == "{":
-            result.append("{{")
-        elif char == "}":
-            result.append("}}")
-        else:
-            result.append(char)
-        i += 1
-    return "".join(result)
-
-def _escape_bash_variables(text: str) -> str:
-    """
-    Escape `${...}` sequences so `str.format` leaves the shell variable syntax
-    untouched while still allowing template placeholders **inside** the default
-    portions (e.g. `$FOO/{experiments_dir}`) to be substituted.
-    """
-    result: list[str] = []
-    i = 0
-    length = len(text)
-    while i < length:
-        if text[i] == "$" and i + 1 < length and text[i + 1] == "{":
-            start = i
-            depth = 1
-            j = i + 2
-            while j < length and depth > 0:
-                if text[j] == "{":
-                    depth += 1
-                elif text[j] == "}":
-                    depth -= 1
-                j += 1
-            # Recursively escape nested `${...}` blocks but leave template braces alone.
-            inner = text[i + 2 : j - 1]
-            escaped_inner = _escape_bash_variables(inner)
-            result.append("${{" + escaped_inner + "}}")
-            i = j
-        else:
-            result.append(text[i])
-            i += 1
-    return "".join(result)
-
-def _normalize_strategy_value(value):
-    if value is None:
-        return None
-    if isinstance(value, str):
-        normalized = value.strip()
-        if not normalized or normalized.lower() in {"none", "null", "false"}:
-            return None
-        return normalized
-    return value
-
-
-def _detect_distributed_strategy(exp_args) -> Optional[str]:
-    if _normalize_strategy_value(exp_args.get("deepspeed")):
-        return "deepspeed"
-    fsdp_cfg = exp_args.get("fsdp_config")
-    if isinstance(fsdp_cfg, dict) and fsdp_cfg:
-        return "fsdp"
-    if _normalize_strategy_value(exp_args.get("fsdp")):
-        return "fsdp"
-    return None
-
-
-def _resolve_mixed_precision_setting(exp_args) -> str:
-    if _normalize_strategy_value(exp_args.get("fp8")):
-        return "fp8"
-    if exp_args.get("bf16") or exp_args.get("pure_bf16"):
-        return "bf16"
-    if exp_args.get("fp16"):
-        return "fp16"
-    return "no"
-
-
-def _render_fsdp_config_block(exp_args) -> str:
-    fsdp_cfg = exp_args.get("fsdp_config")
-    if isinstance(fsdp_cfg, dict) and fsdp_cfg:
-        rendered = yaml.safe_dump(fsdp_cfg, sort_keys=False).strip()
-    else:
-        rendered = "\n".join(
-            [
-                "fsdp_version: 2",
-                "fsdp_state_dict_type: SHARDED_STATE_DICT",
-                "fsdp_offload_params: false",
-                "fsdp_reshard_after_forward: true",
-                "fsdp_cpu_ram_efficient_loading: true",
-            ]
-        )
-    return textwrap.indent(rendered, "  ")
-
-
-def _build_accelerate_config_block(exp_args) -> str:
-    strategy = _detect_distributed_strategy(exp_args)
-    if not strategy:
-        return ""
-
-    lines: list[str] = []
-    accelerate_header = 'ACCELERATE_CONFIG_FILE="$TMP_DIR/${SLURM_JOB_ID}_accelerate_config.yaml.autogenerated"'
-    if strategy == "deepspeed":
-        ds_config_path = str(exp_args.get("deepspeed") or "").strip()
-        lines.append(f"DEEPSPEED_CONFIG_FILE={ds_config_path}")
-        lines.append(accelerate_header)
-        lines.append("export ACCELERATE_CONFIG_FILE")
-        lines.append('cat << EOT > "$ACCELERATE_CONFIG_FILE"')
-        lines.append("# WARNING: auto-generated by launcher")
-        lines.append("compute_environment: LOCAL_MACHINE")
-        lines.append("deepspeed_config:")
-        lines.append("  deepspeed_multinode_launcher: standard")
-        lines.append("  deepspeed_config_file: $DEEPSPEED_CONFIG_FILE")
-        lines.append("  zero3_init_flag: true")
-        lines.append("distributed_type: DEEPSPEED")
-        lines.append("fsdp_config:")
-        lines.append("machine_rank: 0")
-        lines.append("main_process_ip: $MASTER_ADDR")
-        lines.append("main_process_port: $MASTER_PORT")
-        lines.append("main_training_function: main")
-        lines.append("num_machines: $SLURM_NNODES")
-        lines.append("num_processes: $NUM_GPUS")
-        lines.append("use_cpu: false")
-        lines.append("EOT")
-    elif strategy == "fsdp":
-        mixed_precision = _resolve_mixed_precision_setting(exp_args)
-        fsdp_config_lines = _render_fsdp_config_block(exp_args)
-        lines.append(accelerate_header)
-        lines.append("export ACCELERATE_CONFIG_FILE")
-        lines.append('cat << EOT > "$ACCELERATE_CONFIG_FILE"')
-        lines.append("# WARNING: auto-generated by launcher")
-        lines.append("compute_environment: LOCAL_MACHINE")
-        lines.append("distributed_type: FSDP")
-        lines.append(f"mixed_precision: {mixed_precision}")
-        lines.append("fsdp_config:")
-        if fsdp_config_lines:
-            lines.extend(fsdp_config_lines.splitlines())
-        lines.append("machine_rank: 0")
-        lines.append("main_process_ip: $MASTER_ADDR")
-        lines.append("main_process_port: $MASTER_PORT")
-        lines.append("main_training_function: main")
-        lines.append("num_machines: $SLURM_NNODES")
-        lines.append("num_processes: $NUM_GPUS")
-        lines.append("use_cpu: false")
-        lines.append("EOT")
-
-    block = "\n".join(lines).strip()
-    if not block:
-        return ""
-    return _escape_template_braces(block) + "\n"
-
-def construct_sbatch_script(exp_args):
-    base_script_path = exp_args["train_sbatch_path"]
-    with open(base_script_path, "r") as f:
-        base_script = f.read()
-
-    kwargs = defaultdict(str, **exp_args)
-    kwargs["accelerate_config_block"] = _build_accelerate_config_block(exp_args)
-
-    # find JSON file creation with cat
-    json_files_cat = re.findall(r"cat.*?<<EOT >.*?EOT", base_script, re.DOTALL)
-    json_filenames = []
-    for json_file in json_files_cat:
-        json_file_name = re.match(
-            r"cat.*?<<EOT >.*?(\S+).*?EOT", json_file, re.DOTALL
-        ).group(1)
-        json_filenames.append(json_file_name)
-
-        base_script = re.sub(
-            r"cat.*?<<EOT >.*?" + json_file_name.replace("$", "\\$") + r".*?EOT",
-            f"cat {json_file_name}",
-            base_script,
-            count=1,
-            flags=re.DOTALL,
-        )
-
-    # safeguard against injection of bash ${} variables
-    base_script = _escape_bash_variables(base_script)
-
-    time_limit = kwargs.get("time_limit")
-    if time_limit is None:
-        time_limit = "01:00:00"
-        kwargs["time_limit"] = time_limit
-
-     
-    hpc = detect_hpc()
-    hpc_name = hpc.name
-    if hpc_name == "jureca" or hpc_name == "juwels": 
-        login_node = socket.gethostname().split('.')[0] + "i"
-        if "{login_node}" in base_script:
-            if kwargs.get("internet_node", False):
-                # check if proxychains installed
-                if not shutil.which("proxychains4"):
-                    raise RuntimeError("proxychains4 not found, please install it to use internet_node")
-            base_script = base_script.replace("{login_node}", login_node)
-
-    sbatch_script = base_script.format(**kwargs)
-    sbatch_script = _ensure_dependency_directive(sbatch_script, exp_args.get("dependency"))
-
-    # Ensure version checks are disabled across all training runs
-    # by injecting a simple export block after SBATCH headers.
-    env_block = {
-        "DISABLE_VERSION_CHECK": "1",
-    }
-    stage_value = str(exp_args.get("stage") or "").lower()
-    if exp_args.get("use_mca") and stage_value == "sft":
-        env_block["USE_MCA"] = "1"
-        os.environ.setdefault("USE_MCA", "1")
-
-    sbatch_script = _inject_env_block(sbatch_script, env_block)
-
-    for json_file, json_file_name in zip(json_files_cat, json_filenames):
-        sbatch_script = sbatch_script.replace(f"cat {json_file_name}", json_file)
-
-    sbatch_dir = os.path.join(kwargs["experiments_dir"], "sbatch_scripts")
-    os.makedirs(sbatch_dir, exist_ok=True)
-    sbatch_script_path = os.path.join(sbatch_dir, f"{kwargs['job_name']}.sbatch")
-    with open(sbatch_script_path, "w") as f:
-        f.write(sbatch_script)
-        print(f"Wrote sbatch script to {sbatch_script_path}")
-
-    return sbatch_script_path
-
 def construct_config_yaml(exp_args):
     configs_dir = os.path.join(exp_args["experiments_dir"], "configs")
     os.makedirs(configs_dir, exist_ok=True)
@@ -731,7 +446,7 @@ def construct_config_yaml(exp_args):
             print(f"Downloaded dataset to {parquet_download_path}")
 
         # Find the parquet file in the downloaded directory
-        if exp_args.get("job_type") == "datagen" and base_config.get("datagen_mode") == "trace":
+        if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
             parquet_files = []
             for root, _, files in os.walk(parquet_download_path):
                 for fname in files:
@@ -787,7 +502,7 @@ def construct_config_yaml(exp_args):
         hub_model_id = hub_model_id.replace(".", "_")
     base_config["hub_model_id"] = hub_model_id
 
-    if exp_args.get("job_type") == "datagen" and base_config.get("datagen_mode") == "trace":
+    if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
         base_config["dataset"] = dataset_path
         base_config["dataset_dir"] = dataset_path
     elif not exp_args["internet_node"]:
@@ -897,7 +612,7 @@ def construct_config_yaml(exp_args):
     base_config["hub_model_id"] = hub_model_id
     tokenized_path = base_config.get("tokenized_path")
 
-    if tokenized_path is None and exp_args.get("pretokenize"):
+    if tokenized_path is None and should_run_pretokenize(exp_args):
         tokenized_dir = exp_args.get("tokenized_dir")
         tokenized_dir = os.path.expandvars(
         os.environ.get("TOKENIZED_DATASETS_DIR", tokenized_dir)
@@ -996,113 +711,6 @@ def display_args(exp_args, name):
         print(f"{key}: {value}")
     print()
 
-def _build_vllm_env_vars(exp_args: dict, *, include_pinggy: bool = True) -> tuple[dict, dict]:
-    """Return environment variables used to configure vLLM processes.
-
-    Args:
-        exp_args: Experiment arguments (mutated in-place with defaults).
-        include_pinggy: Whether to export Pinggy-related env vars. Only the
-            standalone vLLM server needs these; datagen/trace jobs derive their
-            API base directly from the endpoint JSON.
-    """
-    env: dict[str, str] = {}
-    cfg = exp_args.get("_datagen_vllm_server_config")
-    if not cfg:
-        return env, exp_args
-
-    env["VLLM_MODEL_PATH"] = cfg.model_path
-    env["VLLM_NUM_REPLICAS"] = str(cfg.num_replicas or 1)
-    env["VLLM_TENSOR_PARALLEL_SIZE"] = str(cfg.tensor_parallel_size or 1)
-    env["VLLM_PIPELINE_PARALLEL_SIZE"] = str(cfg.pipeline_parallel_size or 1)
-
-    if cfg.hf_overrides:
-        env["VLLM_HF_OVERRIDES"] = cfg.hf_overrides
-    if cfg.use_deep_gemm:
-        env["VLLM_USE_DEEP_GEMM"] = "1"
-    if cfg.max_num_seqs is not None:
-        env["VLLM_MAX_NUM_SEQS"] = str(cfg.max_num_seqs)
-    if cfg.gpu_memory_utilization is not None:
-        env["VLLM_GPU_MEMORY_UTILIZATION"] = str(cfg.gpu_memory_utilization)
-    if cfg.enable_expert_parallel:
-        env["VLLM_ENABLE_EXPERT_PARALLEL"] = "1"
-    if cfg.swap_space is not None:
-        env["VLLM_SWAP_SPACE"] = str(cfg.swap_space)
-    if cfg.max_seq_len_to_capture is not None:
-        env["VLLM_MAX_SEQ_LEN_TO_CAPTURE"] = str(cfg.max_seq_len_to_capture)
-    if cfg.max_model_len is not None:
-        env["VLLM_MAX_MODEL_LEN"] = str(cfg.max_model_len)
-    if cfg.trust_remote_code:
-        env["VLLM_TRUST_REMOTE_CODE"] = "1"
-    if cfg.disable_log_requests:
-        env["VLLM_DISABLE_LOG_REQUESTS"] = "1"
-    if cfg.custom_model_name:
-        env["VLLM_CUSTOM_MODEL_NAME"] = cfg.custom_model_name
-    if cfg.enable_auto_tool_choice:
-        env["VLLM_ENABLE_AUTO_TOOL_CHOICE"] = "1"
-    if cfg.tool_call_parser:
-        env["VLLM_TOOL_CALL_PARSER"] = cfg.tool_call_parser
-    if cfg.reasoning_parser:
-        env["VLLM_REASONING_PARSER"] = cfg.reasoning_parser
-
-    if include_pinggy:
-        explicit_cli_keys = set(exp_args.get("_explicit_cli_keys", []) or [])
-        pinggy_fields = (
-            ("VLLM_PINGGY_PERSISTENT_URL", "pinggy_persistent_url", "PINGGY_PERSISTENT_URL"),
-            ("VLLM_PINGGY_SSH_COMMAND", "pinggy_ssh_command", "PINGGY_SSH_COMMAND"),
-            ("VLLM_PINGGY_DEBUGGER_URL", "pinggy_debugger_url", "PINGGY_DEBUGGER_URL"),
-        )
-        for env_key, arg_key, fallback_env in pinggy_fields:
-            candidate = exp_args.get(arg_key)
-            explicit = arg_key in explicit_cli_keys
-            if isinstance(candidate, str):
-                candidate = candidate.strip()
-            fallback_allowed = not explicit
-            if candidate in (None, "", "None") and fallback_allowed:
-                fallback = os.environ.get(fallback_env)
-                if isinstance(fallback, str):
-                    fallback = fallback.strip()
-                candidate = fallback
-            if candidate in (None, "", "None"):
-                continue
-            candidate_str = str(candidate)
-            env[env_key] = candidate_str
-            if exp_args.get(arg_key) != candidate:
-                exp_args = update_exp_args(exp_args, {arg_key: candidate})
-
-    max_output_tokens = (
-        exp_args.get("trace_max_tokens")
-        if exp_args.get("trace_max_tokens") not in (None, "", "None")
-        else exp_args.get("datagen_max_tokens")
-    )
-    if max_output_tokens not in (None, "", "None"):
-        env["VLLM_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
-
-    endpoint_path = exp_args.get("vllm_endpoint_json_path")
-    if not endpoint_path and cfg and cfg.endpoint_json_path:
-        endpoint_path = cfg.endpoint_json_path
-    if not endpoint_path:
-        endpoint_path = os.path.join(exp_args["experiments_dir"], "vllm_endpoint.json")
-        exp_args = update_exp_args(exp_args, {"vllm_endpoint_json_path": endpoint_path})
-    env["VLLM_ENDPOINT_JSON_PATH"] = endpoint_path
-
-    submit_timeout = exp_args.get("ray_cgraph_submit_timeout")
-    get_timeout = exp_args.get("ray_cgraph_get_timeout")
-    max_inflight = exp_args.get("ray_cgraph_max_inflight_executions")
-    if submit_timeout:
-        env["RAY_CGRAPH_submit_timeout"] = str(submit_timeout)
-    if get_timeout:
-        env["RAY_CGRAPH_get_timeout"] = str(get_timeout)
-    if max_inflight:
-        env["RAY_CGRAPH_max_inflight_executions"] = str(max_inflight)
-
-    _maybe_set_ray_cgraph_env(env)
-
-    extra_cli_args = exp_args.get("_vllm_server_extra_args")
-    if extra_cli_args:
-        env["VLLM_SERVER_EXTRA_ARGS_JSON"] = json.dumps(extra_cli_args)
-
-    return env, exp_args
-
 def pre_validation(exp_args, cli_args):
 
     # Add arguments to experiment from train config file
@@ -1151,82 +759,133 @@ def pre_validation(exp_args, cli_args):
         exp_args["gpus_per_node"] = "4"
 
 
-def schedule_eval(exp_args, train_job_id):
-    eval_tasks = exp_args["eval_tasks"]
-    model_name = f"DCAgent/{exp_args['job_name']}"
-    
-    num_nodes = exp_args.get("eval_num_nodes")
-    if num_nodes is None:
-        num_nodes = os.environ["NUM_NODES_DEFAULT"]
-    num_shards = str(int(num_nodes) * int(os.environ["NUM_GPUS_PER_NODE"]))
 
-    eval_time_limit = exp_args.get("eval_time_limit", "4:00:00")
-    max_job_duration = str(int(eval_time_limit.split(":")[0]))
+def launch_datagen_job(exp_args: dict, hpc) -> None:
+    """Handle datagen/trace launch orchestration."""
 
-    evalchemy_path = os.environ["EVALCHEMY"]
-    evalchemy_activate_env = os.environ["EVALCHEMY_ACTIVATE_ENV"]
-    
-    print(f"Scheduling automatic evalution following training job:")
-    if eval_tasks:
-        eval_cmd = f"{evalchemy_activate_env}"
-        eval_cmd += f" && cd {evalchemy_path}"
-        eval_cmd += f" && python eval/distributed/launch_simple.py"
-        eval_cmd += f" --tasks {eval_tasks}"
-        eval_cmd += f" --num_shards {num_shards}"
-        eval_cmd += f" --max-job-duration {max_job_duration}"
-        eval_cmd += f" --model_name {model_name}"
-        eval_cmd += f" --dependency afterok:{train_job_id}"
-        
-        print(f"Launching evaluation with command: {eval_cmd}")
-        result = subprocess.run(eval_cmd, shell=True, capture_output=True, text=True)
-        if result.returncode == 0:
-            # Filter out Vista system checks using regex
-            filtered_output = re.sub(r'-+\n\s+Welcome to.*\n-+\n.*?(Submitted batch job \d+)', r'\1', result.stdout, flags=re.DOTALL)
-            filtered_output = re.sub(r'No reservation.*\n(-->.*\n)*', '', filtered_output)
-            print(filtered_output.strip())
+    print("\n=== DATA GENERATION MODE ===")
+
+    task_enabled = bool(exp_args.get("enable_task_gen", True))
+    trace_enabled = bool(exp_args.get("enable_trace_gen", False))
+
+    # Keep datagen/trace engine/backend selections in sync when only one is provided
+    datagen_engine_value = exp_args.get("datagen_engine")
+    trace_engine_value = exp_args.get("trace_engine")
+    if datagen_engine_value is None and trace_engine_value is not None:
+        exp_args = update_exp_args(exp_args, {"datagen_engine": trace_engine_value})
+        datagen_engine_value = trace_engine_value
+    elif trace_engine_value is None and datagen_engine_value is not None:
+        exp_args = update_exp_args(exp_args, {"trace_engine": datagen_engine_value})
+        trace_engine_value = datagen_engine_value
+
+    datagen_backend_value = exp_args.get("datagen_backend")
+    trace_backend_value = exp_args.get("trace_backend")
+    if datagen_backend_value is None and trace_backend_value is not None:
+        exp_args = update_exp_args(exp_args, {"datagen_backend": trace_backend_value})
+        datagen_backend_value = trace_backend_value
+    elif trace_backend_value is None and datagen_backend_value is not None:
+        exp_args = update_exp_args(exp_args, {"trace_backend": datagen_backend_value})
+        trace_backend_value = datagen_backend_value
+
+    if not task_enabled and not trace_enabled:
+        raise ValueError("Enable at least one of task or trace generation")
+
+    if task_enabled and not exp_args.get("datagen_script"):
+        raise ValueError("--datagen-script is required for task generation")
+
+    datagen_extra_args_value = exp_args.get("datagen_extra_args")
+    no_upload_requested = False
+    if isinstance(datagen_extra_args_value, str):
+        lowered = datagen_extra_args_value.replace("_", "-").lower()
+        no_upload_requested = "--no-upload" in lowered
+    elif isinstance(datagen_extra_args_value, (list, tuple)):
+        normalized = [
+            str(item).replace("_", "-").lower() for item in datagen_extra_args_value
+        ]
+        no_upload_requested = any("--no-upload" in token for token in normalized)
+
+    if task_enabled and not exp_args.get("datagen_target_repo") and not no_upload_requested:
+        raise ValueError("--datagen-target-repo is required for task generation (omit only when --no-upload is set)")
+
+    task_job_id = None
+    vllm_job_id = None
+
+    tasks_output_dir = exp_args.get("datagen_output_dir")
+
+    if task_enabled:
+        engine = str(exp_args.get("datagen_engine") or "openai").lower()
+        backend = str(exp_args.get("datagen_backend") or "vllm").lower()
+        vllm_cfg = exp_args.get("_datagen_vllm_server_config")
+        if vllm_cfg and engine == "vllm_local":
+            if backend == "vllm":
+                print("Mode: Local VLLM inference for task generation (standalone server)")
+                vllm_job_id = launch_vllm_server(exp_args, hpc)
+                if vllm_job_id and vllm_job_id != "dry_run_vllm_job_id":
+                    exp_args = update_exp_args(exp_args, {"vllm_job_id": vllm_job_id})
+            elif backend == "ray":
+                print("Mode: Ray-backed local VLLM inference for task generation")
+                _, exp_args = _build_vllm_env_vars(exp_args, include_pinggy=False)
+            else:
+                raise ValueError(f"Unsupported datagen backend: {backend}")
         else:
-            print("Error launching evaluation job:")
-            print(result.stderr)
+            print(f"Mode: {engine} task generation")
 
-def schedule_pretokenize(exp_args):
-    pretok_args = exp_args.copy()
-    pretok_args.pop("dependency", None)
-    pretok_args = update_exp_args(pretok_args, {"job_name": f"{exp_args['job_name']}_pretokenize"})
-    # this keeps world size, per-device batch, and accumulation factors aligned after shrinking to one node for pretokenization
-    pretok_args = update_exp_args(pretok_args, {"num_nodes": 1})
-    # pretok_args = update_exp_args(pretok_args, {"deepspeed": None, "enable_liger_kernel": False, })
-    # Just use the same LF yaml for the pretokenization job
-    pretok_train_config, pretok_train_config_path_out = construct_config_yaml(pretok_args)
-    if exp_args.get("pretok_large"):
-        # You shouldn't pretokenize on 128 nodes
-        # pretok_args = update_exp_args(pretok_args, {"num_nodes": 128, "qos": "boost_qos_bprod", "time_limit": "1-00:00:00", "max_restarts": 0, "job_name": f"{exp_args['job_name']}_pretokenize"})
-        if exp_args["name"] != "leonardo":
-            raise ValueError("Large pretokenization is only supported on leonardo")
-        pretok_args = update_exp_args(pretok_args, {
-        "time_limit": "03:00:00",
-        "qos": "normal",
-        "max_restarts": 0,
-        "node_exclusion_list": "",
-        "job_name": f"{exp_args['job_name']}_pretokenize"})
-    else:
-        pretok_args = update_exp_args(pretok_args, {
-        "partition": exp_args['pretok_partition'], 
-        "qos": exp_args['pretok_qos'], 
-        "time_limit": exp_args['pretok_time_limit'],
-        # this I was using to test with cpu only nodes - needed to make the srun work
-        # "cpus_per_node": exp_args['pretok_cpus_per_node'],
-        # "gpus_per_node": exp_args['pretok_gpus_per_node'],
-        "max_restarts": 0,
-        })
-    pretok_args = update_exp_args(pretok_args, pretok_train_config)
-    pretok_args = update_exp_args(pretok_args, {"train_config_path_out": pretok_train_config_path_out})
-    pretok_sbatch_path_out = construct_sbatch_script(pretok_args)
-    pretok_args = update_exp_args(pretok_args, {"train_sbatch_path_out": pretok_sbatch_path_out})
-    pretok_job_id = submit_job(
-        exp_args=pretok_args,
-        dependency=None,
-    )
-    return pretok_job_id
+        task_job_id = launch_task_job(exp_args, hpc, vllm_job_id)
+        print("\n=== Task Generation Submitted ===")
+        print(f"Task Job ID: {task_job_id}")
+        if vllm_job_id:
+            print(f"VLLM Server Job ID: {vllm_job_id}")
+        tasks_output_dir = exp_args.get("datagen_output_dir")
+        if tasks_output_dir:
+            print(f"Task output directory: {tasks_output_dir}")
+
+    trace_job_id = None
+    trace_requires_vllm_server = False
+
+    if trace_enabled:
+        trace_script = exp_args.get("trace_script") or exp_args.get("datagen_script")
+        if not trace_script:
+            raise ValueError("Trace generation requires --trace-script (or reuse --datagen-script)")
+
+        trace_input_path = exp_args.get("trace_input_path")
+        if not trace_input_path:
+            trace_input_path = tasks_output_dir
+        if trace_input_path:
+            exp_args = update_exp_args(exp_args, {"trace_input_path": trace_input_path})
+        if not trace_input_path:
+            raise ValueError("Trace generation requires --trace-input-path when task generation is disabled")
+
+        if not task_enabled and not os.path.exists(trace_input_path):
+            raise FileNotFoundError(f"Trace input path not found: {trace_input_path}")
+
+        if exp_args.get("trace_use_gpu") and getattr(hpc, "gpus_per_node", 0) == 0:
+            raise ValueError("trace_use_gpu requested but HPC configuration has no GPUs available")
+
+        trace_backend = str(exp_args.get("trace_backend") or exp_args.get("datagen_backend") or "vllm").lower()
+        trace_engine = str(exp_args.get("trace_engine") or exp_args.get("datagen_engine") or "").lower()
+        trace_requires_vllm_server = trace_engine == "vllm_local" and trace_backend == "vllm"
+
+        vllm_cfg = exp_args.get("_datagen_vllm_server_config")
+        if trace_requires_vllm_server and not vllm_job_id and vllm_cfg:
+            print("Trace stage requires a standalone VLLM server – launching now")
+            vllm_job_id = launch_vllm_server(exp_args, hpc)
+            if vllm_job_id and vllm_job_id != "dry_run_vllm_job_id":
+                exp_args = update_exp_args(exp_args, {"vllm_job_id": vllm_job_id})
+
+        dependency = None
+        if task_enabled and task_job_id and task_job_id != "dry_run_task_job_id":
+            dependency = f"afterany:{task_job_id}"
+
+        trace_job_id = launch_trace_job(exp_args, hpc, trace_input_path, dependency=dependency)
+        print("\n=== Trace Generation Submitted ===")
+        if isinstance(trace_job_id, list):
+            print(f"Trace Job IDs: {', '.join(trace_job_id)}")
+        else:
+            print(f"Trace Job ID: {trace_job_id}")
+        print(f"Trace input path: {trace_input_path}")
+
+    return
+
 
 def launch_vllm_server(exp_args: dict, hpc) -> str:
     """
@@ -2359,41 +2018,6 @@ def main():
     print()
     # this is where defaults are stored for experiments_dir and deepspeed
     cli_args = parse_args()
-    literal_none_keys = {"datagen_engine", "trace_engine", "datagen_backend", "trace_backend"}
-    for key, value in cli_args.items():
-        if isinstance(value, str):
-            lowered = value.lower()
-            if lowered == "false":
-                cli_args[key] = False
-            elif lowered == "true":
-                cli_args[key] = True
-            elif lowered == "none":
-                if key not in literal_none_keys:
-                    cli_args[key] = None
-                else:
-                    cli_args[key] = lowered
-    numeric_fields = {
-        "adam_beta1": float,
-        "adam_beta2": float,
-        "learning_rate": float,
-        "warmup_ratio": float,
-        "weight_decay": float,
-        "max_grad_norm": float,
-        "num_train_epochs": float,
-        "max_steps": int,
-        "chunk_size": int,
-    }
-    for key, caster in numeric_fields.items():
-        if key not in cli_args or cli_args[key] is None:
-            continue
-        value = cli_args[key]
-        if isinstance(value, (int, float)):
-            continue
-        try:
-            cli_args[key] = caster(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Expected {key} to be {caster.__name__}-like, got {value!r}") from exc
-
     # Storing all the arguments in a dictionary that we add to in order of precedence
     exp_args = dict()
 
@@ -2411,118 +2035,14 @@ def main():
     if explicit_cli_keys:
         exp_args["_explicit_cli_keys"] = list(explicit_cli_keys)
 
-    def _parse_int(value, label: str) -> Optional[int]:
-        if value in (None, "", "None"):
-            return None
-        if isinstance(value, bool):
-            raise ValueError(f"{label} must be an integer, got boolean {value!r}")
-        try:
-            return int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{label} must be an integer, got {value!r}") from exc
-
-    gpus_per_node_norm = _parse_int(exp_args.get("gpus_per_node"), "--gpus_per_node") or 0
-    exp_args = update_exp_args(exp_args, {"gpus_per_node": gpus_per_node_norm})
-
-    cpus_per_node_norm = _parse_int(exp_args.get("cpus_per_node"), "--cpus_per_node")
-    if cpus_per_node_norm is not None:
-        exp_args = update_exp_args(exp_args, {"cpus_per_node": cpus_per_node_norm})
-
-    cpus_per_gpu_norm = _parse_int(exp_args.get("cpus_per_gpu"), "--cpus_per_gpu")
-    if cpus_per_gpu_norm is not None:
-        exp_args = update_exp_args(exp_args, {"cpus_per_gpu": cpus_per_gpu_norm})
-
-    cpus_per_node_cli_norm = _parse_int(cli_args_filtered.get("cpus_per_node"), "--cpus_per_node")
-    cpus_per_gpu_cli_norm = _parse_int(cli_args_filtered.get("cpus_per_gpu"), "--cpus_per_gpu")
-
-    if cpus_per_gpu_cli_norm is not None:
-        if cpus_per_node_cli_norm is not None:
-            raise ValueError("Provide only one of --cpus_per_node or --cpus_per_gpu, not both.")
-        if gpus_per_node_norm <= 0:
-            raise ValueError("--cpus_per_gpu requires --gpus_per_node to be greater than zero.")
-        cpus_per_node_norm = cpus_per_gpu_cli_norm * gpus_per_node_norm
-        exp_args = update_exp_args(
-            exp_args,
-            {
-                "cpus_per_gpu": cpus_per_gpu_cli_norm,
-                "cpus_per_node": cpus_per_node_norm,
-            },
-        )
-        cpus_per_gpu_norm = cpus_per_gpu_cli_norm
-    else:
-        if cpus_per_node_norm is None and cpus_per_gpu_norm is not None and gpus_per_node_norm > 0:
-            cpus_per_node_norm = cpus_per_gpu_norm * gpus_per_node_norm
-            exp_args = update_exp_args(exp_args, {"cpus_per_node": cpus_per_node_norm})
-        elif (
-            cpus_per_node_norm is not None
-            and (cpus_per_gpu_norm is None or cpus_per_gpu_norm == 0)
-            and gpus_per_node_norm > 0
-        ):
-            derived_cpus_per_gpu = max(1, math.ceil(cpus_per_node_norm / gpus_per_node_norm))
-            exp_args = update_exp_args(exp_args, {"cpus_per_gpu": derived_cpus_per_gpu})
-            cpus_per_gpu_norm = derived_cpus_per_gpu
-
-    if exp_args.get("use_mca"):
-        mca_template = Path(__file__).parent / "sbatch" / f"{hpc.name.lower()}_train_mca.sbatch"
-        if mca_template.exists():
-            exp_args = update_exp_args(
-                exp_args,
-                {
-                    "train_sbatch_filename": mca_template.name,
-                    "train_sbatch_path": str(mca_template),
-                },
-            )
-        else:
-            print(
-                f"Warning: MCA sbatch template {mca_template} not found for cluster {hpc.name}; using default template."
-            )
-
-    job_creator = str(exp_args.get("job_creator", "mlfoundations-dev") or "mlfoundations-dev").strip()
-    if not job_creator:
-        raise ValueError("--job_creator must be a non-empty string.")
-    if len(job_creator) > 96:
-        raise ValueError("--job_creator must be 96 characters or fewer.")
-    exp_args = update_exp_args(exp_args, {"job_creator": job_creator})
-
-    # Provide a default time_limit before template validation
-    if exp_args.get("time_limit") in (None, "",):
-        default_time = os.path.expandvars(os.environ.get("DEFAULT_TIME_LIMIT", "24:00:00"))
-        exp_args = update_exp_args(exp_args, {"time_limit": default_time})
-        print(f"Using default time_limit: {default_time}")
-
-    job_type = str(exp_args.get("job_type", "train") or "train").lower()
-    datagen_runtime = None
-    if job_type == "datagen" or exp_args.get("datagen_script"):
-        datagen_runtime = _prepare_datagen_configuration(exp_args)
+    exp_args, job_type, datagen_runtime = _apply_env_overrides(exp_args, cli_args_filtered, hpc)
 
     # Job name
     if "job_name" not in exp_args:
         exp_args["job_name"] = get_job_name(cli_args)
-    # Fallback job names for special job types
-    if job_type == "datagen" and not exp_args["job_name"]:
-        datagen_engine_value = exp_args.get("datagen_engine")
-        trace_engine_value = exp_args.get("trace_engine")
-        parts = ["datagen", str(datagen_engine_value or trace_engine_value or "engine")]
-
-        repo_candidate = (
-            exp_args.get("datagen_target_repo")
-            or exp_args.get("trace_target_repo")
-        )
-        if exp_args.get("datagen_model"):
-            parts.append(str(exp_args["datagen_model"]).split("/")[-1])
-        elif repo_candidate:
-            sanitized_repo = sanitize_repo_for_job(repo_candidate) or str(repo_candidate).split("/")[-1]
-            if sanitized_repo:
-                parts.append(sanitized_repo)
-        elif exp_args.get("trace_model"):
-            parts.append(str(exp_args["trace_model"]).split("/")[-1])
-        exp_args["job_name"] = "_".join(parts)
-    elif job_type == "consolidate" and not exp_args["job_name"]:
-        repo_id = exp_args.get("consolidate_repo_id") or "consolidate"
-        exp_args["job_name"] = f"{sanitize_repo_for_job(repo_id)}_consolidate"
     print(f"Job name: {exp_args['job_name']}")
 
-    if job_type == "consolidate":
+    if job_type == JobType.CONSOLIDATE.value:
         launch_consolidate_job(
             exp_args,
             hpc,
@@ -2532,129 +2052,19 @@ def main():
         return
 
     # Check if this is a data generation job
-    if job_type == "datagen":
-        print("\n=== DATA GENERATION MODE ===")
-
-        task_enabled = bool(exp_args.get("enable_task_gen", True))
-        trace_enabled = bool(exp_args.get("enable_trace_gen", False))
-
-        # Keep datagen/trace engine/backend selections in sync when only one is provided
-        datagen_engine_value = exp_args.get("datagen_engine")
-        trace_engine_value = exp_args.get("trace_engine")
-        if datagen_engine_value is None and trace_engine_value is not None:
-            exp_args = update_exp_args(exp_args, {"datagen_engine": trace_engine_value})
-            datagen_engine_value = trace_engine_value
-        elif trace_engine_value is None and datagen_engine_value is not None:
-            exp_args = update_exp_args(exp_args, {"trace_engine": datagen_engine_value})
-            trace_engine_value = datagen_engine_value
-
-        datagen_backend_value = exp_args.get("datagen_backend")
-        trace_backend_value = exp_args.get("trace_backend")
-        if datagen_backend_value is None and trace_backend_value is not None:
-            exp_args = update_exp_args(exp_args, {"datagen_backend": trace_backend_value})
-            datagen_backend_value = trace_backend_value
-        elif trace_backend_value is None and datagen_backend_value is not None:
-            exp_args = update_exp_args(exp_args, {"trace_backend": datagen_backend_value})
-            trace_backend_value = datagen_backend_value
-
-        if not task_enabled and not trace_enabled:
-            raise ValueError("Enable at least one of task or trace generation")
-
-        if task_enabled and not exp_args.get("datagen_script"):
-            raise ValueError("--datagen-script is required for task generation")
-
-        datagen_extra_args_value = exp_args.get("datagen_extra_args")
-        no_upload_requested = False
-        if isinstance(datagen_extra_args_value, str):
-            lowered = datagen_extra_args_value.replace("_", "-").lower()
-            no_upload_requested = "--no-upload" in lowered
-        elif isinstance(datagen_extra_args_value, (list, tuple)):
-            normalized = [
-                str(item).replace("_", "-").lower() for item in datagen_extra_args_value
-            ]
-            no_upload_requested = any("--no-upload" in token for token in normalized)
-
-        if task_enabled and not exp_args.get("datagen_target_repo") and not no_upload_requested:
-            raise ValueError("--datagen-target-repo is required for task generation (omit only when --no-upload is set)")
-
-        task_job_id = None
-        vllm_job_id = None
-
-        tasks_output_dir = exp_args.get("datagen_output_dir")
-
-        if task_enabled:
-            engine = str(exp_args.get("datagen_engine") or "openai").lower()
-            backend = str(exp_args.get("datagen_backend") or "vllm").lower()
-            vllm_cfg = exp_args.get("_datagen_vllm_server_config")
-            if vllm_cfg and engine == "vllm_local":
-                if backend == "vllm":
-                    print("Mode: Local VLLM inference for task generation (standalone server)")
-                    vllm_job_id = launch_vllm_server(exp_args, hpc)
-                    if vllm_job_id and vllm_job_id != "dry_run_vllm_job_id":
-                        exp_args = update_exp_args(exp_args, {"vllm_job_id": vllm_job_id})
-                elif backend == "ray":
-                    print("Mode: Ray-backed local VLLM inference for task generation")
-                    _, exp_args = _build_vllm_env_vars(exp_args, include_pinggy=False)
-                else:
-                    raise ValueError(f"Unsupported datagen backend: {backend}")
-            else:
-                print(f"Mode: {engine} task generation")
-
-            task_job_id = launch_task_job(exp_args, hpc, vllm_job_id)
-            print("\n=== Task Generation Submitted ===")
-            print(f"Task Job ID: {task_job_id}")
-            if vllm_job_id:
-                print(f"VLLM Server Job ID: {vllm_job_id}")
-            tasks_output_dir = exp_args.get("datagen_output_dir")
-            if tasks_output_dir:
-                print(f"Task output directory: {tasks_output_dir}")
-
-        trace_job_id = None
-        trace_requires_vllm_server = False
-
-        if trace_enabled:
-            trace_script = exp_args.get("trace_script") or exp_args.get("datagen_script")
-            if not trace_script:
-                raise ValueError("Trace generation requires --trace-script (or reuse --datagen-script)")
-
-            trace_input_path = exp_args.get("trace_input_path")
-            if not trace_input_path:
-                trace_input_path = tasks_output_dir
-            if trace_input_path:
-                exp_args = update_exp_args(exp_args, {"trace_input_path": trace_input_path})
-            if not trace_input_path:
-                raise ValueError("Trace generation requires --trace-input-path when task generation is disabled")
-
-            if not task_enabled and not os.path.exists(trace_input_path):
-                raise FileNotFoundError(f"Trace input path not found: {trace_input_path}")
-
-            if exp_args.get("trace_use_gpu") and getattr(hpc, "gpus_per_node", 0) == 0:
-                raise ValueError("trace_use_gpu requested but HPC configuration has no GPUs available")
-
-            trace_backend = str(exp_args.get("trace_backend") or exp_args.get("datagen_backend") or "vllm").lower()
-            trace_engine = str(exp_args.get("trace_engine") or exp_args.get("datagen_engine") or "").lower()
-            trace_requires_vllm_server = trace_engine == "vllm_local" and trace_backend == "vllm"
-
-            vllm_cfg = exp_args.get("_datagen_vllm_server_config")
-            if trace_requires_vllm_server and not vllm_job_id and vllm_cfg:
-                print("Trace stage requires a standalone VLLM server – launching now")
-                vllm_job_id = launch_vllm_server(exp_args, hpc)
-                if vllm_job_id and vllm_job_id != "dry_run_vllm_job_id":
-                    exp_args = update_exp_args(exp_args, {"vllm_job_id": vllm_job_id})
-
-            dependency = None
-            if task_enabled and task_job_id and task_job_id != "dry_run_task_job_id":
-                dependency = f"afterany:{task_job_id}"
-
-            trace_job_id = launch_trace_job(exp_args, hpc, trace_input_path, dependency=dependency)
-            print("\n=== Trace Generation Submitted ===")
-            if isinstance(trace_job_id, list):
-                print(f"Trace Job IDs: {', '.join(trace_job_id)}")
-            else:
-                print(f"Trace Job ID: {trace_job_id}")
-            print(f"Trace input path: {trace_input_path}")
-
+    if job_type == JobType.DATAGEN.value:
+        launch_datagen_job(exp_args, hpc)
         return  # Skip normal training flow
+
+    if job_type == JobType.PRETOKENIZE.value:
+        schedule_pretokenize(
+            exp_args,
+            update_exp_args_fn=update_exp_args,
+            construct_config_yaml_fn=construct_config_yaml,
+            construct_sbatch_script_fn=construct_sbatch_script,
+            submit_job_fn=submit_job,
+        )
+        return
 
     # Pre-validation
     pre_validation(exp_args, cli_args)
@@ -2682,24 +2092,24 @@ def main():
         )
     else:
         dependency = None
-        if exp_args.get("pretokenize"):
+        wants_pretokenize = should_run_pretokenize(exp_args, job_type)
+        if wants_pretokenize:
             if os.path.exists(exp_args["tokenized_path"]):
                 print(f"Tokenized directory {exp_args['tokenized_path']} already exists, skipping pretokenization job submission")
             else:
-                pretok_job_id = schedule_pretokenize(exp_args)
+                pretok_job_id = schedule_pretokenize(
+                    exp_args,
+                    update_exp_args_fn=update_exp_args,
+                    construct_config_yaml_fn=construct_config_yaml,
+                    construct_sbatch_script_fn=construct_sbatch_script,
+                    submit_job_fn=submit_job,
+                )
                 dependency = f"afterok:{pretok_job_id}"
 
         train_job_id = submit_job(
             exp_args=exp_args,
             dependency=dependency,
         )
-
-        if exp_args.get("eval_tasks"):
-            if exp_args.get("internet_node", False):
-                print()
-                schedule_eval(exp_args, train_job_id)
-            else:
-                print("Skipping evaluation because internet_node is False")
 
 if __name__ == "__main__":
     main()

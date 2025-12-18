@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List, Mapping
 
 from omegaconf import OmegaConf
 
+from data.generation import BaseDataGenerator
 from data.generation.utils import load_datagen_config, resolve_engine_runtime
 
 DIRENV = os.path.dirname(__file__)
@@ -19,6 +22,86 @@ DATAGEN_CONFIG_DIR = os.path.join(DIRENV, "datagen_yaml")
 HARBOR_CONFIG_DIR = os.path.join(DIRENV, "harbor_yaml")
 DEFAULT_RAY_CGRAPH_TIMEOUT = os.environ.get("RAY_CGRAPH_TIMEOUT_DEFAULT", "86500")
 DEFAULT_RAY_CGRAPH_MAX_INFLIGHT = os.environ.get("RAY_CGRAPH_MAX_INFLIGHT_DEFAULT", "")
+
+
+def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
+    """Construct a fallback job name for datagen/trace launches."""
+
+    def _sanitize_component(value: str) -> str:
+        value = value.strip().rstrip("/")
+        if "/" in value:
+            value = value.split("/")[-1]
+        return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-_") or "repo"
+
+    parts: list[str] = ["datagen"]
+    engine = cli_args.get("datagen_engine") or cli_args.get("trace_engine") or "engine"
+    parts.append(str(engine or "engine"))
+
+    repo_candidate = cli_args.get("datagen_target_repo") or cli_args.get("trace_target_repo")
+    model_candidate = cli_args.get("datagen_model") or cli_args.get("trace_model")
+    if model_candidate:
+        parts.append(_sanitize_component(str(model_candidate)))
+    elif repo_candidate:
+        parts.append(_sanitize_component(str(repo_candidate)))
+
+    job_name = "_".join(filter(None, parts))
+    return job_name or "datagen_job"
+
+
+def _detect_gpu_required(datagen_script: str) -> bool:
+    """Best-effort detection of GPU requirement for a datagen script."""
+
+    try:
+        script_path = os.path.abspath(datagen_script)
+        if not os.path.exists(script_path):
+            return False
+
+        spec = importlib.util.spec_from_file_location("datagen_module", script_path)
+        if spec is None or spec.loader is None:
+            return False
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # type: ignore[attr-defined]
+
+        generator_cls = None
+        for attr in dir(module):
+            obj = getattr(module, attr)
+            if (
+                isinstance(obj, type)
+                and issubclass(obj, BaseDataGenerator)
+                and obj is not BaseDataGenerator
+            ):
+                generator_cls = obj
+                break
+
+        if not generator_cls:
+            return False
+
+        generator = generator_cls()
+        run_fn = getattr(generator, "run_task_generation", None)
+        return bool(getattr(run_fn, "_gpu_required", False))
+    except Exception:
+        return False
+
+
+def _validate_sbatch_templates(hpc_obj) -> None:
+    req_path = Path(__file__).parent / "sbatch_data_requirements.json"
+    if not req_path.exists():
+        return
+
+    data = json.loads(req_path.read_text())
+    entries = data.get(hpc_obj.name.lower())
+    if not entries:
+        raise ValueError(
+            f"No sbatch templates registered for cluster '{hpc_obj.name}'. "
+            "Please add entries to hpc/sbatch_data_requirements.json."
+        )
+
+    missing = [entry["path"] for entry in entries if not Path(entry["path"]).exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Missing sbatch templates for datagen: " + ", ".join(missing)
+        )
 
 
 def default_vllm_endpoint_path(
@@ -317,7 +400,11 @@ def _snapshot_datagen_config(
     return str(snapshot_path)
 
 
-def _build_vllm_env_vars(exp_args: dict) -> Tuple[Dict[str, str], dict]:
+def _build_vllm_env_vars(
+    exp_args: dict,
+    *,
+    include_pinggy: bool = False,
+) -> Tuple[Dict[str, str], dict]:
     """Return environment variables used to configure vLLM processes."""
 
     env: Dict[str, str] = {}
@@ -329,7 +416,7 @@ def _build_vllm_env_vars(exp_args: dict) -> Tuple[Dict[str, str], dict]:
     env["VLLM_NUM_REPLICAS"] = str(cfg.num_replicas or 1)
     env["VLLM_TENSOR_PARALLEL_SIZE"] = str(cfg.tensor_parallel_size or 1)
     env["VLLM_PIPELINE_PARALLEL_SIZE"] = str(cfg.pipeline_parallel_size or 1)
-    env["VLLM_DATA_PARALLEL_SIZE"] = str(cfg.data_parallel_size or 1)
+    env["VLLM_DATA_PARALLEL_SIZE"] = str(getattr(cfg, "data_parallel_size", None) or 1)
 
     if cfg.hf_overrides:
         env["VLLM_HF_OVERRIDES"] = cfg.hf_overrides
@@ -339,11 +426,11 @@ def _build_vllm_env_vars(exp_args: dict) -> Tuple[Dict[str, str], dict]:
         env["VLLM_MAX_NUM_SEQS"] = str(cfg.max_num_seqs)
     if cfg.gpu_memory_utilization is not None:
         env["VLLM_GPU_MEMORY_UTILIZATION"] = str(cfg.gpu_memory_utilization)
-    if cfg.cpu_offload_gb is not None:
+    if getattr(cfg, "cpu_offload_gb", None) is not None:
         env["VLLM_CPU_OFFLOAD_GB"] = str(cfg.cpu_offload_gb)
-    if cfg.kv_offloading_size is not None:
+    if getattr(cfg, "kv_offloading_size", None) is not None:
         env["VLLM_KV_OFFLOADING_SIZE"] = str(cfg.kv_offloading_size)
-    if cfg.kv_offloading_backend:
+    if getattr(cfg, "kv_offloading_backend", None):
         env["VLLM_KV_OFFLOADING_BACKEND"] = cfg.kv_offloading_backend
     if cfg.enable_expert_parallel:
         env["VLLM_ENABLE_EXPERT_PARALLEL"] = "1"
@@ -365,20 +452,44 @@ def _build_vllm_env_vars(exp_args: dict) -> Tuple[Dict[str, str], dict]:
         env["VLLM_TOOL_CALL_PARSER"] = cfg.tool_call_parser
     if cfg.reasoning_parser:
         env["VLLM_REASONING_PARSER"] = cfg.reasoning_parser
-    if cfg.logging_level:
+    if getattr(cfg, "logging_level", None) is not None:
         env["VLLM_LOGGING_LEVEL"] = str(cfg.logging_level)
+
+    if include_pinggy:
+        explicit_cli_keys = set(exp_args.get("_explicit_cli_keys", []) or [])
+        pinggy_fields = (
+            ("VLLM_PINGGY_PERSISTENT_URL", "pinggy_persistent_url", "PINGGY_PERSISTENT_URL"),
+            ("VLLM_PINGGY_SSH_COMMAND", "pinggy_ssh_command", "PINGGY_SSH_COMMAND"),
+            ("VLLM_PINGGY_DEBUGGER_URL", "pinggy_debugger_url", "PINGGY_DEBUGGER_URL"),
+        )
+        for env_key, arg_key, fallback_env in pinggy_fields:
+            candidate = exp_args.get(arg_key)
+            explicit = arg_key in explicit_cli_keys
+            if isinstance(candidate, str):
+                candidate = candidate.strip()
+            fallback_allowed = not explicit
+            if candidate in (None, "", "None") and fallback_allowed:
+                fallback = os.environ.get(fallback_env)
+                if isinstance(fallback, str):
+                    fallback = fallback.strip()
+                candidate = fallback
+            if candidate in (None, "", "None"):
+                continue
+            candidate_str = str(candidate)
+            env[env_key] = candidate_str
+            if exp_args.get(arg_key) != candidate_str:
+                exp_args[arg_key] = candidate_str
 
     max_output_tokens = (
         exp_args.get("trace_max_tokens")
         if exp_args.get("trace_max_tokens") not in (None, "", "None")
         else exp_args.get("datagen_max_tokens")
     )
-
     if max_output_tokens not in (None, "", "None"):
         env["VLLM_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
 
     endpoint_path = exp_args.get("vllm_endpoint_json_path")
-    if not endpoint_path and cfg.endpoint_json_path:
+    if not endpoint_path and getattr(cfg, "endpoint_json_path", None):
         endpoint_path = cfg.endpoint_json_path
     if not endpoint_path:
         experiments_dir = exp_args.get("experiments_dir")
@@ -577,6 +688,7 @@ __all__ = [
     "HARBOR_CONFIG_DIR",
     "DEFAULT_RAY_CGRAPH_TIMEOUT",
     "DEFAULT_RAY_CGRAPH_MAX_INFLIGHT",
+    "derive_datagen_job_name",
     "default_vllm_endpoint_path",
     "_maybe_set_ray_cgraph_env",
     "_normalize_cli_args",
