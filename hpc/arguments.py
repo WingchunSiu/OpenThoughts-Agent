@@ -1,23 +1,30 @@
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Any, Optional, Mapping
+from typing import Optional
 import argparse
 import sys
 from enum import Enum
 
+class JobType(str, Enum):
+    """Enumerates supported HPC launcher job categories."""
+
+    SFT = "sft"
+    SFT_MCA = "sft_mca"
+    PRETOKENIZE = "pretokenize"
+    DATAGEN = "datagen"
+    CONSOLIDATE = "consolidate"
+    RL = "rl"
+
+    @classmethod
+    def choices(cls) -> list[str]:
+        return [member.value for member in cls]
+
+    @classmethod
+    def default_value(cls) -> str:
+        return cls.SFT.value
 
 
-def _str_to_bool(value):
-    """Best-effort boolean parser for CLI arguments."""
-    if isinstance(value, bool):
-        return value
-    normalized = str(value).strip().lower()
-    if normalized in {"true", "1", "yes", "y", "on"}:
-        return True
-    if normalized in {"false", "0", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Expected a boolean, got '{value}'")
-
+from hpc.launch_utils import coerce_str_bool_none, coerce_numeric_cli_values
 
 @dataclass
 class LlamaFactoryArgs:
@@ -729,64 +736,6 @@ def parse_args():
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     args_dict["_explicit_cli_keys"] = explicit_cli_keys
     literal_none_keys = {"datagen_engine", "trace_engine", "datagen_backend", "trace_backend"}
-    args_dict = _coerce_str_bool_none(args_dict, literal_none_keys)
-    args_dict = _coerce_numeric_cli_values(args_dict)
+    args_dict = coerce_str_bool_none(args_dict, literal_none_keys)
+    args_dict = coerce_numeric_cli_values(args_dict)
     return args_dict
-
-
-def _coerce_str_bool_none(args_dict: dict[str, Any], literal_none_keys: set[str]) -> dict[str, Any]:
-    for key, value in list(args_dict.items()):
-        if isinstance(value, str):
-            lowered = value.lower()
-            if lowered == "false":
-                args_dict[key] = False
-            elif lowered == "true":
-                args_dict[key] = True
-            elif lowered == "none":
-                if key not in literal_none_keys:
-                    args_dict[key] = None
-                else:
-                    args_dict[key] = lowered
-    return args_dict
-
-
-def _coerce_numeric_cli_values(args_dict: dict[str, Any]) -> dict[str, Any]:
-    numeric_fields = {
-        "adam_beta1": float,
-        "adam_beta2": float,
-        "learning_rate": float,
-        "warmup_ratio": float,
-        "weight_decay": float,
-        "max_grad_norm": float,
-        "num_train_epochs": float,
-        "max_steps": int,
-        "chunk_size": int,
-    }
-    for key, caster in numeric_fields.items():
-        if key not in args_dict or args_dict[key] is None:
-            continue
-        value = args_dict[key]
-        if isinstance(value, (int, float)):
-            continue
-        try:
-            args_dict[key] = caster(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Expected {key} to be {caster.__name__}-like, got {value!r}") from exc
-    return args_dict
-class JobType(str, Enum):
-    """Enumerates supported HPC launcher job categories."""
-
-    SFT = "sft"
-    SFT_MCA = "sft_mca"
-    PRETOKENIZE = "pretokenize"
-    DATAGEN = "datagen"
-    CONSOLIDATE = "consolidate"
-    RL = "rl"
-
-    @classmethod
-    def choices(cls) -> list[str]:
-        return [member.value for member in cls]
-
-    @classmethod
-    def default_value(cls) -> str:
-        return cls.SFT.value

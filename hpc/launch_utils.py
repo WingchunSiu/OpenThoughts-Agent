@@ -12,6 +12,7 @@ import shutil
 import subprocess
 from collections import defaultdict
 from typing import Any, Mapping, Optional
+import argparse
 
 from hpc.hpc import detect_hpc
 
@@ -136,6 +137,63 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
             )
 
     return job_name
+
+
+def parse_bool_flag(value: Any) -> bool:
+    """Best-effort boolean parser for CLI arguments."""
+
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "y", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean, got '{value}'")
+
+
+def coerce_str_bool_none(
+    args_dict: dict[str, Any],
+    literal_none_keys: set[str],
+) -> dict[str, Any]:
+    """Normalize string CLI values representing booleans or 'none' tokens."""
+
+    for key, value in list(args_dict.items()):
+        if not isinstance(value, str):
+            continue
+        lowered = value.strip().lower()
+        if lowered in {"true", "false", "1", "0", "yes", "no", "y", "n", "on", "off"}:
+            args_dict[key] = parse_bool_flag(lowered)
+        elif lowered == "none":
+            args_dict[key] = lowered if key in literal_none_keys else None
+    return args_dict
+
+
+def coerce_numeric_cli_values(args_dict: dict[str, Any]) -> dict[str, Any]:
+    """Cast well-known numeric CLI arguments to their numeric types when passed as strings."""
+
+    numeric_fields = {
+        "adam_beta1": float,
+        "adam_beta2": float,
+        "learning_rate": float,
+        "warmup_ratio": float,
+        "weight_decay": float,
+        "max_grad_norm": float,
+        "num_train_epochs": float,
+        "max_steps": int,
+        "chunk_size": int,
+    }
+    for key, caster in numeric_fields.items():
+        if key not in args_dict or args_dict[key] is None:
+            continue
+        value = args_dict[key]
+        if isinstance(value, (int, float)):
+            continue
+        try:
+            args_dict[key] = caster(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Expected {key} to be {caster.__name__}-like, got {value!r}") from exc
+    return args_dict
 
 
 def _parse_optional_int(value: Any, label: str) -> Optional[int]:
@@ -406,4 +464,7 @@ __all__ = [
     "get_job_name",
     "sanitize_repo_for_job",
     "sanitize_repo_component",
+    "parse_bool_flag",
+    "coerce_str_bool_none",
+    "coerce_numeric_cli_values",
 ]
