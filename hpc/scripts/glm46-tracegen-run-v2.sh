@@ -427,7 +427,6 @@ TRACE_CMD=(
 [[ -n "${TRACE_AGENT_KWARGS:-}" ]] && TRACE_CMD+=(--trace-agent-kwargs "$TRACE_AGENT_KWARGS")
 [[ -n "${TRACE_ENV:-}" ]] && TRACE_CMD+=(--trace-env "$TRACE_ENV")
 [[ -n "${TRACE_AGENT_TIMEOUT_SEC:-}" ]] && TRACE_CMD+=(--trace-agent-timeout-sec "$TRACE_AGENT_TIMEOUT_SEC")
-[[ -n "${TRACE_MAX_TOKENS:-}" ]] && TRACE_CMD+=(--trace-max-tokens "$TRACE_MAX_TOKENS")
 [[ -n "${TRACE_N_CONCURRENT:-}" ]] && TRACE_CMD+=(--trace-n-concurrent "$TRACE_N_CONCURRENT")
 [[ -n "${TRACE_CHUNK_SIZE:-}" ]] && TRACE_CMD+=(--chunk_size "$TRACE_CHUNK_SIZE")
 

@@ -1,0 +1,26 @@
+{
+  "schema_version": "ATIF-v1.5",
+  "session_id": "fb49f0f2-5a59-495e-8faa-99de11a76cab",
+  "agent": {
+    "name": "terminus-2",
+    "version": "2.0.0",
+    "model_name": "gemini/gemini-3-pro-preview",
+    "extra": {
+      "parser": "json",
+      "temperature": 0.7
+    }
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2025-12-19T19:06:53.373533+00:00",
+      "source": "user",
+      "message": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. You will be given a task description and the output from previously executed commands. Your goal is to solve the task by providing batches of shell commands.\n\nFormat your response as JSON with the following structure:\n\n{\n  \"analysis\": \"Analyze the current state based on the terminal output provided. What do you see? What has been accomplished? What still needs to be done?\",\n  \"plan\": \"Describe your plan for the next steps. What commands will you run and why? Be specific about what you expect each command to accomplish.\",\n  \"commands\": [\n    {\n      \"keystrokes\": \"ls -la\\n\",\n      \"duration\": 0.1\n    },\n    {\n      \"keystrokes\": \"cd project\\n\",\n      \"duration\": 0.1\n    }\n  ],\n  \"task_complete\": true\n}\n\nRequired fields:\n- \"analysis\": Your analysis of the current situation\n- \"plan\": Your plan for the next steps\n- \"commands\": Array of command objects to execute\n\nOptional fields:\n- \"task_complete\": Boolean indicating if the task is complete (defaults to false if not present)\n\nCommand object structure:\n- \"keystrokes\": String containing the exact keystrokes to send to the terminal (required)\n- \"duration\": Number of seconds to wait for the command to complete before the next command will be executed (defaults to 1.0 if not present)\n\nIMPORTANT: The text inside \"keystrokes\" will be used completely verbatim as keystrokes. Write commands exactly as you want them sent to the terminal:\n- Most bash commands should end with a newline (\\n) to cause them to execute\n- For special key sequences, use tmux-style escape sequences:\n  - C-c for Ctrl+C\n  - C-d for Ctrl+D\n\nThe \"duration\" attribute specifies the number of seconds to wait for the command to complete (default: 1.0) before the next command will be executed. On immediate tasks (e.g., cd, ls, echo, cat) set a duration of 0.1 seconds. On commands (e.g., gcc, find, rustc) set a duration of 1.0 seconds. On slow commands (e.g., make, python3 [long running script], wget [file]) set an appropriate duration as you determine necessary.\n\nIt is better to set a smaller duration than a longer duration. It is always possible to wait again if the prior output has not finished, by running {\"keystrokes\": \"\", \"duration\": 10.0} on subsequent requests to wait longer. Never wait longer than 60 seconds; prefer to poll to see intermediate result status.\n\nImportant notes:\n- Each command's keystrokes are sent exactly as written to the terminal\n- Do not include extra whitespace before or after the keystrokes unless it's part of the intended command\n- Extra text before or after the JSON will generate warnings but be tolerated\n- The JSON must be valid - use proper escaping for quotes and special characters within strings\n- Commands array can be empty if you want to wait without taking action\n\nTask Description:\n\nI'm using the .NETCF (Windows Mobile) Graphics class and the DrawString() method to render a single character to the screen. The problem is that I can't seem to get it centred properly. No matter what I set for the Y coordinate of the location of the string render, it always comes out lower than that and the larger the text size the greater the Y offset. For example, at text size 12, the offset is about 4, but at 32 the offset is about 10. I want the character to vertically take up most of the rectangle it's being drawn in and be centred horizontally. Here's my basic code. this is referencing the user control it's being drawn in. Graphics g = this.CreateGraphics(); float padx = ((float)this.Size.Width) * (0.05F); float pady = ((float)this.Size.Height) * (0.05F); float width = ((float)this.Size.Width) - 2 * padx; float height = ((float)this.Size.Height) - 2 * pady; float emSize = height; g.DrawString(letter, new Font(FontFamily.GenericSansSerif, emSize, FontStyle.Regular), new SolidBrush(Color.Black), padx, pady); Yes, I know there is the label control that I could use instead and set the centring with that, but I actually do need to do this manually with the Graphics class.\n\n\nCurrent terminal state:\nCurrent Terminal Screen:\nroot@ba59ef73-7e3c-49eb-859a-e562fafc30e5:/app#\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0
+  }
+}

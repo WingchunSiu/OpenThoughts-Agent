@@ -522,10 +522,6 @@ class DataGenArgs:
         metadata={"help": "Override Daytona sandbox GPU allocation"}
     )
 
-    trace_max_tokens: Optional[int] = field(
-        default=None,
-        metadata={"help": "Maximum output tokens per completion during trace generation"}
-    )
     trace_script: Optional[str] = field(
         default=None,
         metadata={"help": "Path to trace generation script"}

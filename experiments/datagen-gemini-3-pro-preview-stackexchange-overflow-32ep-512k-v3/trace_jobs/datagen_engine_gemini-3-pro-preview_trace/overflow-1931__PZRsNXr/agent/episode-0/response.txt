@@ -1,0 +1,14 @@
+{
+  "analysis": "The user is asking about the behavior of Java multi-line comments when they contain a string literal with the comment terminator '*/'. I need to verify if the Java compiler (javac) behaves the same way as Eclipse, which would indicate this is part of the Java specification. To do this, I will create a Java source file that reproduces the described scenario and attempt to compile it.",
+  "plan": "1. Create a Java file named 'TestComment.java' containing a multi-line comment that wraps a string literal containing '*/'.\n2. Attempt to compile the file using 'javac'.\n3. Observe the compilation errors to confirm if the compiler terminates the comment early.",
+  "commands": [
+    {
+      "keystrokes": "cat > TestComment.java <<EOF\npublic class TestComment {\n    public static void main(String[] args) {\n        System.out.println(\"Start\");\n        /*\n         * This is a comment block.\n         * String s = \"*/\";\n         */\n        System.out.println(\"End\");\n    }\n}\nEOF\n",
+      "duration": 0.5
+    },
+    {
+      "keystrokes": "javac TestComment.java\n",
+      "duration": 1.0
+    }
+  ]
+}

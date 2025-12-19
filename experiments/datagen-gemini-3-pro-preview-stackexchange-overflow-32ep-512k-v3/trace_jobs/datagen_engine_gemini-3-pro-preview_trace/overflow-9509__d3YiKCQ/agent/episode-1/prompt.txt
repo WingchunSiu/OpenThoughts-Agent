@@ -1,0 +1,41 @@
+New Terminal Output:
+root@969d7a0e-1c37-4141-a49c-da39fc2e88ca:/app# ls -la
+total 0
+drwxr-xr-x 2 root root   6 Oct 30 22:22 .
+drwxr-xr-x 1 root root 102 Dec 19 19:06 ..
+root@969d7a0e-1c37-4141-a49c-da39fc2e88ca:/app#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

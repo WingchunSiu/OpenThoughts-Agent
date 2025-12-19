@@ -115,7 +115,6 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "trace_engine",
     "trace_backend",
     "trace_harbor_config",
-    "trace_max_tokens",
     "chunk_size",
     "trace_model",
     "trace_agent_name",

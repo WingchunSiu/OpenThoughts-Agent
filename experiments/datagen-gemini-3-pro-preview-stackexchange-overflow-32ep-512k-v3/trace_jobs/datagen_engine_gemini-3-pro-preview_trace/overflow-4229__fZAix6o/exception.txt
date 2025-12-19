@@ -1,0 +1,84 @@
+Traceback (most recent call last):
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/trial/trial.py", line 514, in run
+    await self._execute_agent()
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/trial/trial.py", line 231, in _execute_agent
+    await asyncio.wait_for(
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1469, in run
+    actual_episodes = await self._run_agent_loop(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1298, in _run_agent_loop
+    timeout_occurred, terminal_output = await self._execute_commands(
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1113, in _execute_commands
+    await session.send_keys(
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/tmux_session.py", line 556, in send_keys
+    await self._send_non_blocking_keys(
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/tmux_session.py", line 511, in _send_non_blocking_keys
+    await self.environment.exec(self._tmux_send_keys(keys))
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/environments/daytona.py", line 465, in exec
+    result = await self._poll_response(session_id, response.cmd_id)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/environments/daytona.py", line 419, in _poll_response
+    logs = await self._get_session_command_logs_with_retry(session_id, command_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 189, in async_wrapped
+    return await copy(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 111, in __call__
+    do = await self.iter(retry_state=retry_state)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 153, in iter
+    result = await action(retry_state)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/_utils.py", line 99, in inner
+    return call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/__init__.py", line 400, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 114, in __call__
+    result = await fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/environments/daytona.py", line 402, in _get_session_command_logs_with_retry
+    return await self._sandbox.process.get_session_command_logs(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/daytona/_utils/errors.py", line 88, in async_wrapper
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/daytona/_async/process.py", line 389, in get_session_command_logs
+    response = await self._api_client.get_session_command_logs_without_preload_content(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/pydantic/_internal/_validate_call.py", line 34, in wrapper_function
+    return await wrapper(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/daytona_toolbox_api_client_async/api/process_api.py", line 2640, in get_session_command_logs_without_preload_content
+    response_data = await self.api_client.call_api(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/daytona/_async/sandbox.py", line 126, in call_toolbox_api_with_lazy_host_load
+    return await og_call_toolbox_api(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/daytona_toolbox_api_client_async/api_client.py", line 276, in call_api
+    response_data = await self.rest_client.request(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/daytona_toolbox_api_client_async/rest.py", line 211, in request
+    r = await pool_manager.request(**args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client.py", line 770, in _request
+    resp = await handler(req)
+           ^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client.py", line 748, in _connect_and_send_request
+    await resp.start(conn)
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client_reqrep.py", line 532, in start
+    message, payload = await protocol.read()  # type: ignore[union-attr]
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/streams.py", line 672, in read
+    await self._waiter
+asyncio.exceptions.CancelledError

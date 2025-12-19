@@ -1,0 +1,32 @@
+engine:
+  type: google_gemini
+  model: gemini-3-pro-preview
+  max_output_tokens: 512000
+  healthcheck_interval: 300
+  request_params:
+    temperature: 0.2
+  openai: null
+  anthropic: null
+  vllm_local: null
+  extra_args:
+    credentials_path: /Users/benjaminfeuer/Documents/.gcs_datacomp.json
+    location: global
+    project_id: soe-datacomp
+    thinking_level: low
+backend:
+  type: none
+  wait_for_endpoint: false
+  endpoint_json_path: null
+  ray_port: 6379
+  api_port: 8000
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  ray_cgraph_submit_timeout: null
+  ray_cgraph_get_timeout: null
+  ray_cgraph_max_inflight_executions: null
+  healthcheck_max_attempts: null
+  healthcheck_retry_delay: null
+extra_agent_kwargs: {}
+chunk_array_max: null
+vllm_server: null

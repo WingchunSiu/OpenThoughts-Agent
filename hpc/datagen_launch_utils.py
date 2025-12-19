@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List, Mapping, Union
@@ -523,11 +524,7 @@ def _build_vllm_env_vars(
             if exp_args.get(arg_key) != candidate_str:
                 exp_args[arg_key] = candidate_str
 
-    max_output_tokens = (
-        exp_args.get("trace_max_tokens")
-        if exp_args.get("trace_max_tokens") not in (None, "", "None")
-        else exp_args.get("datagen_max_tokens")
-    )
+    max_output_tokens = exp_args.get("datagen_max_tokens")
     if max_output_tokens not in (None, "", "None"):
         env["VLLM_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
 
@@ -1000,6 +997,7 @@ def launch_task_job(exp_args: dict, hpc, vllm_job_id: str = None) -> str:
         "DATAGEN_ENGINE": engine,
         "DATAGEN_STAGE": "tasks",
         "DATAGEN_BACKEND": str(exp_args.get("datagen_backend", "vllm")),
+        "PYTHON_EXECUTABLE": sys.executable,
     }
     task_type_value = exp_args.get("task_type")
     if task_type_value:
@@ -1078,6 +1076,7 @@ def launch_task_job(exp_args: dict, hpc, vllm_job_id: str = None) -> str:
     datagen_env_vars["DATAGEN_PIPELINE_PARALLEL_SIZE"] = str(pipeline_parallel_size)
     datagen_env_vars["DATAGEN_DATA_PARALLEL_SIZE"] = str(data_parallel_size)
     datagen_env_vars["DATAGEN_NUM_NODES"] = str(exp_args.get("num_nodes") or getattr(hpc, "num_nodes", 1) or 1)
+    datagen_env_vars["PROJECT_ROOT"] = str(PROJECT_ROOT)
     gcs_credentials_path = os.environ.get("GCS_CREDENTIALS_PATH")
 
     is_gemini_engine = str(engine).lower() in {"gemini_openai", "google_gemini", "gemini"}
@@ -1586,6 +1585,8 @@ def launch_trace_job(
         "TRACE_JOB_INDEX": "0",
         "TRACE_TARGET_REPO_BASE": trace_target_repo,
         "TRACE_HARBOR_CONFIG": "",
+        "PROJECT_ROOT": str(PROJECT_ROOT),
+        "PYTHON_EXECUTABLE": sys.executable,
     }
     if task_type_value:
         trace_env_vars["TRACE_TASK_TYPE"] = str(task_type_value)
@@ -1640,12 +1641,6 @@ def launch_trace_job(
         if not dry_run_flag:
             dump_job_config(config, output_path)
         return output_path
-
-    trace_max_tokens = exp_args.get("trace_max_tokens")
-    if trace_max_tokens in (None, "", "None"):
-        trace_max_tokens = exp_args.get("datagen_max_tokens")
-    if trace_max_tokens not in (None, "", "None"):
-        trace_env_vars["TRACE_MAX_TOKENS"] = str(trace_max_tokens)
 
     # Overwrite trace health max_attempts and delay if environment variable is specified
     if "TRACE_HEALTH_MAX_ATTEMPTS" in os.environ:

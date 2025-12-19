@@ -1,0 +1,119 @@
+Traceback (most recent call last):
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/trial/trial.py", line 514, in run
+    await self._execute_agent()
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/trial/trial.py", line 231, in _execute_agent
+    await asyncio.wait_for(
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1469, in run
+    actual_episodes = await self._run_agent_loop(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1187, in _run_agent_loop
+    ) = await self._handle_llm_interaction(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1062, in _handle_llm_interaction
+    llm_response = await self._query_llm(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 189, in async_wrapped
+    return await copy(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 111, in __call__
+    do = await self.iter(retry_state=retry_state)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 153, in iter
+    result = await action(retry_state)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/_utils.py", line 99, in inner
+    return call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/__init__.py", line 400, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 114, in __call__
+    result = await fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 895, in _query_llm
+    llm_response = await chat.chat(
+                   ^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/llms/chat.py", line 72, in chat
+    llm_response: LLMResponse = await self._model.call(
+                                ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 189, in async_wrapped
+    return await copy(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 111, in __call__
+    do = await self.iter(retry_state=retry_state)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 153, in iter
+    result = await action(retry_state)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/_utils.py", line 99, in inner
+    return call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/__init__.py", line 400, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 114, in __call__
+    result = await fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/llms/lite_llm.py", line 337, in call
+    response = await litellm.acompletion(**completion_kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/utils.py", line 1484, in wrapper_async
+    result = await original_function(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/main.py", line 598, in acompletion
+    response = await init_response
+               ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py", line 2033, in async_completion
+    response = await client.post(
+               ^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/litellm_core_utils/logging_utils.py", line 190, in async_wrapper
+    result = await func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/llms/custom_httpx/http_handler.py", line 358, in post
+    response = await self.client.send(req, stream=stream)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/httpx/_client.py", line 1629, in send
+    response = await self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+    response = await self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/httpx/_client.py", line 1730, in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py", line 281, in handle_async_request
+    response = await self._make_aiohttp_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py", line 248, in _make_aiohttp_request
+    response = await client_session.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client.py", line 1488, in __aenter__
+    self._resp: _RetType = await self._coro
+                           ^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client.py", line 770, in _request
+    resp = await handler(req)
+           ^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client.py", line 748, in _connect_and_send_request
+    await resp.start(conn)
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/client_reqrep.py", line 532, in start
+    message, payload = await protocol.read()  # type: ignore[union-attr]
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/aiohttp/streams.py", line 672, in read
+    await self._waiter
+asyncio.exceptions.CancelledError

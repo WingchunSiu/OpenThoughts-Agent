@@ -1,0 +1,10 @@
+{
+  "analysis": "The user has asked a conceptual programming question about the difference between `IEnumerable` and `IQueryable` in C#/.NET, specifically regarding expression trees. The current environment is a Linux shell. I need to determine if there are existing files relevant to this task or if I should simply provide the answer. I will start by exploring the current directory.",
+  "plan": "I will list the files in the current directory to see if there is any context. If not, I will create a text file explaining the difference between `IEnumerable` and `IQueryable`.",
+  "commands": [
+    {
+      "keystrokes": "ls -la\n",
+      "duration": 0.5
+    }
+  ]
+}

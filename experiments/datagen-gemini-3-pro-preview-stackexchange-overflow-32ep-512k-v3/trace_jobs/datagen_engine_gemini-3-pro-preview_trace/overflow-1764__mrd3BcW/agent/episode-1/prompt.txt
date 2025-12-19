@@ -1,0 +1,41 @@
+New Terminal Output:
+root@f0a440d6-b14e-427a-9726-05b605a41a7f:/app# ls -la
+total 0
+drwxr-xr-x 2 root root  10 Nov  7 20:20 .
+drwxr-xr-x 1 root root 102 Dec 19 19:06 ..
+root@f0a440d6-b14e-427a-9726-05b605a41a7f:/app# pip list | grep lxml
+root@f0a440d6-b14e-427a-9726-05b605a41a7f:/app#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

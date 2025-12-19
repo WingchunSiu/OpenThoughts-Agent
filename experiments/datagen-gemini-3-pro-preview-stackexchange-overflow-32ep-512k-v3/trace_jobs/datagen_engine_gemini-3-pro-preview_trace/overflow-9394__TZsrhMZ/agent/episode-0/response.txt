@@ -1,0 +1,10 @@
+{
+  "analysis": "The user has provided a problem description related to WinDbg (Windows Debugger) where they are trying to set a breakpoint on an overloaded C++ function and getting an 'Ambiguous symbol error'. I am in a Linux environment. I cannot execute WinDbg commands. The goal is likely to provide the correct command to solve the user's problem. I will first check the current directory for any context files. If none exist, I will assume the standard practice of writing the solution to a file, likely 'solution.txt'.",
+  "plan": "1. List files in the current directory to check for instructions or context.\n2. Create a file named 'solution.txt' containing the correct WinDbg command to set breakpoints on all overloads, which is the 'bm' command.",
+  "commands": [
+    {
+      "keystrokes": "ls -la\n",
+      "duration": 0.1
+    }
+  ]
+}

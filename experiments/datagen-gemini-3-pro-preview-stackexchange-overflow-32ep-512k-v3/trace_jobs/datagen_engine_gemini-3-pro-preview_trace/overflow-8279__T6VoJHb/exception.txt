@@ -1,0 +1,56 @@
+Traceback (most recent call last):
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/trial/trial.py", line 514, in run
+    await self._execute_agent()
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/trial/trial.py", line 231, in _execute_agent
+    await asyncio.wait_for(
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1469, in run
+    actual_episodes = await self._run_agent_loop(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1187, in _run_agent_loop
+    ) = await self._handle_llm_interaction(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 1062, in _handle_llm_interaction
+    llm_response = await self._query_llm(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 189, in async_wrapped
+    return await copy(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 111, in __call__
+    do = await self.iter(retry_state=retry_state)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 153, in iter
+    result = await action(retry_state)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/_utils.py", line 99, in inner
+    return call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/__init__.py", line 400, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 114, in __call__
+    result = await fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/agents/terminus_2/terminus_2.py", line 895, in _query_llm
+    llm_response = await chat.chat(
+                   ^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/Documents/harbor/src/harbor/llms/chat.py", line 72, in chat
+    llm_response: LLMResponse = await self._model.call(
+                                ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 189, in async_wrapped
+    return await copy(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 121, in __call__
+    await self.sleep(do)  # type: ignore[misc]
+    ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/benjaminfeuer/miniconda3/envs/llama-factory/lib/python3.12/asyncio/tasks.py", line 665, in sleep
+    return await future
+           ^^^^^^^^^^^^
+asyncio.exceptions.CancelledError

@@ -1,0 +1,107 @@
+{
+    "litellm_trace_id": "None",
+    "litellm_call_id": "2d3c59ac-18a7-4923-a6ce-461f74866b65",
+    "input": [
+        {
+            "role": "user",
+            "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. You will be given a task description and the output from previously executed commands. Your goal is to solve the task by providing batches of shell commands.\n\nFormat your response as JSON with the following structure:\n\n{\n  \"analysis\": \"Analyze the current state based on the terminal output provided. What do you see? What has been accomplished? What still needs to be done?\",\n  \"plan\": \"Describe your plan for the next steps. What commands will you run and why? Be specific about what you expect each command to accomplish.\",\n  \"commands\": [\n    {\n      \"keystrokes\": \"ls -la\\n\",\n      \"duration\": 0.1\n    },\n    {\n      \"keystrokes\": \"cd project\\n\",\n      \"duration\": 0.1\n    }\n  ],\n  \"task_complete\": true\n}\n\nRequired fields:\n- \"analysis\": Your analysis of the current situation\n- \"plan\": Your plan for the next steps\n- \"commands\": Array of command objects to execute\n\nOptional fields:\n- \"task_complete\": Boolean indicating if the task is complete (defaults to false if not present)\n\nCommand object structure:\n- \"keystrokes\": String containing the exact keystrokes to send to the terminal (required)\n- \"duration\": Number of seconds to wait for the command to complete before the next command will be executed (defaults to 1.0 if not present)\n\nIMPORTANT: The text inside \"keystrokes\" will be used completely verbatim as keystrokes. Write commands exactly as you want them sent to the terminal:\n- Most bash commands should end with a newline (\\n) to cause them to execute\n- For special key sequences, use tmux-style escape sequences:\n  - C-c for Ctrl+C\n  - C-d for Ctrl+D\n\nThe \"duration\" attribute specifies the number of seconds to wait for the command to complete (default: 1.0) before the next command will be executed. On immediate tasks (e.g., cd, ls, echo, cat) set a duration of 0.1 seconds. On commands (e.g., gcc, find, rustc) set a duration of 1.0 seconds. On slow commands (e.g., make, python3 [long running script], wget [file]) set an appropriate duration as you determine necessary.\n\nIt is better to set a smaller duration than a longer duration. It is always possible to wait again if the prior output has not finished, by running {\"keystrokes\": \"\", \"duration\": 10.0} on subsequent requests to wait longer. Never wait longer than 60 seconds; prefer to poll to see intermediate result status.\n\nImportant notes:\n- Each command's keystrokes are sent exactly as written to the terminal\n- Do not include extra whitespace before or after the keystrokes unless it's part of the intended command\n- Extra text before or after the JSON will generate warnings but be tolerated\n- The JSON must be valid - use proper escaping for quotes and special characters within strings\n- Commands array can be empty if you want to wait without taking action\n\nTask Description:\n\nI am trying to upload a file using to Flickr using JQuery. I have a form (which works if I dont use JQuery) which I am submitting using the Form Plugin. My code is as follows: Test Upload $(document).ready(function() { $('#myForm').bind('submit', function() { $(this).ajaxSubmit({ dataType: 'xml', success: processXml }); return false; // AJAX response will replace this content. The problem is I get the following text as a response: even though the file uploads with no problems. This means my div is not updated as it doesnt run the success function. Any one have any ideas. Thanks\n\n\nCurrent terminal state:\nCurrent Terminal Screen:\nroot@6e0cf700-da0e-4059-87dd-2e96861fa25b:/app#\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+        }
+    ],
+    "litellm_params": {
+        "acompletion": true,
+        "api_key": "None",
+        "force_timeout": 600,
+        "verbose": false,
+        "custom_llm_provider": "gemini",
+        "api_base": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key=*****30Zk",
+        "litellm_call_id": "2d3c59ac-18a7-4923-a6ce-461f74866b65",
+        "model_alias_map": {},
+        "completion_call_id": "None",
+        "aembedding": "None",
+        "metadata": "None",
+        "model_info": "None",
+        "proxy_server_request": "None",
+        "preset_cache_key": "None",
+        "no-log": "None",
+        "stream_response": {},
+        "input_cost_per_token": "None",
+        "input_cost_per_second": "None",
+        "output_cost_per_token": "None",
+        "output_cost_per_second": "None",
+        "cooldown_time": "None",
+        "text_completion": "None",
+        "azure_ad_token_provider": "None",
+        "user_continue_message": "None",
+        "base_model": "None",
+        "litellm_trace_id": "None",
+        "litellm_session_id": "None",
+        "hf_model_name": "None",
+        "custom_prompt_dict": {},
+        "litellm_metadata": "None",
+        "disable_add_transform_inline_image_block": "None",
+        "drop_params": true,
+        "prompt_id": "None",
+        "prompt_variables": "None",
+        "async_call": "None",
+        "ssl_verify": "None",
+        "merge_reasoning_content_in_choices": "None",
+        "api_version": "None",
+        "azure_ad_token": "None",
+        "tenant_id": "None",
+        "client_id": "None",
+        "client_secret": "None",
+        "azure_username": "None",
+        "azure_password": "None",
+        "azure_scope": "None",
+        "max_retries": "None",
+        "timeout": 600.0,
+        "bucket_name": "None",
+        "vertex_credentials": "None",
+        "vertex_project": "None",
+        "use_litellm_proxy": false,
+        "litellm_request_debug": false,
+        "aws_region_name": "None"
+    },
+    "applied_guardrails": [],
+    "model": "gemini-3-pro-preview",
+    "messages": [
+        {
+            "role": "user",
+            "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. You will be given a task description and the output from previously executed commands. Your goal is to solve the task by providing batches of shell commands.\n\nFormat your response as JSON with the following structure:\n\n{\n  \"analysis\": \"Analyze the current state based on the terminal output provided. What do you see? What has been accomplished? What still needs to be done?\",\n  \"plan\": \"Describe your plan for the next steps. What commands will you run and why? Be specific about what you expect each command to accomplish.\",\n  \"commands\": [\n    {\n      \"keystrokes\": \"ls -la\\n\",\n      \"duration\": 0.1\n    },\n    {\n      \"keystrokes\": \"cd project\\n\",\n      \"duration\": 0.1\n    }\n  ],\n  \"task_complete\": true\n}\n\nRequired fields:\n- \"analysis\": Your analysis of the current situation\n- \"plan\": Your plan for the next steps\n- \"commands\": Array of command objects to execute\n\nOptional fields:\n- \"task_complete\": Boolean indicating if the task is complete (defaults to false if not present)\n\nCommand object structure:\n- \"keystrokes\": String containing the exact keystrokes to send to the terminal (required)\n- \"duration\": Number of seconds to wait for the command to complete before the next command will be executed (defaults to 1.0 if not present)\n\nIMPORTANT: The text inside \"keystrokes\" will be used completely verbatim as keystrokes. Write commands exactly as you want them sent to the terminal:\n- Most bash commands should end with a newline (\\n) to cause them to execute\n- For special key sequences, use tmux-style escape sequences:\n  - C-c for Ctrl+C\n  - C-d for Ctrl+D\n\nThe \"duration\" attribute specifies the number of seconds to wait for the command to complete (default: 1.0) before the next command will be executed. On immediate tasks (e.g., cd, ls, echo, cat) set a duration of 0.1 seconds. On commands (e.g., gcc, find, rustc) set a duration of 1.0 seconds. On slow commands (e.g., make, python3 [long running script], wget [file]) set an appropriate duration as you determine necessary.\n\nIt is better to set a smaller duration than a longer duration. It is always possible to wait again if the prior output has not finished, by running {\"keystrokes\": \"\", \"duration\": 10.0} on subsequent requests to wait longer. Never wait longer than 60 seconds; prefer to poll to see intermediate result status.\n\nImportant notes:\n- Each command's keystrokes are sent exactly as written to the terminal\n- Do not include extra whitespace before or after the keystrokes unless it's part of the intended command\n- Extra text before or after the JSON will generate warnings but be tolerated\n- The JSON must be valid - use proper escaping for quotes and special characters within strings\n- Commands array can be empty if you want to wait without taking action\n\nTask Description:\n\nI am trying to upload a file using to Flickr using JQuery. I have a form (which works if I dont use JQuery) which I am submitting using the Form Plugin. My code is as follows: Test Upload $(document).ready(function() { $('#myForm').bind('submit', function() { $(this).ajaxSubmit({ dataType: 'xml', success: processXml }); return false; // AJAX response will replace this content. The problem is I get the following text as a response: even though the file uploads with no problems. This means my div is not updated as it doesnt run the success function. Any one have any ideas. Thanks\n\n\nCurrent terminal state:\nCurrent Terminal Screen:\nroot@6e0cf700-da0e-4059-87dd-2e96861fa25b:/app#\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+        }
+    ],
+    "optional_params": {
+        "temperature": 0.7
+    },
+    "start_time": "2025-12-19 14:06:55.026359",
+    "stream": false,
+    "user": "None",
+    "call_type": "acompletion",
+    "completion_start_time": "None",
+    "standard_callback_dynamic_params": {},
+    "stream_options": "None",
+    "temperature": 0.7,
+    "custom_llm_provider": "gemini",
+    "additional_args": {
+        "complete_input_dict": {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. You will be given a task description and the output from previously executed commands. Your goal is to solve the task by providing batches of shell commands.\n\nFormat your response as JSON with the following structure:\n\n{\n  \"analysis\": \"Analyze the current state based on the terminal output provided. What do you see? What has been accomplished? What still needs to be done?\",\n  \"plan\": \"Describe your plan for the next steps. What commands will you run and why? Be specific about what you expect each command to accomplish.\",\n  \"commands\": [\n    {\n      \"keystrokes\": \"ls -la\\n\",\n      \"duration\": 0.1\n    },\n    {\n      \"keystrokes\": \"cd project\\n\",\n      \"duration\": 0.1\n    }\n  ],\n  \"task_complete\": true\n}\n\nRequired fields:\n- \"analysis\": Your analysis of the current situation\n- \"plan\": Your plan for the next steps\n- \"commands\": Array of command objects to execute\n\nOptional fields:\n- \"task_complete\": Boolean indicating if the task is complete (defaults to false if not present)\n\nCommand object structure:\n- \"keystrokes\": String containing the exact keystrokes to send to the terminal (required)\n- \"duration\": Number of seconds to wait for the command to complete before the next command will be executed (defaults to 1.0 if not present)\n\nIMPORTANT: The text inside \"keystrokes\" will be used completely verbatim as keystrokes. Write commands exactly as you want them sent to the terminal:\n- Most bash commands should end with a newline (\\n) to cause them to execute\n- For special key sequences, use tmux-style escape sequences:\n  - C-c for Ctrl+C\n  - C-d for Ctrl+D\n\nThe \"duration\" attribute specifies the number of seconds to wait for the command to complete (default: 1.0) before the next command will be executed. On immediate tasks (e.g., cd, ls, echo, cat) set a duration of 0.1 seconds. On commands (e.g., gcc, find, rustc) set a duration of 1.0 seconds. On slow commands (e.g., make, python3 [long running script], wget [file]) set an appropriate duration as you determine necessary.\n\nIt is better to set a smaller duration than a longer duration. It is always possible to wait again if the prior output has not finished, by running {\"keystrokes\": \"\", \"duration\": 10.0} on subsequent requests to wait longer. Never wait longer than 60 seconds; prefer to poll to see intermediate result status.\n\nImportant notes:\n- Each command's keystrokes are sent exactly as written to the terminal\n- Do not include extra whitespace before or after the keystrokes unless it's part of the intended command\n- Extra text before or after the JSON will generate warnings but be tolerated\n- The JSON must be valid - use proper escaping for quotes and special characters within strings\n- Commands array can be empty if you want to wait without taking action\n\nTask Description:\n\nI am trying to upload a file using to Flickr using JQuery. I have a form (which works if I dont use JQuery) which I am submitting using the Form Plugin. My code is as follows: Test Upload $(document).ready(function() { $('#myForm').bind('submit', function() { $(this).ajaxSubmit({ dataType: 'xml', success: processXml }); return false; // AJAX response will replace this content. The problem is I get the following text as a response: even though the file uploads with no problems. This means my div is not updated as it doesnt run the success function. Any one have any ideas. Thanks\n\n\nCurrent terminal state:\nCurrent Terminal Screen:\nroot@6e0cf700-da0e-4059-87dd-2e96861fa25b:/app#\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.7
+            }
+        }
+    },
+    "log_event_type": "post_api_call",
+    "api_call_start_time": "2025-12-19 14:06:55.030388",
+    "llm_api_duration_ms": 12844.455,
+    "original_response": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"{\\n  \\\"analysis\\\": \\\"The user has provided a task description that describes a coding problem involving jQuery, file uploads, and Flickr. I am in a Linux environment at `/app`. I need to find the relevant code files and attempt to fix the issue described. The issue seems to be that the `success` callback isn't firing because the response isn't being handled correctly, possibly due to the `dataType: 'xml'` expectation not matching the actual response or how the browser handles the response (especially with iframe uploads). First step is to locate the files.\\\",\\n  \\\"plan\\\": \\\"I will list the files in the current directory to identify the project structure. Then I will examine the contents of the relevant files to understand the current implementation.\\\",\\n  \\\"commands\\\": [\\n    {\\n      \\\"keystrokes\\\": \\\"ls -R\\\\n\\\",\\n      \\\"duration\\\": 0.5\\n    }\\n  ]\\n}\",\n            \"thoughtSignature\": \"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\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 881,\n    \"candidatesTokenCount\": 194,\n    \"totalTokenCount\": 1928,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 881\n      }\n    ],\n    \"thoughtsTokenCount\": 853\n  },\n  \"modelVersion\": \"gemini-3-pro-preview\",\n  \"responseId\": \"W6JFab7UNPSfkdUPr9v18QM\"\n}\n",
+    "api_key_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

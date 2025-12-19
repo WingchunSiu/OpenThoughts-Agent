@@ -1,0 +1,41 @@
+New Terminal Output:
+root@1680dd73-15ff-4f6d-a0d1-42d4dca01d92:/app# which dotnet
+root@1680dd73-15ff-4f6d-a0d1-42d4dca01d92:/app# which mcs
+root@1680dd73-15ff-4f6d-a0d1-42d4dca01d92:/app# dotnet --version
+bash: dotnet: command not found
+root@1680dd73-15ff-4f6d-a0d1-42d4dca01d92:/app#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

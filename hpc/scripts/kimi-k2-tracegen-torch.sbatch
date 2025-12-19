@@ -36,7 +36,6 @@ Options (override defaults used by this job):
   --trace-agent-kwargs JSON      JSON object of extra agent kwargs
   --trace-env NAME               Override Harbor environment type
   --trace-agent-timeout-sec SEC  Override Harbor agent timeout
-  --trace-max-tokens N           Override maximum output tokens per completion
   --trace-n-concurrent N         Override concurrency for the trace orchestrator
   --trace-episodes MODE          Trace episodes parameter (default: last)
   --trace-export-filter FILTER   Trace export filter (default: none)
@@ -65,7 +64,6 @@ TRACE_AGENT_NAME_DEFAULT=""
 TRACE_AGENT_KWARGS_DEFAULT=""
 TRACE_ENV_DEFAULT=""
 TRACE_AGENT_TIMEOUT_SEC_DEFAULT=""
-TRACE_MAX_TOKENS_DEFAULT=""
 TRACE_N_CONCURRENT_DEFAULT=""
 TRACE_EPISODES_DEFAULT="last"
 TRACE_EXPORT_FILTER_DEFAULT="none"
@@ -92,7 +90,6 @@ while [[ $# -gt 0 ]]; do
     --trace-agent-kwargs) TRACE_AGENT_KWARGS_DEFAULT="$2"; shift 2;;
     --trace-env) TRACE_ENV_DEFAULT="$2"; shift 2;;
     --trace-agent-timeout-sec) TRACE_AGENT_TIMEOUT_SEC_DEFAULT="$2"; shift 2;;
-    --trace-max-tokens) TRACE_MAX_TOKENS_DEFAULT="$2"; shift 2;;
     --trace-n-concurrent) TRACE_N_CONCURRENT_DEFAULT="$2"; shift 2;;
     --trace-episodes) TRACE_EPISODES_DEFAULT="$2"; shift 2;;
     --trace-export-filter) TRACE_EXPORT_FILTER_DEFAULT="$2"; shift 2;;
@@ -125,7 +122,6 @@ TRACE_AGENT_NAME="${TRACE_AGENT_NAME_DEFAULT}"
 TRACE_AGENT_KWARGS="${TRACE_AGENT_KWARGS_DEFAULT}"
 TRACE_ENV="${TRACE_ENV_DEFAULT}"
 TRACE_AGENT_TIMEOUT_SEC="${TRACE_AGENT_TIMEOUT_SEC_DEFAULT}"
-TRACE_MAX_TOKENS="${TRACE_MAX_TOKENS_DEFAULT}"
 TRACE_N_CONCURRENT="${TRACE_N_CONCURRENT_DEFAULT}"
 TRACE_EPISODES="${TRACE_EPISODES_DEFAULT}"
 TRACE_EXPORT_FILTER="${TRACE_EXPORT_FILTER_DEFAULT}"
@@ -151,7 +147,6 @@ export TRACE_AGENT_NAME
 export TRACE_AGENT_KWARGS
 export TRACE_ENV
 export TRACE_AGENT_TIMEOUT_SEC
-export TRACE_MAX_TOKENS
 export TRACE_N_CONCURRENT
 export TRACE_EPISODES
 export TRACE_EXPORT_FILTER
@@ -177,7 +172,6 @@ export APPTAINERENV_TRACE_AGENT_NAME="$TRACE_AGENT_NAME"
 export APPTAINERENV_TRACE_AGENT_KWARGS="$TRACE_AGENT_KWARGS"
 export APPTAINERENV_TRACE_ENV="$TRACE_ENV"
 export APPTAINERENV_TRACE_AGENT_TIMEOUT_SEC="$TRACE_AGENT_TIMEOUT_SEC"
-export APPTAINERENV_TRACE_MAX_TOKENS="$TRACE_MAX_TOKENS"
 export APPTAINERENV_TRACE_N_CONCURRENT="$TRACE_N_CONCURRENT"
 export APPTAINERENV_TRACE_EPISODES="$TRACE_EPISODES"
 export APPTAINERENV_TRACE_EXPORT_FILTER="$TRACE_EXPORT_FILTER"
