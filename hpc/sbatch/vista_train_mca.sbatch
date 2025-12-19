@@ -17,7 +17,7 @@ module load gcc/14.2.0
 module load cuda/12.8
 
 source $SCRATCH/miniconda3/etc/profile.d/conda.sh
-conda activate $SCRATCH/miniconda3/envs/dcagent
+conda activate $SCRATCH/miniconda3/envs/otagent
 
 source $DCFT/hpc/dotenv/tacc.env
 

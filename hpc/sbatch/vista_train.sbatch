@@ -16,7 +16,7 @@ module load cuda/12.8
 module load tacc-apptainer
 
 source $SCRATCH/miniconda3/etc/profile.d/conda.sh
-conda activate $SCRATCH/miniconda3/envs/dcagent
+conda activate $SCRATCH/miniconda3/envs/otagent
 
 source $DCFT/hpc/dotenv/tacc.env
 
