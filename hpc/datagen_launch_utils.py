@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List, Mapping, Union
@@ -38,6 +39,29 @@ HARBOR_CONFIG_DIR = os.path.join(DIRENV, "harbor_yaml")
 DEFAULT_RAY_CGRAPH_TIMEOUT = os.environ.get("RAY_CGRAPH_TIMEOUT_DEFAULT", "86500")
 DEFAULT_RAY_CGRAPH_MAX_INFLIGHT = os.environ.get("RAY_CGRAPH_MAX_INFLIGHT_DEFAULT", "")
 HARBOR_MODEL_PLACEHOLDER = "placeholder/override-at-runtime"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _is_local_mode(hpc) -> bool:
+    return bool(getattr(hpc, "local_mode", False))
+
+
+def _run_local_script(script_path: str) -> str:
+    print(f"Running locally: bash {script_path}")
+    result = subprocess.run(["bash", script_path], check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"Local execution failed (exit {result.returncode}) for {script_path}")
+    return f"local_{Path(script_path).stem}"
+
+
+def _submit_script(script_path: str, *, dependency: str | None = None, array: str | None = None, hpc=None) -> str:
+    if _is_local_mode(hpc):
+        if dependency:
+            print(f"Warning: ignoring job dependency '{dependency}' for local execution.")
+        if array:
+            raise RuntimeError("Job arrays are not supported for local execution.")
+        return _run_local_script(script_path)
+    return launch_sbatch(script_path, dependency=dependency, array=array)
 
 
 def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
@@ -101,6 +125,9 @@ def _detect_gpu_required(datagen_script: str) -> bool:
 
 
 def _validate_sbatch_templates(hpc_obj) -> None:
+    if getattr(hpc_obj, "local_mode", False):
+        print(f"Local execution detected for {hpc_obj.name}; skipping sbatch template validation.")
+        return
     req_path = Path(__file__).parent / "sbatch_data_requirements.json"
     if not req_path.exists():
         return
@@ -938,7 +965,7 @@ def launch_vllm_server(exp_args: dict, hpc) -> str:
 
     # Submit job
     if not exp_args.get("dry_run"):
-        job_id = launch_sbatch(vllm_sbatch_output)
+        job_id = _submit_script(vllm_sbatch_output, hpc=hpc)
         print(f"✓ VLLM server job submitted: {job_id}")
         return job_id
     else:
@@ -1220,14 +1247,14 @@ def launch_task_job(exp_args: dict, hpc, vllm_job_id: str = None) -> str:
             dependency = f"after:{vllm_job_id}"
             print(f"Setting dependency on VLLM job start: {vllm_job_id}")
 
-        job_id = launch_sbatch(datagen_sbatch_output, dependency=dependency)
+        job_id = _submit_script(datagen_sbatch_output, dependency=dependency, hpc=hpc)
         print(f"✓ Task generation job submitted: {job_id}")
         return job_id
-    else:
-        print("DRY RUN: Would submit task generation job")
-        if vllm_job_id:
-            print(f"  with dependency on VLLM job: {vllm_job_id}")
-        return "dry_run_task_job_id"
+
+    print("DRY RUN: Would submit task generation job")
+    if vllm_job_id:
+        print(f"  with dependency on VLLM job: {vllm_job_id}")
+    return "dry_run_task_job_id"
 
 
 def launch_trace_job(
@@ -1828,6 +1855,9 @@ def launch_trace_job(
     os.makedirs(sbatch_output_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
 
+    if chunk_plans and _is_local_mode(hpc):
+        raise RuntimeError("Trace chunking (--chunk_size) is not supported for local execution.")
+
     if chunk_plans:
         if chunk_map_path:
             print(f"Trace chunk map saved to: {chunk_map_path}")
@@ -1949,7 +1979,7 @@ def launch_trace_job(
             f"(chunks: {len(chunk_plans)}, array: {array_spec})"
         )
 
-        job_id = launch_sbatch(chunk_sbatch_output, dependency=dependency, array=array_spec)
+        job_id = _submit_script(chunk_sbatch_output, dependency=dependency, array=array_spec, hpc=hpc)
         print(f"✓ Trace chunk array job submitted: {job_id}")
         return [job_id]
 
@@ -1985,7 +2015,7 @@ def launch_trace_job(
         print("DRY RUN: Would submit trace generation job")
         return "dry_run_trace_job_id"
 
-    job_id = launch_sbatch(trace_sbatch_output, dependency=dependency)
+    job_id = _submit_script(trace_sbatch_output, dependency=dependency, hpc=hpc)
     print(f"✓ Trace generation job submitted: {job_id}")
     return job_id
 

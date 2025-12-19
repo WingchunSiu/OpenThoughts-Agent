@@ -29,6 +29,7 @@ class HPC(BaseModel):
     pretok_time_limit: str = "24:00:00"
     pretok_partition: str = ""
     pretok_gpus_per_node: int = 0 # will ask for 0 gpus
+    local_mode: bool = False
 
     def model_post_init(self, __context) -> None:
         # Derive a default CPU-per-GPU ratio when not explicitly provided.
@@ -144,6 +145,21 @@ alpha = HPC(
     internet_node=True,
     gpus_type="A100 40GB",
     total_partition_nodes=37,
+)
+
+dip = HPC(
+    name="dip",
+    hostname_pattern=r".*dip\.tu-dresden\.de$",
+    train_sbatch_filename="local_stub.sbatch",
+    dotenv_filename="dip.env",
+    account="",
+    partition="",
+    gpus_per_node=0,
+    cpus_per_node=16,
+    internet_node=True,
+    gpus_type="CPU-only",
+    total_partition_nodes=1,
+    local_mode=True,
 )
 
 lrz = HPC(
@@ -266,7 +282,7 @@ perlmutter = HPC(
     qos="regular",
 )
 
-clusters = [jureca, jupiter, juwels, leonardo, capella, alpha, lrz, vista, lonestar, claix, nyugreene, nyutorch, oumi, perlmutter]
+clusters = [jureca, jupiter, juwels, leonardo, capella, alpha, dip, lrz, vista, lonestar, claix, nyugreene, nyutorch, oumi, perlmutter]
 
 
 def detect_hpc() -> HPC:
