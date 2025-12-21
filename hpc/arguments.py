@@ -586,6 +586,7 @@ class DataGenArgs:
         default=None,
         metadata={"help": "Override Harbor verifier timeout (seconds) for trace generation"}
     )
+@dataclass
 class ConsolidateArgs:
     consolidate_input: Optional[str] = field(
         default=None,
