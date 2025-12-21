@@ -101,6 +101,8 @@ def launch_consolidate_job(
     os.makedirs(logs_dir, exist_ok=True)
     exp_args = update_exp_args_fn(exp_args, {"logs_dir": logs_dir})
 
+    hpc_name = getattr(hpc, "name", "").lower()
+
     sbatch_dir = os.path.join(experiments_dir, "sbatch_scripts")
     os.makedirs(sbatch_dir, exist_ok=True)
     sbatch_path = os.path.join(sbatch_dir, f"{job_name}.sbatch")
@@ -116,7 +118,6 @@ def launch_consolidate_job(
     mem_directive = f"#SBATCH --mem={mem_per_node}" if mem_per_node else "#SBATCH --mem=0"
 
     output_path = os.path.join(logs_dir, f"{job_name}_%j.out")
-    hpc_name = getattr(hpc, "name", "").lower()
     gpu_directive = "#SBATCH --gpus-per-node=1"
     if hpc_name in {"vista", "lonestar"}:
         gpu_directive = ""
