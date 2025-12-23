@@ -74,5 +74,19 @@
       "cluster": "perlmutter",
       "path": "hpc/sbatch_data/perlmutter_datatrace.sbatch"
     }
+  ],
+  "frontier": [
+    {
+      "cluster": "frontier",
+      "path": "hpc/sbatch_data/frontier_vllm_server.sbatch"
+    },
+    {
+      "cluster": "frontier",
+      "path": "hpc/sbatch_data/frontier_datagen.sbatch"
+    },
+    {
+      "cluster": "frontier",
+      "path": "hpc/sbatch_data/frontier_datatrace.sbatch"
+    }
   ]
 }

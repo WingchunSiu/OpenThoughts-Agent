@@ -282,7 +282,23 @@ perlmutter = HPC(
     qos="regular",
 )
 
-clusters = [jureca, jupiter, juwels, leonardo, capella, alpha, dip, lrz, vista, lonestar, claix, nyugreene, nyutorch, oumi, perlmutter]
+frontier = HPC(
+    name="frontier",
+    hostname_pattern=r"login\d+\.frontier\.olcf\.ornl\.gov",
+    train_sbatch_filename="frontier_train.sbatch",
+    dotenv_filename="frontier.env",
+    account="LRN081",
+    partition="batch",
+    gpus_per_node=4,
+    cpus_per_node=64,
+    mem_per_node="512GB",
+    internet_node=False,
+    gpus_type="AMD Instinct MI250X",
+    total_partition_nodes=9216,
+    qos="normal",
+)
+
+clusters = [jureca, jupiter, juwels, leonardo, capella, alpha, dip, lrz, vista, lonestar, claix, nyugreene, nyutorch, oumi, perlmutter, frontier]
 
 
 def detect_hpc() -> HPC:
