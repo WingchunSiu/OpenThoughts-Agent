@@ -8,7 +8,7 @@ debug: false
 
 orchestrator:
   type: local
-  n_concurrent_trials: 48
+  n_concurrent_trials: 64
   quiet: false
   adaptive_concurrency:
     enabled: false
