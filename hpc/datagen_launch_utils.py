@@ -175,6 +175,27 @@ def default_vllm_endpoint_path(
     return str(base / filename)
 
 
+def _cleanup_stale_vllm_endpoint(exp_args: Mapping[str, Any]) -> None:
+    """Remove a leftover vllm_endpoint.json in the experiments directory."""
+
+    experiments_dir = exp_args.get("experiments_dir")
+    if not experiments_dir:
+        return
+
+    try:
+        base_dir = Path(experiments_dir).expanduser()
+    except Exception:
+        return
+
+    endpoint_path = base_dir / "vllm_endpoint.json"
+    if endpoint_path.exists():
+        try:
+            endpoint_path.unlink()
+            print(f"Removed stale vLLM endpoint file: {endpoint_path}")
+        except OSError as exc:
+            print(f"Warning: failed to remove stale vLLM endpoint file {endpoint_path}: {exc}")
+
+
 def resolve_datagen_config_path(raw_value: str) -> Path:
     """Resolve ``raw_value`` to an absolute datagen config path."""
 
@@ -727,6 +748,7 @@ def launch_datagen_job(exp_args: dict, hpc) -> None:
     """Handle datagen/trace launch orchestration."""
 
     print("\n=== DATA GENERATION MODE ===")
+    _cleanup_stale_vllm_endpoint(exp_args)
 
     hpc_name = str(getattr(hpc, "name", "")).lower()
     if hpc_name == "nyutorch":
