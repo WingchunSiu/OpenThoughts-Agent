@@ -365,11 +365,11 @@ else
     if [ -n "${PERLMUTTER_SRUN_MEM_MB:-}" ]; then
         MEM_PER_NODE_MB="$PERLMUTTER_SRUN_MEM_MB"
     else
-        MEM_PER_NODE_MB=$(python3 - <<'PY'
+    MEM_PER_NODE_MB=$(python3 - <<'PY'
 import os,re
-raw = os.environ.get("SLURM_MEM_PER_NODE", "1572864")
+raw = os.environ.get("SLURM_MEM_PER_NODE", "262144")
 m = re.match(r"([0-9]+)", raw)
-print(m.group(1) if m else "1572864")
+print(m.group(1) if m else "262144")
 PY
 )
     fi
