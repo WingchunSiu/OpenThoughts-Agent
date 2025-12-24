@@ -22,7 +22,23 @@ export CONDA_BACKUP_CC="${CONDA_BACKUP_CC:-}"
 export CONDA_BACKUP_FC="${CONDA_BACKUP_FC:-}"
 
 # Ensure dotenv variables are available on the compute node.
+frontier_env_loaded=0
 if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/frontier.env" ]; then
+  # shellcheck disable=SC1090
+  source "$DCFT/hpc/dotenv/frontier.env"
+  frontier_env_loaded=1
+fi
+
+# Ensure DCFT points to a valid checkout even if SCRATCH is unavailable.
+DEFAULT_OT_ROOT="${OPEN_THOUGHTS_AGENT_ROOT:-$HOME/OpenThoughts-Agent}"
+if [ -z "${DCFT:-}" ] && [ -d "$DEFAULT_OT_ROOT" ]; then
+  export DCFT="$DEFAULT_OT_ROOT"
+elif [ -n "${DCFT:-}" ] && [ ! -d "$DCFT" ] && [ -d "$DEFAULT_OT_ROOT" ]; then
+  echo "DCFT path $DCFT not found; falling back to $DEFAULT_OT_ROOT"
+  export DCFT="$DEFAULT_OT_ROOT"
+fi
+
+if [ "$frontier_env_loaded" -eq 0 ] && [ -f "$DCFT/hpc/dotenv/frontier.env" ]; then
   # shellcheck disable=SC1090
   source "$DCFT/hpc/dotenv/frontier.env"
 fi

@@ -15,12 +15,29 @@
 
 set -euo pipefail
 
+frontier_env_loaded=0
 if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/frontier.env" ]; then
   # shellcheck disable=SC1090
   source "$DCFT/hpc/dotenv/frontier.env"
+  frontier_env_loaded=1
 elif [ -n "${DC_AGENT:-}" ] && [ -f "$DC_AGENT/hpc/dotenv/frontier.env" ]; then
   # shellcheck disable=SC1090
   source "$DC_AGENT/hpc/dotenv/frontier.env"
+  frontier_env_loaded=1
+fi
+
+# Ensure DCFT points to a valid checkout even if SCRATCH is unavailable.
+DEFAULT_OT_ROOT="${OPEN_THOUGHTS_AGENT_ROOT:-$HOME/OpenThoughts-Agent}"
+if [ -z "${DCFT:-}" ] && [ -d "$DEFAULT_OT_ROOT" ]; then
+  export DCFT="$DEFAULT_OT_ROOT"
+elif [ -n "${DCFT:-}" ] && [ ! -d "$DCFT" ] && [ -d "$DEFAULT_OT_ROOT" ]; then
+  echo "DCFT path $DCFT not found; falling back to $DEFAULT_OT_ROOT"
+  export DCFT="$DEFAULT_OT_ROOT"
+fi
+
+if [ "$frontier_env_loaded" -eq 0 ] && [ -f "$DCFT/hpc/dotenv/frontier.env" ]; then
+  # shellcheck disable=SC1090
+  source "$DCFT/hpc/dotenv/frontier.env"
 fi
 
 # Frontier jobs should always use the NVMe-backed cache paths.

@@ -147,11 +147,14 @@ EXTRACT_CMD=(
   --output_dir "$TASKS_INPUT"
 )
 
+ON_EXIST_MODE="skip"
+if [[ "$OVERWRITE_TASKS" == "1" ]]; then
+  ON_EXIST_MODE="overwrite"
+fi
+EXTRACT_CMD+=(--on_exist "$ON_EXIST_MODE")
+
 [[ -n "${TASKS_REVISION:-}" ]] && EXTRACT_CMD+=(--tasks_revision "$TASKS_REVISION")
 [[ -n "${PARQUET_NAME:-}" ]] && EXTRACT_CMD+=(--parquet_name "$PARQUET_NAME")
-if [[ "$OVERWRITE_TASKS" == "1" ]]; then
-  EXTRACT_CMD+=(--on_exist overwrite)
-fi
 
 echo "Command: ${EXTRACT_CMD[*]}"
 "${EXTRACT_CMD[@]}"

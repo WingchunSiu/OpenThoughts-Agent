@@ -122,6 +122,17 @@ def main() -> None:
     print(f"[extract] Parquet file: {parquet_path}")
     print(f"[extract] Output directory: {output_dir} (on_exist={args.on_exist})")
 
+    if (
+        args.on_exist == "error"
+        and output_dir.exists()
+        and any(output_dir.iterdir())
+    ):
+        print(
+            "[extract] Output directory already contains data and on_exist=error; "
+            "assuming tasks have already been extracted. Exiting gracefully."
+        )
+        return
+
     if args.dry_run:
         print("[extract] DRY RUN: skipping extraction step.")
         return
