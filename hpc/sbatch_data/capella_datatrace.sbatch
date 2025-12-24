@@ -89,6 +89,14 @@ export RAY_NOSET_CUDA_VISIBLE_DEVICES="${RAY_NOSET_CUDA_VISIBLE_DEVICES:-1}"
 SRUN_EXPORT_ENV="ALL,PATH=$PATH,LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-},PYTHONPATH=$PYTHONPATH,HF_HOME=$HF_HOME,RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=$RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES,RAY_NOSET_CUDA_VISIBLE_DEVICES=$RAY_NOSET_CUDA_VISIBLE_DEVICES"
 RAY_ENV_VARS="PATH=$PATH LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=$PYTHONPATH HF_HOME=$HF_HOME RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=$RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES RAY_NOSET_CUDA_VISIBLE_DEVICES=$RAY_NOSET_CUDA_VISIBLE_DEVICES"
 
+# Persist Ray sessions/logs on scratch for easier debugging
+RAY_TMPDIR_BASE="${SCRATCH:-/tmp}/ray_sessions"
+RAY_TMPDIR="${RAY_TMPDIR_BASE}/ray_${SLURM_JOB_ID:-$$}"
+mkdir -p "$RAY_TMPDIR"
+SRUN_EXPORT_ENV="$SRUN_EXPORT_ENV,RAY_TMPDIR=$RAY_TMPDIR"
+RAY_ENV_VARS="$RAY_ENV_VARS RAY_TMPDIR=$RAY_TMPDIR"
+echo "Ray session directory: $RAY_TMPDIR"
+
 TRACE_BACKEND="${TRACE_BACKEND:-vllm}"
 
 # Trace generation parameters
@@ -292,13 +300,13 @@ PY
         ray_pids+=($!)
     }
 
-    head_cmd="ray start --head --node-ip-address=${head_node_ip} --port=${RAY_PORT} --num-gpus=${GPUS_PER_NODE} --num-cpus={cpus_per_node} --block"
+    head_cmd="ray start --head --node-ip-address=${head_node_ip} --port=${RAY_PORT} --num-gpus=${GPUS_PER_NODE} --num-cpus={cpus_per_node} --temp-dir=${RAY_TMPDIR} --block"
     echo "Starting Ray head on ${head_node} (${head_node_ip})"
     start_ray_node "$head_node" "$head_cmd"
 
     for ((i = 1; i < NUM_NODES; i++)); do
         node_i=${nodes_array[$i]}
-        worker_cmd="ray start --address ${ip_head} --num-gpus=${GPUS_PER_NODE} --num-cpus={cpus_per_node} --block"
+        worker_cmd="ray start --address ${ip_head} --num-gpus=${GPUS_PER_NODE} --num-cpus={cpus_per_node} --temp-dir=${RAY_TMPDIR} --block"
         echo "Starting Ray worker on ${node_i}"
         start_ray_node "$node_i" "$worker_cmd"
         sleep 3
