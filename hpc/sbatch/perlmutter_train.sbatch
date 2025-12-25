@@ -46,10 +46,21 @@ fi
 
 module load cudatoolkit/12.9
 
-if [ -n "${LIBRARY_PATH:-}" ]; then
-  export LIBRARY_PATH="$CUDA_HOME/lib64:$LIBRARY_PATH"
+# Derive CUDA_HOME from nvcc when the module doesn't set it.
+if [ -z "${CUDA_HOME:-}" ]; then
+  if command -v nvcc >/dev/null 2>&1; then
+    export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+  fi
+fi
+
+if [ -n "${CUDA_HOME:-}" ] && [ -d "$CUDA_HOME/lib64" ]; then
+  if [ -n "${LIBRARY_PATH:-}" ]; then
+    export LIBRARY_PATH="$CUDA_HOME/lib64:$LIBRARY_PATH"
+  else
+    export LIBRARY_PATH="$CUDA_HOME/lib64"
+  fi
 else
-  export LIBRARY_PATH="$CUDA_HOME/lib64"
+  echo "Warning: CUDA_HOME not set or missing lib64 directory; CUDA static libs may be unavailable." >&2
 fi
 
 if [ -n "${CUDA_HOME:-}" ]; then
@@ -64,6 +75,24 @@ if [ -n "${CUDA_HOME:-}" ]; then
     fi
   fi
   unset _cuda_sdk_root _cuda_version _cuda_math_lib_path
+fi
+
+# Ensure linker sees the NVIDIA curand wheels bundled with the conda env.
+if [ -n "${CONDA_PREFIX:-}" ]; then
+  CURAND_LIB_DIR="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/curand/lib"
+  if [ -d "$CURAND_LIB_DIR" ]; then
+    if [ -n "${LIBRARY_PATH:-}" ]; then
+      export LIBRARY_PATH="$CURAND_LIB_DIR:$LIBRARY_PATH"
+    else
+      export LIBRARY_PATH="$CURAND_LIB_DIR"
+    fi
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+      export LD_LIBRARY_PATH="$CURAND_LIB_DIR:$LD_LIBRARY_PATH"
+    else
+      export LD_LIBRARY_PATH="$CURAND_LIB_DIR"
+    fi
+  fi
+  unset CURAND_LIB_DIR
 fi
 
 if [ -n "${CONDA_PREFIX:-}" ]; then
