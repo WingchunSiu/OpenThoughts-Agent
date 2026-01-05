@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import yaml
 
@@ -151,6 +151,51 @@ def _default_job_name(dataset_label: str, model_label: str) -> str:
 def _hosted_vllm_model_name() -> str:
     unique_suffix = str(time.time()).replace(".", "")
     return f"hosted_vllm/{unique_suffix}"
+
+
+def _deep_copy(value: Any) -> Any:
+    return json.loads(json.dumps(value))
+
+
+def _apply_nested_key(target: dict, dotted_key: str, value: Any) -> None:
+    parts = dotted_key.split(".")
+    cursor = target
+    for part in parts[:-1]:
+        if part not in cursor or not isinstance(cursor[part], dict):
+            cursor[part] = {}
+        cursor = cursor[part]
+    cursor[parts[-1]] = value
+
+
+def _parse_agent_kwarg_strings(entries: List[str]) -> tuple[dict[str, Any], List[str]]:
+    overrides: dict[str, Any] = {}
+    passthrough: List[str] = []
+    for entry in entries:
+        if "=" not in entry:
+            passthrough.append(entry)
+            continue
+        key, raw_value = entry.split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if not key:
+            passthrough.append(entry)
+            continue
+        try:
+            value = json.loads(raw_value)
+        except json.JSONDecodeError:
+            value = raw_value
+        overrides[key] = value
+    return overrides, passthrough
+
+
+def _serialize_agent_kwargs(kwargs: dict) -> List[str]:
+    serialized: List[str] = []
+    for key, value in kwargs.items():
+        if isinstance(value, (dict, list)):
+            serialized.append(f"{key}={json.dumps(value)}")
+        else:
+            serialized.append(f"{key}={value}")
+    return serialized
 
 
 class ManagedProcess:
@@ -366,6 +411,14 @@ def _build_harbor_command(
 ) -> List[str]:
     harbor_model = getattr(args, "_harbor_model_name", args.model)
     job_name = args.job_name or _default_job_name(dataset_label, harbor_model)
+    base_agent_kwargs = _deep_copy(getattr(args, "_base_agent_kwargs", {}) or {})
+    if endpoint_meta.get("metrics_endpoint"):
+        base_agent_kwargs["metrics_endpoint"] = endpoint_meta["metrics_endpoint"]
+    if endpoint_meta.get("api_base"):
+        base_agent_kwargs["api_base"] = endpoint_meta["api_base"]
+    override_kwargs, passthrough = _parse_agent_kwarg_strings(list(args.agent_kwarg or []))
+    for dotted_key, override_value in override_kwargs.items():
+        _apply_nested_key(base_agent_kwargs, dotted_key, override_value)
     cmd = [
         args.harbor_binary,
         "jobs",
@@ -391,16 +444,11 @@ def _build_harbor_command(
         cmd.extend(["-p", args.dataset_path])
     if args.expected_trials:
         cmd.extend(["--expected-trials", str(args.expected_trials)])
-
-    agent_kwargs: List[str] = list(args.agent_kwarg or [])
-    keys = {kw.split("=", 1)[0] for kw in agent_kwargs if "=" in kw}
-    if endpoint_meta.get("api_base") and "api_base" not in keys:
-        agent_kwargs.append(f"api_base={endpoint_meta['api_base']}")
-    if endpoint_meta.get("metrics_endpoint") and "metrics_endpoint" not in keys:
-        agent_kwargs.append(f"metrics_endpoint={endpoint_meta['metrics_endpoint']}")
-    for kw in agent_kwargs:
+    serialized_kwargs = _serialize_agent_kwargs(base_agent_kwargs)
+    for kw in serialized_kwargs:
         cmd.extend(["--agent-kwarg", kw])
-
+    for passthrough_kw in passthrough:
+        cmd.extend(["--agent-kwarg", passthrough_kw])
     for extra in args.harbor_extra_arg or []:
         cmd.append(extra)
 
@@ -483,6 +531,16 @@ def main() -> None:
     if args.cpus is None:
         args.cpus = os.cpu_count() or 16
     args.harbor_config = str(Path(args.harbor_config).expanduser().resolve())
+    harbor_config_data = {}
+    try:
+        with open(args.harbor_config, "r", encoding="utf-8") as harbor_handle:
+            harbor_config_data = yaml.safe_load(harbor_handle) or {}
+    except FileNotFoundError:
+        harbor_config_data = {}
+    agents_def = harbor_config_data.get("agents") if isinstance(harbor_config_data, dict) else None
+    first_agent = agents_def[0] if agents_def else {}
+    base_agent_kwargs = first_agent.get("kwargs") if isinstance(first_agent, dict) else {}
+    args._base_agent_kwargs = _deep_copy(base_agent_kwargs or {})
     if args.dataset_path:
         args.dataset_path = str(Path(args.dataset_path).expanduser().resolve())
 
