@@ -44,7 +44,7 @@ environment:
 verifier:
   override_timeout_sec:
   max_timeout_sec:
-  disable: true
+  disable: false
 
 metrics: []
 
