@@ -10,8 +10,10 @@ where we have exclusive access to the box.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
+import pty
 import signal
 import subprocess
 import sys
@@ -113,6 +115,10 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Additional passthrough args for `harbor jobs start`.",
+    )
+    parser.add_argument(
+        "--harbor-log",
+        help="Optional path for Harbor CLI stdout/stderr.",
     )
     parser.add_argument(
         "--datagen-config",
@@ -396,6 +402,45 @@ def _build_harbor_command(
     return cmd
 
 
+def _run_harbor_cli(cmd: List[str], log_path: Path | None) -> None:
+    if log_path:
+        with open(log_path, "w", encoding="utf-8") as harbor_log_file:
+            print(f"Streaming Harbor output to {log_path}")
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=harbor_log_file,
+                stderr=subprocess.STDOUT,
+            )
+        return
+
+    master_fd, slave_fd = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            text=False,
+        )
+        os.close(slave_fd)
+        while True:
+            try:
+                data = os.read(master_fd, 4096)
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise
+                break
+            if not data:
+                break
+            os.write(sys.stdout.fileno(), data)
+    finally:
+        os.close(master_fd)
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
+
+
 def _terminate(processes: Iterable[ManagedProcess]) -> None:
     for proc in processes:
         try:
@@ -451,6 +496,7 @@ def main() -> None:
     dataset_label = args.dataset or args.dataset_path or "dataset"
     ray_log = Path(args.ray_log) if args.ray_log else logs_dir / "ray.log"
     controller_log = Path(args.controller_log) if args.controller_log else logs_dir / "vllm_controller.log"
+    harbor_log = Path(args.harbor_log).expanduser().resolve() if args.harbor_log else None
 
     processes: List[ManagedProcess] = []
 
@@ -475,7 +521,7 @@ def main() -> None:
         harbor_cmd = _build_harbor_command(args, dataset_label, endpoint_meta)
         print("Harbor command:", " ".join(harbor_cmd))
         if not args.dry_run:
-            subprocess.run(harbor_cmd, check=True)
+            _run_harbor_cli(harbor_cmd, harbor_log)
     finally:
         _terminate(processes[::-1])
         subprocess.run(["ray", "stop", "--force"], check=False)
