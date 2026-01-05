@@ -289,6 +289,8 @@ def _start_vllm_controller(
         str(args.pipeline_parallel_size),
         "--data-parallel-size",
         str(args.data_parallel_size),
+        "--endpoint-json",
+        str(endpoint_path),
     ]
     stdout = stderr = None
     if log_path:
