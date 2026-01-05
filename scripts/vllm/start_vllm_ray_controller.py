@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -24,7 +26,7 @@ try:
 except ImportError:  # pragma: no cover
     ray = None
 
-from scripts.vllm.start_vllm_cluster import VLLMCluster
+_CLI_FLAG_PATTERN = re.compile(r"--[a-z0-9-]+")
 
 
 def _release_torch_memory() -> None:
@@ -39,8 +41,22 @@ def _release_torch_memory() -> None:
         pass
 
 
+def _discover_cli_flags() -> set[str]:
+    cmd = [sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--help"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except Exception as exc:  # pragma: no cover - best effort
+        print(f"[start_vllm_ray_controller] Warning: unable to inspect vLLM CLI flags: {exc}")
+        return set()
+
+    flags = set(_CLI_FLAG_PATTERN.findall(result.stdout or ""))
+    flags.update(_CLI_FLAG_PATTERN.findall(result.stderr or ""))
+    return flags
+
+
+@functools.lru_cache(maxsize=1)
 def _supported_flags() -> set[str]:
-    return VLLMCluster._discover_cli_flags()
+    return _discover_cli_flags()
 
 
 def _flag_supported(flag: str) -> bool:

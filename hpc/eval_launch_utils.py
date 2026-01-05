@@ -354,6 +354,7 @@ def launch_eval_job(exp_args: dict, hpc) -> None:
         "time_limit": exp_args.get("time_limit") or os.environ.get("DEFAULT_TIME_LIMIT", "24:00:00"),
         "num_nodes": exp_args.get("num_nodes") or 1,
         "cpus_per_node": exp_args.get("cpus_per_node") or hpc.cpus_per_node,
+        "gpus_per_node": str(gpus_per_node),
         "account": exp_args.get("account") or hpc.account,
         "experiments_dir": experiments_subdir,
         "job_name": job_name,
