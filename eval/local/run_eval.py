@@ -143,10 +143,14 @@ def _timestamp() -> str:
     return time.strftime("%Y%m%d_%H%M%S", time.localtime())
 
 
-def _default_job_name(dataset_label: str, model: str) -> str:
+def _default_job_name(dataset_label: str, model_label: str) -> str:
     sanitized_dataset = dataset_label.replace("/", "-").replace(" ", "_")
-    sanitized_model = model.replace("/", "-")
-    return f"eval-{sanitized_dataset}-{sanitized_model}-{_timestamp()}"
+    return f"eval-{sanitized_dataset}-{model_label}-{_timestamp()}"
+
+
+def _hosted_vllm_model_name() -> str:
+    unique_suffix = str(time.time()).replace(".", "")
+    return f"hosted_vllm/{unique_suffix}"
 
 
 class ManagedProcess:
@@ -360,7 +364,8 @@ def _build_harbor_command(
     dataset_label: str,
     endpoint_meta: dict,
 ) -> List[str]:
-    job_name = args.job_name or _default_job_name(dataset_label, args.model)
+    harbor_model = getattr(args, "_harbor_model_name", args.model)
+    job_name = args.job_name or _default_job_name(dataset_label, harbor_model)
     cmd = [
         args.harbor_binary,
         "jobs",
@@ -372,7 +377,7 @@ def _build_harbor_command(
         "--agent",
         args.agent,
         "--model",
-        args.model,
+        harbor_model,
         "--env",
         args.eval_env,
         "--n-concurrent",
@@ -465,6 +470,7 @@ def main() -> None:
         args.data_parallel_size = 1
     if args.model is None:
         raise ValueError("Provide --model or supply a datagen config with vllm_server.model_path.")
+    args._harbor_model_name = _hosted_vllm_model_name()
     if args.ray_port is None:
         args.ray_port = 6379
     if args.api_port is None:
