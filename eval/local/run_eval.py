@@ -66,7 +66,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--agent", help="Harbor agent name to run (default terminus-2).")
     parser.add_argument("--eval-env", default="daytona", help="Harbor environment name.")
     parser.add_argument("--n-concurrent", type=int, default=16, help="Concurrent eval trials.")
-    parser.add_argument("--n-attempts", type=int, default=3, help="Retries (Harbor --k-attempts).")
+    parser.add_argument("--n-attempts", type=int, default=3, help="Retries (Harbor --n-attempts flag).")
     parser.add_argument(
         "--expected-trials",
         type=int,
@@ -371,7 +371,7 @@ def _build_harbor_command(
         args.eval_env,
         "--n-concurrent",
         str(args.n_concurrent),
-        "--k-attempts",
+        "--n-attempts",
         str(args.n_attempts),
     ]
     if args.dataset:
