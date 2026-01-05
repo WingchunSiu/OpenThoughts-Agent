@@ -15,7 +15,14 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from .sync_utils import sync_eval_outputs
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+try:
+    from eval.cloud.sync_utils import sync_eval_outputs
+except ImportError:
+    from sync_utils import sync_eval_outputs  # type: ignore
 
 try:
     import sky
@@ -28,10 +35,12 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     raise SystemExit(1) from exc
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REMOTE_OUTPUT_DIR = "/opt/openthoughts/cloud_runs"
 DEFAULT_LOCAL_SYNC_DIR = (REPO_ROOT / "cloud_runs").as_posix()
-DEFAULT_DOCKER_1X = (REPO_ROOT / "docker" / "Dockerfile.gpu-1x").as_posix()
+
+# GitHub Container Registry images (build with docker/build_and_push.sh)
+GHCR_IMAGE_BASE = "ghcr.io/open-thoughts/openthoughts-agent"
+DEFAULT_DOCKER_IMAGE = f"{GHCR_IMAGE_BASE}:gpu-1x"
 
 
 def _repo_relative(path_str: str) -> str:
@@ -69,11 +78,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--zone", help="Preferred zone.")
     parser.add_argument("--accelerator", default="A100-40GB:1", help="SkyPilot accelerator spec (e.g., A100-40GB:1).")
     parser.add_argument("--use-spot", action="store_true", help="Use spot/preemptible instances.")
-    parser.add_argument("--dockerfile", default=DEFAULT_DOCKER_1X, help="Path to Dockerfile to build for the task.")
     parser.add_argument(
-        "--docker-context",
-        default=REPO_ROOT.as_posix(),
-        help="Docker build context directory (defaults to repo root).",
+        "--docker-image",
+        default=DEFAULT_DOCKER_IMAGE,
+        help="Pre-built Docker image (default: auto-selects gpu-1x/4x/8x based on accelerator count). "
+        "Build images with: ./docker/build_and_push.sh",
     )
     parser.add_argument("--task-name", default="ot-eval-cloud", help="SkyPilot task name.")
     parser.add_argument("--cluster-name", help="Optional SkyPilot cluster name override.")
@@ -138,10 +147,24 @@ def _build_run_eval_command(args: argparse.Namespace) -> List[str]:
     return cmd
 
 
-def _select_dockerfile(args: argparse.Namespace) -> str:
-    # Use the user-specified Dockerfile unless they kept the default AND requested more GPUs.
-    if args.dockerfile != DEFAULT_DOCKER_1X:
-        return args.dockerfile
+def _normalize_docker_image(image: str) -> str:
+    """Ensure docker image has the 'docker:' prefix required by SkyPilot."""
+    if not image.startswith("docker:"):
+        return f"docker:{image}"
+    return image
+
+
+def _select_docker_image(args: argparse.Namespace) -> str:
+    """Select appropriate Docker image variant based on GPU count.
+
+    If user specified a custom --docker-image, use it as-is.
+    Otherwise, auto-select gpu-1x/gpu-4x/gpu-8x based on accelerator count.
+    """
+    # If user provided a custom image (not our default), use it directly
+    if args.docker_image != DEFAULT_DOCKER_IMAGE:
+        return args.docker_image
+
+    # Parse GPU count from accelerator spec (e.g., "H100-80GB:2" -> 2)
     accelerator = args.accelerator
     if ":" in accelerator:
         try:
@@ -150,11 +173,14 @@ def _select_dockerfile(args: argparse.Namespace) -> str:
             count = 1
     else:
         count = 1
+
+    # Select appropriate image variant
     if count <= 1:
-        return args.dockerfile
-    if count <= 4:
-        return (REPO_ROOT / "docker" / "Dockerfile.gpu-4x").as_posix()
-    return (REPO_ROOT / "docker" / "Dockerfile.gpu-8x").as_posix()
+        return f"{GHCR_IMAGE_BASE}:gpu-1x"
+    elif count <= 4:
+        return f"{GHCR_IMAGE_BASE}:gpu-4x"
+    else:
+        return f"{GHCR_IMAGE_BASE}:gpu-8x"
 
 
 def main() -> None:
@@ -168,10 +194,8 @@ def main() -> None:
     if args.dataset_path:
         args.dataset_path = _repo_relative(args.dataset_path)
 
-    dockerfile = _select_dockerfile(args)
-    docker_ctx = Path(args.docker_context).expanduser().resolve()
-    if not docker_ctx.exists():
-        raise FileNotFoundError(f"Docker context directory not found: {docker_ctx}")
+    # Select and normalize docker image (auto-selects variant based on GPU count)
+    docker_image = _normalize_docker_image(_select_docker_image(args))
 
     run_eval_cmd = _build_run_eval_command(args)
     run_eval_str = " ".join(shlex.quote(part) for part in run_eval_cmd)
@@ -197,19 +221,14 @@ def main() -> None:
         use_spot=args.use_spot,
         region=args.region,
         zone=args.zone,
+        image_id=docker_image,
     )
     task.set_resources(resources)
-    task.set_docker_image(
-        sky.DockerImage(
-            build_directory=docker_ctx.as_posix(),
-            dockerfile=dockerfile,
-        )
-    )
     if remote_secret_path:
         task.set_file_mounts({remote_secret_path: os.path.abspath(args.secrets_env)})
     task.set_run(final_cmd)
 
-    print(f"[cloud] Launching SkyPilot task '{args.task_name}' with accelerator {args.accelerator}")
+    print(f"[cloud] Launching SkyPilot task '{args.task_name}' with accelerator {args.accelerator}, image {docker_image}")
     handle = sky.launch(
         task,
         cluster_name=args.cluster_name,
