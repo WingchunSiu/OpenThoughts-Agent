@@ -89,6 +89,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--remote-output-dir", default=DEFAULT_REMOTE_OUTPUT_DIR)
     parser.add_argument("--local-sync-dir", default=DEFAULT_LOCAL_SYNC_DIR)
     parser.add_argument("--secrets-env", help="Path to secrets.env to source inside the container.")
+    parser.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="Skip syncing local codebase to VM (use code baked into Docker image).",
+    )
 
     return parser.parse_args()
 
@@ -224,11 +229,23 @@ def main() -> None:
         image_id=docker_image,
     )
     task.set_resources(resources)
+
+    # Build file mounts
+    file_mounts = {}
+    if not args.no_sync:
+        # Sync local codebase to remote VM (overwrites stale code baked into Docker image)
+        file_mounts["/opt/openthoughts"] = REPO_ROOT.as_posix()
     if remote_secret_path:
-        task.set_file_mounts({remote_secret_path: os.path.abspath(args.secrets_env)})
+        file_mounts[remote_secret_path] = os.path.abspath(args.secrets_env)
+    if file_mounts:
+        task.set_file_mounts(file_mounts)
     task.set_run(final_cmd)
 
-    print(f"[cloud] Launching SkyPilot task '{args.task_name}' with accelerator {args.accelerator}, image {docker_image}")
+    sync_status = "disabled (--no-sync)" if args.no_sync else "enabled"
+    print(f"[cloud] Launching SkyPilot task '{args.task_name}'")
+    print(f"[cloud]   Accelerator: {args.accelerator}")
+    print(f"[cloud]   Image: {docker_image}")
+    print(f"[cloud]   Code sync: {sync_status}")
     handle = sky.launch(
         task,
         cluster_name=args.cluster_name,
