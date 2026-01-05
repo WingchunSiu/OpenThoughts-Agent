@@ -14,17 +14,23 @@ module load gcc/15.1.0
 module load cuda/12.8
 module load tacc-apptainer
 
-if [ -n "${{DCFT:-}}" ] && [ -f "$DCFT/hpc/dotenv/tacc.env" ]; then
+if [ -n "$DCFT" ] && [ -f "$DCFT/hpc/dotenv/tacc.env" ]; then
   source "$DCFT/hpc/dotenv/tacc.env"
 fi
-if [ -n "${{DC_AGENT_SECRET_ENV:-}}" ] && [ -f "$DC_AGENT_SECRET_ENV" ]; then
+if [ -n "$DC_AGENT_SECRET_ENV" ] && [ -f "$DC_AGENT_SECRET_ENV" ]; then
   source "$DC_AGENT_SECRET_ENV"
 fi
-if [ -n "${{DCFT_ACTIVATE_ENV:-}}" ]; then
+if [ -n "$DCFT_ACTIVATE_ENV" ]; then
   eval "$DCFT_ACTIVATE_ENV"
 fi
 
-WORKDIR="${{DCFT_PRIVATE:-${{DCFT:-$PWD}}}}"
+if [ -n "$DCFT_PRIVATE" ]; then
+  WORKDIR="$DCFT_PRIVATE"
+elif [ -n "$DCFT" ]; then
+  WORKDIR="$DCFT"
+else
+  WORKDIR="$PWD"
+fi
 cd "$WORKDIR"
 
 EXPERIMENTS_DIR="$WORKDIR/{experiments_dir}"
@@ -99,25 +105,25 @@ if [ "$TRACE_WAIT_FOR_ENDPOINT" = "1" ]; then
     sleep 5
     TRACE_ENDPOINT_WAIT=$((TRACE_ENDPOINT_WAIT + 5))
     if [ $((TRACE_ENDPOINT_WAIT % 30)) -eq 0 ]; then
-      echo "Still waiting for $TRACE_ENDPOINT_JSON... (${{TRACE_ENDPOINT_WAIT}}s elapsed)"
+      echo "Still waiting for $TRACE_ENDPOINT_JSON... (${TRACE_ENDPOINT_WAIT}s elapsed)"
     fi
   done
   if [ ! -f "$TRACE_ENDPOINT_JSON" ]; then
-    echo "ERROR: Trace endpoint JSON not found after ${{TRACE_ENDPOINT_WAIT_MAX}}s: $TRACE_ENDPOINT_JSON"
+    echo "ERROR: Trace endpoint JSON not found after ${TRACE_ENDPOINT_WAIT_MAX}s: $TRACE_ENDPOINT_JSON"
     exit 1
   fi
   echo "✓ Trace endpoint JSON present"
   python scripts/vllm/wait_for_endpoint.py \
     --endpoint-json "$TRACE_ENDPOINT_JSON" \
-    --max-attempts "${{TRACE_HEALTH_MAX_ATTEMPTS:-20}}" \
-    --retry-delay "${{TRACE_HEALTH_RETRY_DELAY:-30}}" \
+    --max-attempts "${TRACE_HEALTH_MAX_ATTEMPTS:-20}" \
+    --retry-delay "${TRACE_HEALTH_RETRY_DELAY:-30}" \
     --health-path "v1/models"
 fi
 
 if [ -n "$TRACE_ENDPOINT_JSON" ] && [ -f "$TRACE_ENDPOINT_JSON" ]; then
   has_api_base=0
   has_metrics_endpoint=0
-  for kv in "${{AGENT_KWARG_FLAGS[@]}}"; do
+  for kv in "${AGENT_KWARG_FLAGS[@]}"; do
     case "$kv" in
       api_base=*) has_api_base=1 ;;
       metrics_endpoint=*) has_metrics_endpoint=1 ;;
@@ -183,7 +189,7 @@ fi
 TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
 SAFE_MODEL=$(echo "$EVAL_MODEL" | tr '/:' '_')
 SAFE_DATASET=$(echo {dataset_label} | tr '/:' '_')
-RUN_TAG="${{SAFE_DATASET}}_${{SAFE_MODEL}}_${{TIMESTAMP}}"
+RUN_TAG="${SAFE_DATASET}_${SAFE_MODEL}_${TIMESTAMP}"
 RUN_DIR="$EXPERIMENTS_DIR/jobs/$RUN_TAG"
 mkdir -p "$RUN_DIR"
 export RUN_TAG RUN_DIR
@@ -199,7 +205,7 @@ except Exception:
     print("unknown")
 PY
 )
-export HARBOR_VERSION=${{HARBOR_VERSION:-unknown}}
+export HARBOR_VERSION=${HARBOR_VERSION:-unknown}
 
 echo "Creating Supabase job row..."
 DB_JOB_ID=$(python - <<'PY'
@@ -250,19 +256,19 @@ SLURM_JOB_ID=$SLURM_JOB_ID
 DB_JOB_ID=$DB_JOB_ID
 EOF
 
-HARBOR_CMD=(harbor jobs start "${{DATASET_ARGS[@]}}" --config "$EVAL_HARBOR_CONFIG" --job-name "$RUN_TAG" --agent "$EVAL_AGENT" --model "$EVAL_MODEL" --env "$EVAL_ENV" --n-concurrent "$EVAL_N_CONCURRENT" --k-attempts "$EVAL_N_ATTEMPTS")
-if [ "${{#AGENT_KWARG_FLAGS[@]}}" -gt 0 ]; then
-  HARBOR_CMD+=("${{AGENT_KWARG_FLAGS[@]}}")
+HARBOR_CMD=(harbor jobs start "${DATASET_ARGS[@]}" --config "$EVAL_HARBOR_CONFIG" --job-name "$RUN_TAG" --agent "$EVAL_AGENT" --model "$EVAL_MODEL" --env "$EVAL_ENV" --n-concurrent "$EVAL_N_CONCURRENT" --k-attempts "$EVAL_N_ATTEMPTS")
+if [ "${#AGENT_KWARG_FLAGS[@]}" -gt 0 ]; then
+  HARBOR_CMD+=("${AGENT_KWARG_FLAGS[@]}")
 fi
 
 set +e
-"${{HARBOR_CMD[@]}}"
+"${HARBOR_CMD[@]}"
 SB_EXIT=$?
 set -e
 
-if [ ${{SB_EXIT:-0}} -ne 0 ]; then
-  echo "Harbor exited with status ${{SB_EXIT}}"
-  exit ${{SB_EXIT}}
+if [ ${SB_EXIT:-0} -ne 0 ]; then
+  echo "Harbor exited with status ${SB_EXIT}"
+  exit ${SB_EXIT}
 fi
 
 RESULT_FILE="$RUN_DIR/result.json"
@@ -285,16 +291,16 @@ if "stats" in data and "evals" in data["stats"]:
 print(total)
 PY
   )
-  echo "Daytona errors: ${{DAYTONA_COUNT}}"
-  if [ "${{DAYTONA_COUNT:-0}}" -gt "$DAYTONA_THRESHOLD" ]; then
-    echo "Too many Daytona errors (${{DAYTONA_COUNT}}); skipping upload."
+  echo "Daytona errors: ${DAYTONA_COUNT}"
+  if [ "${DAYTONA_COUNT:-0}" -gt "$DAYTONA_THRESHOLD" ]; then
+    echo "Too many Daytona errors (${DAYTONA_COUNT}); skipping upload."
     exit 0
   fi
 else
   echo "Warning: result.json not found at $RESULT_FILE"
 fi
 
-UPLOAD_LOG="$EXPERIMENTS_DIR/logs/upload_${{SLURM_JOB_ID}}.log"
+UPLOAD_LOG="$EXPERIMENTS_DIR/logs/upload_${SLURM_JOB_ID}.log"
 mkdir -p "$(dirname "$UPLOAD_LOG")"
 
 export RUN_DIR
@@ -337,7 +343,7 @@ upload_eval_results(
 )
 print("[eval-upload] Upload complete.")
 PY
-UPLOAD_EXIT=${{PIPESTATUS[0]}}
+UPLOAD_EXIT=${PIPESTATUS[0]}
 set -e
 if [ $UPLOAD_EXIT -ne 0 ]; then
   echo "Upload failed with exit code: $UPLOAD_EXIT"
