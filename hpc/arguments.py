@@ -12,6 +12,7 @@ class JobType(str, Enum):
     SFT_MCA = "sft_mca"
     PRETOKENIZE = "pretokenize"
     DATAGEN = "datagen"
+    EVAL = "eval"
     CONSOLIDATE = "consolidate"
     RL = "rl"
 
@@ -442,7 +443,7 @@ class DataGenArgs:
     job_type: Optional[str] = field(
         default=JobType.default_value(),
         metadata={
-            "help": "Job type: 'sft', 'sft_mca', 'pretokenize', 'datagen', 'consolidate', or 'rl'",
+            "help": "Job type: 'sft', 'sft_mca', 'pretokenize', 'datagen', 'eval', 'consolidate', or 'rl'",
             "choices": JobType.choices(),
             "required": False,
         },
@@ -455,14 +456,7 @@ class DataGenArgs:
     )
     enable_trace_gen: bool = field(
         default=False,
-        metadata={"help": "Enable trace generation stage", "store_true": True}
-    )
-    trace_eval_only: bool = field(
-        default=False,
-        metadata={
-            "help": "Run trace jobs without exporting/uploading traces",
-            "store_true": True,
-        },
+        metadata={"help": "Enable trace generation stage"}
     )
     disable_verification: bool = field(
         default=False,
@@ -585,6 +579,14 @@ class DataGenArgs:
     trace_verifier_timeout_sec: Optional[float] = field(
         default=None,
         metadata={"help": "Override Harbor verifier timeout (seconds) for trace generation"}
+    )
+    harbor_dataset: Optional[str] = field(
+        default=None,
+        metadata={"help": "Harbor registry dataset slug such as 'terminal-bench@2.0'"}
+    )
+    eval_benchmark_repo: Optional[str] = field(
+        default=None,
+        metadata={"help": "Benchmark HF dataset repo used for Supabase registration"}
     )
 @dataclass
 class ConsolidateArgs:

@@ -19,6 +19,7 @@ from omegaconf import OmegaConf
 from data.generation import BaseDataGenerator
 from data.generation.utils import load_datagen_config, resolve_engine_runtime
 from harbor.models.environment_type import EnvironmentType
+from hpc.core_launch_utils import cleanup_endpoint_file
 from hpc.launch_utils import (
     _inject_env_block,
     _merge_dependencies,
@@ -188,12 +189,7 @@ def _cleanup_stale_vllm_endpoint(exp_args: Mapping[str, Any]) -> None:
         return
 
     endpoint_path = base_dir / "vllm_endpoint.json"
-    if endpoint_path.exists():
-        try:
-            endpoint_path.unlink()
-            print(f"Removed stale vLLM endpoint file: {endpoint_path}")
-        except OSError as exc:
-            print(f"Warning: failed to remove stale vLLM endpoint file {endpoint_path}: {exc}")
+    cleanup_endpoint_file(endpoint_path, descriptor="stale vLLM endpoint file")
 
 
 def resolve_datagen_config_path(raw_value: str) -> Path:
@@ -335,11 +331,25 @@ def _prepare_datagen_configuration(exp_args: dict):
     trace_model_override = exp_args.get("trace_model")
     if trace_model_override:
         engine_cfg = loaded.config.engine
+        engine_cfg.model = trace_model_override
+        try:
+            loaded.raw.engine.model = trace_model_override
+        except AttributeError:
+            pass
+
         engine_type = (engine_cfg.type or "").lower()
-        if engine_type in {"openai", "anthropic"}:
-            engine_cfg.model = trace_model_override
+        if engine_type == "vllm_local" and getattr(engine_cfg, "vllm_local", None):
+            engine_cfg.vllm_local.model_name = trace_model_override  # type: ignore[assignment]
             try:
-                loaded.raw.engine.model = trace_model_override
+                loaded.raw.engine.vllm_local.model_name = trace_model_override  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
+
+        vllm_cfg = loaded.config.vllm_server
+        if vllm_cfg:
+            vllm_cfg.model_path = trace_model_override
+            try:
+                loaded.raw.vllm_server.model_path = trace_model_override  # type: ignore[attr-defined]
             except AttributeError:
                 pass
 
@@ -361,8 +371,11 @@ def _prepare_datagen_configuration(exp_args: dict):
 
     exp_args["datagen_engine"] = runtime.type
     exp_args["datagen_healthcheck_interval"] = runtime.healthcheck_interval or 300
-    if runtime.engine_kwargs.get("model"):
-        exp_args["datagen_model"] = runtime.engine_kwargs["model"]
+    runtime_model = runtime.engine_kwargs.get("model") or runtime.engine_kwargs.get("model_name")
+    if runtime_model:
+        exp_args["datagen_model"] = runtime_model
+    elif trace_model_override:
+        exp_args["datagen_model"] = trace_model_override
     else:
         exp_args.pop("datagen_model", None)
     if runtime.max_output_tokens is not None:
@@ -759,8 +772,20 @@ def launch_datagen_job(exp_args: dict, hpc) -> None:
         print(f"WARNING: {warning}")
         raise RuntimeError(warning)
 
-    task_enabled = bool(exp_args.get("enable_task_gen", True))
-    trace_enabled = bool(exp_args.get("enable_trace_gen", False))
+    task_enabled = str(exp_args.get("enable_task_gen", True)).lower() not in {"false", "0", "no", "none"}
+    trace_enabled = str(exp_args.get("enable_trace_gen", False)).lower() not in {"false", "0", "no", "none"}
+
+    trace_eval_only_raw = exp_args.pop("trace_eval_only", None)
+    trace_eval_only_requested = False
+    if isinstance(trace_eval_only_raw, str):
+        trace_eval_only_requested = trace_eval_only_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        trace_eval_only_requested = bool(trace_eval_only_raw)
+    if trace_eval_only_requested:
+        print(
+            "WARNING: --trace-eval-only is no longer supported. "
+            "Launch eval workloads via `python -m hpc.launch --job_type eval`."
+        )
 
     # Keep datagen/trace engine/backend selections in sync when only one is provided
     datagen_engine_value = exp_args.get("datagen_engine")
@@ -1599,7 +1624,6 @@ def launch_trace_job(
             exp_args.get("trace_health_retry_delay", getattr(BaseDataGenerator, "HEALTHCHECK_RETRY_DELAY", 30))
         ),
         "TRACE_DISABLE_VERIFICATION": "1" if disable_verification_flag else "0",
-        "TRACE_EVAL_ONLY": "1" if exp_args.get("trace_eval_only") else "0",
         "VLLM_JOB_ID": str(exp_args.get("vllm_job_id", "")),
         "TRACE_NUM_GPUS": str(num_gpus),
         "TRACE_BACKEND": trace_backend,

@@ -17,6 +17,11 @@ source "$WORKDIR/hpc/sbatch_data/trace_helpers.sh"
 load_trace_chunk_env
 ensure_tasks_ready_or_exit "$TASKS_PATH" "${TRACE_TASKS_READY_TIMEOUT:-1800}"
 
+if [ "${TRACE_EVAL_ONLY:-0}" = "1" ]; then
+    echo "WARNING: TRACE_EVAL_ONLY is deprecated. Launch eval workloads via 'python -m hpc.launch --job_type eval'." >&2
+fi
+unset TRACE_EVAL_ONLY
+
 if [ -n "$OUTPUT_DIR" ]; then
     mkdir -p "$OUTPUT_DIR"
 fi
@@ -68,9 +73,6 @@ if [ "$TRACE_DISABLE_VERIFICATION" = "1" ]; then
 fi
 if [ -n "${TRACE_ENGINE_CONFIG_PATH:-}" ]; then
     CMD+=(--engine-config "$TRACE_ENGINE_CONFIG_PATH")
-fi
-if [ "$TRACE_EVAL_ONLY" = "1" ]; then
-    CMD+=(--trace-eval-only)
 fi
 if [ -n "${TRACE_TASK_TYPE:-}" ]; then
     CMD+=(--task-type "$TRACE_TASK_TYPE")

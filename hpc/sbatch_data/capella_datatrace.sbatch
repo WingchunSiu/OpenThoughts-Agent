@@ -117,7 +117,10 @@ TRACE_REQUIRE_ENDPOINT="${TRACE_REQUIRE_ENDPOINT:-0}"
 TRACE_WAIT_FOR_ENDPOINT="${TRACE_WAIT_FOR_ENDPOINT:-0}"
 TRACE_HARBOR_CONFIG="${TRACE_HARBOR_CONFIG:-}"
 TRACE_DISABLE_VERIFICATION="${TRACE_DISABLE_VERIFICATION:-0}"
-TRACE_EVAL_ONLY="${TRACE_EVAL_ONLY:-0}"
+if [ "${TRACE_EVAL_ONLY:-0}" = "1" ]; then
+    echo "WARNING: TRACE_EVAL_ONLY is deprecated. Launch eval workloads via 'python -m hpc.launch --job_type eval'." >&2
+fi
+unset TRACE_EVAL_ONLY
 TRACE_AGENT_TIMEOUT_SEC="${TRACE_AGENT_TIMEOUT_SEC:-}"
 TRACE_VERIFIER_TIMEOUT_SEC="${TRACE_VERIFIER_TIMEOUT_SEC:-}"
 TRACE_ENGINE_CONFIG_PATH="${TRACE_ENGINE_CONFIG_PATH:-}"
@@ -154,7 +157,6 @@ echo "Dataset Type: ${TRACE_DATASET_TYPE:-<none>}"
 echo "Jobs Dir: ${TRACE_JOBS_DIR:-<none>}"
 echo "Harbor Config: ${TRACE_HARBOR_CONFIG:-<none>}"
 echo "Disable Verification: $TRACE_DISABLE_VERIFICATION"
-echo "Eval Only: $TRACE_EVAL_ONLY"
 if [ "${TRACE_CHUNK_MODE:-0}" = "1" ]; then
   echo "Chunk Index: ${TRACE_JOB_INDEX:-${SLURM_ARRAY_TASK_ID:-?}} / ${TRACE_CHUNK_COUNT:-?}"
 fi
@@ -213,9 +215,6 @@ if [ "$TRACE_DISABLE_VERIFICATION" = "1" ]; then
 fi
 if [ -n "$TRACE_ENGINE_CONFIG_PATH" ]; then
     CMD+=(--engine-config "$TRACE_ENGINE_CONFIG_PATH")
-fi
-if [ "$TRACE_EVAL_ONLY" = "1" ]; then
-    CMD+=(--trace-eval-only)
 fi
 if [ -n "$TRACE_TASK_TYPE" ]; then
     CMD+=(--task-type "$TRACE_TASK_TYPE")

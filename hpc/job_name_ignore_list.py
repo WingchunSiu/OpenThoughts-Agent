@@ -124,6 +124,8 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "trace_eval_only",
     "trace_export_subagents",
     "push_to_hub",
+    "harbor_dataset",
+    "eval_benchmark_repo",
     # Timeout toggles
     "trace_agent_timeout_sec",
     "trace_verifier_timeout_sec",

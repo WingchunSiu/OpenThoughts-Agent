@@ -46,7 +46,9 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
             value = value.split("/")[-1]
         return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-_") or "repo"
 
-    parts: list[str] = ["datagen"]
+    job_type_hint = str(cli_args.get("job_type") or "").lower()
+    prefix = "eval" if job_type_hint == JobType.EVAL.value else "datagen"
+    parts: list[str] = [prefix]
     engine = cli_args.get("datagen_engine") or cli_args.get("trace_engine") or "engine"
     parts.append(str(engine or "engine"))
 
@@ -57,7 +59,24 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
     elif repo_candidate:
         parts.append(_sanitize_component(str(repo_candidate)))
 
+    dataset_component = None
+    dataset_slug = cli_args.get("harbor_dataset")
+    dataset_path = cli_args.get("trace_input_path") or cli_args.get("eval_dataset_path")
+    if dataset_slug:
+        dataset_component = _sanitize_component(str(dataset_slug))
+    elif dataset_path:
+        dataset_component = _sanitize_component(str(dataset_path))
+    if dataset_component:
+        parts.append(dataset_component)
+
     job_name = "_".join(filter(None, parts))
+    if job_type_hint == JobType.EVAL.value:
+        if job_name.startswith("eval_"):
+            job_name = "eval-" + job_name[len("eval_"):]
+        elif job_name == "eval":
+            job_name = "eval-run"
+        elif not job_name.startswith("eval-"):
+            job_name = f"eval-{job_name}"
     return job_name or "datagen_job"
 
 
@@ -147,7 +166,7 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
     job_type = str(cli_args.get("job_type", JobType.default_value()) or JobType.default_value()).lower()
     if job_type == JobType.CONSOLIDATE.value:
         return derive_consolidate_job_name(cli_args)
-    if job_type == JobType.DATAGEN.value:
+    if job_type in (JobType.DATAGEN.value, JobType.EVAL.value):
         return derive_datagen_job_name(cli_args)
     return derive_default_job_name(cli_args)
 
