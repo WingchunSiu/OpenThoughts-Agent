@@ -24,7 +24,10 @@ if [ -z "${BASH_COMPLETION_DEBUG+x}" ]; then
 fi
 
 # --- Module loading (cluster-specific, substituted by launcher) ---
+# Disable unbound variable check for module loading (modules may reference unset vars)
+set +u
 {module_commands}
+set -u
 
 # --- Environment setup ---
 if [ -n "${DCFT_PRIVATE:-}" ]; then
@@ -41,7 +44,10 @@ if [ -z "${DCFT:-}" ]; then
 fi
 
 # --- Conda activation (cluster-specific, substituted by launcher) ---
+# Disable unbound variable check for conda (conda scripts may reference unset vars)
+set +u
 {conda_activate}
+set -u
 
 # --- Source environment files ---
 if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/{cluster_env_file}" ]; then

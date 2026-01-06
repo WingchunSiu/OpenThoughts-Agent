@@ -429,10 +429,22 @@ def main() -> None:
             print(f"[cloud] You can manually check status with: sky queue {cluster_for_sync}", file=sys.stderr)
 
     # Sync outputs from remote cluster
+    # 1. Sync the experiments directory (logs, endpoint JSON, etc.)
     sync_eval_outputs(
         cluster_name=cluster_for_sync,
         remote_path=remote_output_dir,
         local_dir=args.local_sync_dir,
+    )
+
+    # 2. Sync trace_jobs directory (Harbor job outputs - the actual results)
+    # Harbor puts outputs in ./trace_jobs relative to workdir
+    trace_jobs_remote = f"{remote_workdir}/trace_jobs"
+    trace_jobs_local = str(Path(args.local_sync_dir).parent / "trace_jobs")
+    print(f"[cloud-sync] Also syncing Harbor trace_jobs from {trace_jobs_remote}...")
+    sync_eval_outputs(
+        cluster_name=cluster_for_sync,
+        remote_path=trace_jobs_remote,
+        local_dir=trace_jobs_local,
     )
 
     # Tear down cluster if requested (after syncing)
