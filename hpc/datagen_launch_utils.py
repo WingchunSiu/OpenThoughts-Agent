@@ -20,7 +20,14 @@ from hpc.launch_utils import (
     derive_datagen_job_name,  # Re-exported for backwards compatibility
     launch_sbatch,
     cleanup_endpoint_file,
+    normalize_cli_args,
+    resolve_config_path,
+    coerce_positive_int,
 )
+
+# Backward compatibility aliases
+_normalize_cli_args = normalize_cli_args
+_coerce_positive_int = coerce_positive_int
 
 DIRENV = os.path.dirname(__file__)
 DATAGEN_CONFIG_DIR = os.path.join(DIRENV, "datagen_yaml")
@@ -55,52 +62,12 @@ def _validate_sbatch_templates(hpc_obj) -> None:
 
 def resolve_datagen_config_path(raw_value: str) -> Path:
     """Resolve ``raw_value`` to an absolute datagen config path."""
-
-    candidate = Path(raw_value).expanduser()
-    if candidate.exists():
-        return candidate.resolve()
-
-    default_candidate = Path(DATAGEN_CONFIG_DIR) / candidate
-    if default_candidate.exists():
-        return default_candidate.resolve()
-
-    fallback_candidate = Path(DATAGEN_CONFIG_DIR) / candidate.name
-    if fallback_candidate.exists():
-        return fallback_candidate.resolve()
-
-    raise FileNotFoundError(
-        f"Datagen config not found: {raw_value}. "
-        f"Tried {candidate}, {default_candidate}, and {fallback_candidate}."
-    )
+    return resolve_config_path(raw_value, DATAGEN_CONFIG_DIR, "datagen")
 
 
 def resolve_harbor_config_path(raw_value: str) -> Path:
     """Resolve ``raw_value`` to an absolute Harbor job config path."""
-
-    candidate = Path(raw_value).expanduser()
-    if candidate.exists():
-        return candidate.resolve()
-
-    default_candidate = Path(HARBOR_CONFIG_DIR) / candidate
-    if default_candidate.exists():
-        return default_candidate.resolve()
-
-    fallback_candidate = Path(HARBOR_CONFIG_DIR) / candidate.name
-    if fallback_candidate.exists():
-        return fallback_candidate.resolve()
-
-    raise FileNotFoundError(
-        f"Harbor job config not found: {raw_value}. "
-        f"Tried {candidate}, {default_candidate}, and {fallback_candidate}."
-    )
-
-
-def _coerce_positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(str(value))
-        return parsed if parsed > 0 else default
-    except (TypeError, ValueError):
-        return default
+    return resolve_config_path(raw_value, HARBOR_CONFIG_DIR, "harbor job")
 
 
 def _estimate_max_inflight(env: Dict[str, str]) -> int:
@@ -134,47 +101,6 @@ def _maybe_set_ray_cgraph_env(env: Dict[str, str]) -> None:
     if not inflight_override:
         inflight_override = DEFAULT_RAY_CGRAPH_MAX_INFLIGHT or _estimate_max_inflight(env)
     env.setdefault("RAY_CGRAPH_max_inflight_executions", str(inflight_override))
-
-
-def _normalize_cli_args(args_spec: Any) -> list[str]:
-    """Normalize a YAML-provided CLI arg spec into a flat list of strings."""
-
-    if args_spec in (None, "", [], (), {}):
-        return []
-
-    if isinstance(args_spec, str):
-        return shlex.split(args_spec)
-
-    if isinstance(args_spec, dict):
-        normalized: list[str] = []
-        for key, value in args_spec.items():
-            flag = key if str(key).startswith("--") else f"--{key}"
-            if isinstance(value, bool):
-                if value:
-                    normalized.append(flag)
-                continue
-            if value is None:
-                continue
-            if isinstance(value, (list, tuple)):
-                for item in value:
-                    if item is None:
-                        continue
-                    if isinstance(item, bool):
-                        if item:
-                            normalized.append(flag)
-                        continue
-                    normalized.extend([flag, str(item)])
-            else:
-                normalized.extend([flag, str(value)])
-        return normalized
-
-    if isinstance(args_spec, (list, tuple)):
-        return [str(item) for item in args_spec if item is not None]
-
-    raise TypeError(
-        f"Unsupported CLI args specification of type {type(args_spec).__name__}; "
-        "expected string, list/tuple, or mapping."
-    )
 
 
 def _prepare_datagen_configuration(exp_args: dict):
@@ -509,7 +435,6 @@ def _prepare_trace_chunk_plans(
 def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
     """Launch datagen job using the new universal template system.
 
-    This replaces the old launch_datagen_job() function by:
     1. Creating TaskgenJobConfig and/or TracegenJobConfig from exp_args
     2. Writing configs to JSON
     3. Using universal_taskgen.sbatch and universal_tracegen.sbatch templates
@@ -780,8 +705,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
 # Job Runner Classes for Universal SBATCH Scripts
 # ==============================================================================
 #
-# These classes encapsulate the job logic that was previously spread across
-# 400-600 line SBATCH scripts. They are called from universal_taskgen.sbatch
+# These classes encapsulate the job logic. They are called from universal_taskgen.sbatch
 # and universal_tracegen.sbatch templates.
 
 
@@ -830,9 +754,6 @@ class TaskgenJobConfig:
 
 class TaskgenJobRunner:
     """Runs task generation jobs with optional vLLM management.
-
-    This class encapsulates the task generation logic that was previously
-    spread across 400+ lines of sbatch scripts.
 
     Usage (from sbatch):
         python -m hpc.datagen_launch_utils --mode taskgen --config /path/to/config.json
@@ -1161,7 +1082,18 @@ class TracegenJobRunner:
         ])
 
         print(f"Running Harbor command: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
+        sys.stdout.flush()
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Print output
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+
+        if result.returncode != 0:
+            print(f"Harbor exited with code {result.returncode}", file=sys.stderr)
+
         return result.returncode
 
 

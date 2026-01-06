@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -402,7 +404,18 @@ class EvalJobRunner:
         ])
 
         print(f"Running Harbor command: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
+        sys.stdout.flush()
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Print output
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+
+        if result.returncode != 0:
+            print(f"Harbor exited with code {result.returncode}", file=sys.stderr)
+
         return result.returncode
 
 

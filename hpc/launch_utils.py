@@ -78,6 +78,65 @@ def validate_trace_backend(
 
 
 # =============================================================================
+# CLI Argument Normalization
+# =============================================================================
+
+def normalize_cli_args(args_spec: Any) -> list[str]:
+    """Normalize a YAML-provided CLI arg spec into a flat list of strings.
+
+    Supports multiple input formats:
+    - String: split using shlex (e.g., "--foo bar --baz")
+    - Dict: convert to --key value pairs (booleans become flags)
+    - List/Tuple: convert items to strings
+
+    Args:
+        args_spec: CLI arguments in any supported format.
+
+    Returns:
+        Flat list of CLI argument strings.
+
+    Raises:
+        TypeError: If args_spec is not a supported type.
+    """
+    if args_spec in (None, "", [], (), {}):
+        return []
+
+    if isinstance(args_spec, str):
+        return shlex.split(args_spec)
+
+    if isinstance(args_spec, dict):
+        normalized: list[str] = []
+        for key, value in args_spec.items():
+            flag = key if str(key).startswith("--") else f"--{key}"
+            if isinstance(value, bool):
+                if value:
+                    normalized.append(flag)
+                continue
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    if item is None:
+                        continue
+                    if isinstance(item, bool):
+                        if item:
+                            normalized.append(flag)
+                        continue
+                    normalized.extend([flag, str(item)])
+            else:
+                normalized.extend([flag, str(value)])
+        return normalized
+
+    if isinstance(args_spec, (list, tuple)):
+        return [str(item) for item in args_spec if item is not None]
+
+    raise TypeError(
+        f"Unsupported CLI args specification of type {type(args_spec).__name__}; "
+        "expected string, list/tuple, or mapping."
+    )
+
+
+# =============================================================================
 # Global Constants
 # =============================================================================
 
@@ -117,6 +176,65 @@ def resolve_workspace_path(path_like: str) -> Path:
     if path.is_absolute():
         return path
     return (PROJECT_ROOT / path).resolve()
+
+
+def resolve_config_path(
+    raw_value: str,
+    default_dir: Path | str,
+    config_type: str = "config",
+) -> Path:
+    """Resolve a config path with fallback to a default directory.
+
+    Tries paths in order:
+    1. raw_value as-is (if exists)
+    2. default_dir / raw_value
+    3. default_dir / basename(raw_value)
+
+    Args:
+        raw_value: User-provided path string.
+        default_dir: Default directory to check for configs.
+        config_type: Description for error messages (e.g., "datagen", "harbor").
+
+    Returns:
+        Resolved absolute Path.
+
+    Raises:
+        FileNotFoundError: If config not found in any location.
+    """
+    candidate = Path(raw_value).expanduser()
+    if candidate.exists():
+        return candidate.resolve()
+
+    default_dir = Path(default_dir)
+    default_candidate = default_dir / candidate
+    if default_candidate.exists():
+        return default_candidate.resolve()
+
+    fallback_candidate = default_dir / candidate.name
+    if fallback_candidate.exists():
+        return fallback_candidate.resolve()
+
+    raise FileNotFoundError(
+        f"{config_type.capitalize()} config not found: {raw_value}. "
+        f"Tried {candidate}, {default_candidate}, and {fallback_candidate}."
+    )
+
+
+def coerce_positive_int(value: Any, default: int) -> int:
+    """Coerce a value to a positive integer, returning default if invalid.
+
+    Args:
+        value: Value to coerce (string, int, etc.)
+        default: Default value if coercion fails or result is non-positive.
+
+    Returns:
+        Positive integer, or default.
+    """
+    try:
+        parsed = int(str(value))
+        return parsed if parsed > 0 else default
+    except (TypeError, ValueError):
+        return default
 
 
 # =============================================================================
@@ -647,11 +765,16 @@ __all__ = [
     # Path resolution
     "resolve_repo_path",
     "resolve_workspace_path",
+    "resolve_config_path",
+    # Value coercion
+    "coerce_positive_int",
     # JSON/Config parsing
     "coerce_agent_kwargs",
     # Endpoint file utilities
     "cleanup_endpoint_file",
     "validate_trace_backend",
+    # CLI argument normalization
+    "normalize_cli_args",
     # vLLM utilities
     "default_vllm_endpoint_path",
     # Local execution
