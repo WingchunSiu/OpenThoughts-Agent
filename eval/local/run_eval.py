@@ -127,11 +127,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-env", default="daytona", help="Harbor environment name.")
     parser.add_argument("--n-concurrent", type=int, default=16, help="Concurrent eval trials.")
     parser.add_argument("--n-attempts", type=int, default=3, help="Retries (Harbor --n-attempts flag).")
-    parser.add_argument(
-        "--expected-trials",
-        type=int,
-        help="Optional expected trial count (for bookkeeping only).",
-    )
     parser.add_argument("--eval-benchmark-repo", required=True, help="Supabase benchmark repo id.")
     parser.add_argument(
         "--experiments-dir",
@@ -647,8 +642,6 @@ def _build_harbor_command(
         cmd.extend(["--dataset", args.dataset])
     else:
         cmd.extend(["-p", args.dataset_path])
-    if args.expected_trials:
-        cmd.extend(["--expected-trials", str(args.expected_trials)])
     serialized_kwargs = _serialize_agent_kwargs(base_agent_kwargs)
     for kw in serialized_kwargs:
         cmd.extend(["--agent-kwarg", kw])

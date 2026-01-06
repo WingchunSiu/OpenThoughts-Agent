@@ -92,7 +92,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--agent-kwarg", action="append", default=[], help="Additional --agent-kwarg entries.")
     parser.add_argument("--n-concurrent", type=int, default=16)
     parser.add_argument("--n-attempts", type=int, default=3)
-    parser.add_argument("--expected-trials", type=int, help="Optional Harbor expected-trials hint.")
     parser.add_argument("--gpus", type=int, default=1, help="run_eval --gpus value.")
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to run_eval.")
     parser.add_argument("--job-name", help="Optional override for Harbor job name.")
@@ -188,8 +187,6 @@ def _build_run_eval_command(args: argparse.Namespace, remote_output_dir: str) ->
             remote_output_dir,
         ]
     )
-    if args.expected_trials:
-        cmd.extend(["--expected-trials", str(args.expected_trials)])
     if args.job_name:
         cmd.extend(["--job-name", args.job_name])
     if args.dry_run:

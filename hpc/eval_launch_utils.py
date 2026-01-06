@@ -208,13 +208,6 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
     n_attempts_int = n_attempts_override or default_n_attempts
     exp_args["_eval_n_attempts"] = max(1, int(n_attempts_int))
 
-    expected_override = _parse_optional_int(
-        exp_args.get("trace_expected_trials"),
-        "--trace_expected_trials",
-    )
-    expected_trials_int = expected_override or exp_args["_eval_n_concurrent"]
-    exp_args["_eval_expected_trials"] = max(1, int(expected_trials_int))
-
     return exp_args
 
 
@@ -240,7 +233,6 @@ class EvalJobConfig:
     dataset_path: Optional[str] = None
     n_concurrent: int = 64
     n_attempts: int = 3
-    expected_trials: int = 64
     eval_benchmark_repo: str = ""
     eval_env: str = "daytona"
     experiments_dir: str = "experiments"
@@ -394,9 +386,6 @@ class EvalJobRunner:
         elif self.config.dataset_path:
             cmd.extend(["-p", self.config.dataset_path])
 
-        if self.config.expected_trials:
-            cmd.extend(["--expected-trials", str(self.config.expected_trials)])
-
         # Build agent kwargs
         agent_kwargs = dict(self.config.agent_kwargs)
         if endpoint:
@@ -505,7 +494,6 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
         dataset_path=dataset_path,
         n_concurrent=int(exp_args.get("_eval_n_concurrent", 64)),
         n_attempts=int(exp_args.get("_eval_n_attempts", 3)),
-        expected_trials=int(exp_args.get("_eval_expected_trials", 64)),
         eval_benchmark_repo=exp_args.get("eval_benchmark_repo") or "",
         eval_env=exp_args.get("_eval_env") or "daytona",
         experiments_dir=experiments_subdir,
