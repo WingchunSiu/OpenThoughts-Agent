@@ -228,8 +228,8 @@ class EvalJobConfig:
     job_name: str
     harbor_config: str
     model: str
-    served_model_id: Optional[str] = None
     agent: str
+    served_model_id: Optional[str] = None
     dataset: Optional[str] = None
     dataset_path: Optional[str] = None
     n_concurrent: int = 64
