@@ -24,6 +24,9 @@ from hpc.launch_utils import (
     resolve_config_path,
     coerce_positive_int,
     build_sbatch_directives,
+    generate_served_model_id,
+    hosted_vllm_alias,
+    strip_hosted_vllm_alias,
 )
 
 # Backward compatibility aliases
@@ -591,6 +594,15 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         if vllm_cfg and not trace_model:
             trace_model = getattr(vllm_cfg, "model_path", "") or ""
 
+        vllm_model_path = getattr(vllm_cfg, "model_path", None) if vllm_cfg else (trace_model or None)
+        served_model_id = None
+        harbor_model_name = trace_model
+        if requires_vllm:
+            served_model_id = generate_served_model_id()
+            harbor_model_name = hosted_vllm_alias(served_model_id)
+            if not vllm_model_path:
+                vllm_model_path = trace_model or ""
+
         agent_kwargs = exp_args.get("_datagen_extra_agent_kwargs") or {}
         if exp_args.get("trace_agent_kwargs"):
             if isinstance(exp_args["trace_agent_kwargs"], dict):
@@ -616,14 +628,15 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             engine=engine,
             datagen_config_path=exp_args.get("datagen_config_path"),
             needs_vllm=requires_vllm,
-            vllm_model_path=getattr(vllm_cfg, "model_path", None) if vllm_cfg else None,
+            vllm_model_path=vllm_model_path,
             tensor_parallel_size=tensor_parallel_size,
             pipeline_parallel_size=pipeline_parallel_size,
             data_parallel_size=data_parallel_size,
             endpoint_json_path=endpoint_json_path,
             ray_port=int(exp_args.get("datagen_ray_port") or 6379),
             api_port=int(exp_args.get("datagen_api_port") or 8000),
-            model=trace_model,
+            model=harbor_model_name,
+            served_model_id=served_model_id,
             agent=exp_args.get("trace_agent_name") or "",
             trace_env=exp_args.get("trace_env") or "daytona",
             n_concurrent=int(exp_args.get("trace_n_concurrent") or 64),
@@ -909,6 +922,7 @@ class TracegenJobConfig:
 
     # Harbor settings
     model: str = ""
+    served_model_id: Optional[str] = None
     agent: str = ""
     trace_env: str = "daytona"
     n_concurrent: int = 64
@@ -1001,13 +1015,17 @@ class TracegenJobRunner:
             ray_env_vars=hpc.get_ray_env_vars(),
         )
 
+        raw_model_path = self.config.vllm_model_path or self.config.model
+        model_path = strip_hosted_vllm_alias(raw_model_path) or raw_model_path
+
         vllm_cfg = VLLMConfig(
-            model_path=self.config.vllm_model_path or self.config.model,
+            model_path=model_path,
             tensor_parallel_size=self.config.tensor_parallel_size,
             pipeline_parallel_size=self.config.pipeline_parallel_size,
             data_parallel_size=self.config.data_parallel_size,
             api_port=self.config.api_port,
             endpoint_json_path=self.config.endpoint_json_path,
+            custom_model_name=self.config.served_model_id,
             health_max_attempts=self.config.health_max_attempts,
             health_retry_delay=self.config.health_retry_delay,
             server_config=self.config.vllm_server_config,  # Pass through YAML config

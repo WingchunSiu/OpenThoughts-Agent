@@ -38,6 +38,7 @@ from hpc.local_runner_utils import (
     terminate_processes,
     _build_vllm_cli_args,
 )
+from hpc.launch_utils import generate_served_model_id, hosted_vllm_alias
 
 
 def _resolve_jobs_dir_path(jobs_dir_value: Optional[str]) -> Path:
@@ -224,14 +225,6 @@ def _default_job_name(dataset_label: str, model_label: str) -> str:
     sanitized_dataset = dataset_label.replace("/", "-").replace(" ", "_")
     sanitized_model = model_label.replace("/", "-").replace(" ", "_")
     return f"eval-{sanitized_dataset}-{sanitized_model}-{_timestamp()}"
-
-
-def _generate_served_model_id() -> str:
-    return str(int(time.time() * 1_000_000))
-
-
-def _hosted_vllm_alias(served_id: str) -> str:
-    return f"hosted_vllm/{served_id}"
 
 
 def _deep_copy(value: Any) -> Any:
@@ -502,9 +495,9 @@ def main() -> None:
         args.data_parallel_size = 1
     if args.model is None:
         raise ValueError("Provide --model or supply a datagen config with vllm_server.model_path.")
-    served_model_id = _generate_served_model_id()
+    served_model_id = generate_served_model_id()
     args._served_model_id = served_model_id
-    args._harbor_model_name = _hosted_vllm_alias(served_model_id)
+    args._harbor_model_name = hosted_vllm_alias(served_model_id)
     if args.ray_port is None:
         args.ray_port = 6379
     if args.api_port is None:

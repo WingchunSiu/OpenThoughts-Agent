@@ -6,8 +6,9 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from data.generation import BaseDataGenerator
 
@@ -23,6 +24,9 @@ from hpc.launch_utils import (
     cleanup_endpoint_file,
     validate_trace_backend,
     build_sbatch_directives,
+    generate_served_model_id,
+    hosted_vllm_alias,
+    strip_hosted_vllm_alias,
 )
 
 # Config directory paths (same as datagen_launch_utils)
@@ -216,11 +220,6 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
 # EvalJobRunner - New universal job runner for Phase 2 refactoring
 # =============================================================================
 
-from dataclasses import dataclass, field, asdict
-from typing import List
-import subprocess
-import sys
-
 
 @dataclass
 class EvalJobConfig:
@@ -229,6 +228,7 @@ class EvalJobConfig:
     job_name: str
     harbor_config: str
     model: str
+    served_model_id: Optional[str] = None
     agent: str
     dataset: Optional[str] = None
     dataset_path: Optional[str] = None
@@ -343,13 +343,17 @@ class EvalJobRunner:
             ray_env_vars=hpc.get_ray_env_vars(),
         )
 
+        raw_model_path = self.config.vllm_model_path or self.config.model
+        model_path = strip_hosted_vllm_alias(raw_model_path) or raw_model_path
+
         vllm_cfg = VLLMConfig(
-            model_path=self.config.vllm_model_path or self.config.model,
+            model_path=model_path,
             tensor_parallel_size=self.config.tensor_parallel_size,
             pipeline_parallel_size=self.config.pipeline_parallel_size,
             data_parallel_size=self.config.data_parallel_size,
             api_port=self.config.api_port,
             endpoint_json_path=self.config.endpoint_json_path,
+            custom_model_name=self.config.served_model_id,
             health_max_attempts=self.config.health_max_attempts,
             health_retry_delay=self.config.health_retry_delay,
             server_config=self.config.vllm_server_config,  # Pass through YAML config
@@ -494,11 +498,18 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
     # Convert vllm_cfg dataclass to dict for pass-through
     vllm_server_config = asdict(vllm_cfg) if vllm_cfg else {}
 
+    served_model_id = None
+    harbor_model_name = model_name
+    if requires_vllm:
+        served_model_id = generate_served_model_id()
+        harbor_model_name = hosted_vllm_alias(served_model_id)
+
     # Build the job config
     job_config = EvalJobConfig(
         job_name=job_name,
         harbor_config=harbor_cfg or "",
-        model=model_name,
+        model=harbor_model_name,
+        served_model_id=served_model_id,
         agent=agent_name,
         dataset=dataset_slug,
         dataset_path=dataset_path,
@@ -511,7 +522,7 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
         gpus_per_node=gpus_per_node,
         cpus_per_node=cpus_per_node,
         needs_vllm=requires_vllm,
-        vllm_model_path=getattr(vllm_cfg, "model_path", None) if vllm_cfg else None,
+        vllm_model_path=getattr(vllm_cfg, "model_path", None) if vllm_cfg else model_name,
         tensor_parallel_size=tensor_parallel_size,
         pipeline_parallel_size=pipeline_parallel_size,
         data_parallel_size=data_parallel_size,

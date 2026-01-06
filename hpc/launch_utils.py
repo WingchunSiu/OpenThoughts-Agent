@@ -11,6 +11,7 @@ import shlex
 import socket
 import shutil
 import subprocess
+import time
 from collections import defaultdict
 from os import PathLike
 from pathlib import Path
@@ -31,6 +32,35 @@ PathInput = Union[str, PathLike[str], Path, None]
 
 _VALID_TRACE_BACKENDS = {"vllm", "ray", "vllm_local", "none"}
 """Valid backend options for trace generation."""
+
+_HOSTED_VLLM_PREFIX = "hosted_vllm/"
+"""Provider prefix expected by LiteLLM when routing to managed vLLM endpoints."""
+
+
+def generate_served_model_id() -> str:
+    """Return a unique identifier for a hosted vLLM model."""
+    return str(int(time.time() * 1_000_000))
+
+
+def hosted_vllm_alias(served_id: str) -> str:
+    """Build the hosted_vllm/<id> alias LiteLLM expects."""
+    if not served_id:
+        raise ValueError("served_id must be a non-empty string")
+    return f"{_HOSTED_VLLM_PREFIX}{served_id}"
+
+
+def is_hosted_vllm_alias(model_name: Optional[str]) -> bool:
+    """Check whether ``model_name`` already has the hosted_vllm prefix."""
+    return bool(model_name) and str(model_name).startswith(_HOSTED_VLLM_PREFIX)
+
+
+def strip_hosted_vllm_alias(model_name: Optional[str]) -> str:
+    """Remove the hosted_vllm prefix so vLLM can load the underlying HF model."""
+    if not model_name:
+        return ""
+    if is_hosted_vllm_alias(model_name):
+        return str(model_name)[len(_HOSTED_VLLM_PREFIX) :]
+    return str(model_name)
 
 
 # =============================================================================
