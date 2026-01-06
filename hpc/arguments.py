@@ -584,6 +584,36 @@ class DataGenArgs:
         default=None,
         metadata={"help": "Harbor registry dataset slug such as 'terminal-bench@2.0'"}
     )
+    # Upload settings (traces -> HuggingFace, result abstracts -> Supabase)
+    upload_to_database: bool = field(
+        default=False,
+        metadata={"help": "Upload result abstracts to Supabase and traces to HuggingFace after eval"}
+    )
+    upload_username: Optional[str] = field(
+        default=None,
+        metadata={"help": "Username for Supabase result attribution (defaults to $UPLOAD_USERNAME or current user)"}
+    )
+    upload_error_mode: str = field(
+        default="skip_on_error",
+        metadata={"help": "Supabase upload error handling: 'skip_on_error' or 'rollback_on_error'"}
+    )
+    upload_hf_repo: Optional[str] = field(
+        default=None,
+        metadata={"help": "HuggingFace repo for traces upload (auto-derived from benchmark if not provided)"}
+    )
+    upload_hf_private: bool = field(
+        default=False,
+        metadata={"help": "Create the HuggingFace traces repo as private"}
+    )
+    upload_hf_episodes: str = field(
+        default="last",
+        metadata={"help": "Which episodes to include in HuggingFace traces upload: 'last' or 'all'"}
+    )
+    upload_forced_update: bool = field(
+        default=False,
+        metadata={"help": "Allow overwriting existing Supabase result records for the same job"}
+    )
+
 @dataclass
 class ConsolidateArgs:
     consolidate_input: Optional[str] = field(
