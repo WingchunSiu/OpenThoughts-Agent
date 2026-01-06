@@ -28,29 +28,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_EXPERIMENTS_DIR = REPO_ROOT / "eval_runs"
 DEFAULT_ENDPOINT = "vllm_endpoint.json"
 
-# Fields from vllm_server config that we handle specially (not passed through to vLLM)
-_OUR_FIELDS = {"num_replicas", "time_limit", "endpoint_json_path", "model_path"}
-
-# Fields that map to different vLLM CLI arg names
-_FIELD_RENAMES = {
-    "model_path": "model",
-}
-
-# Boolean flags (passed as --flag without value when True)
-_BOOLEAN_FLAGS = {
-    "enable_chunked_prefill",
-    "enable_prefix_caching",
-    "enable_auto_tool_choice",
-    "trust_remote_code",
-    "disable_log_requests",
-    "enable_reasoning",
-}
-
-# Fields that are environment variables, not CLI args
-_ENV_VAR_FIELDS = {
-    "enable_expert_parallel": "VLLM_ENABLE_EXPERT_PARALLEL",
-    "use_deep_gemm": "VLLM_USE_DEEP_GEMM",
-}
+# Import shared utilities for local runners
+from hpc.local_runner_utils import (
+    ManagedProcess,
+    maybe_int,
+    start_ray,
+    start_vllm_controller,
+    wait_for_endpoint,
+    terminate_processes,
+    _build_vllm_cli_args,
+)
 
 
 def _resolve_jobs_dir_path(jobs_dir_value: Optional[str]) -> Path:
@@ -292,82 +279,6 @@ def _serialize_agent_kwargs(kwargs: dict) -> List[str]:
     return serialized
 
 
-class ManagedProcess:
-    def __init__(self, name: str, popen: subprocess.Popen):
-        self.name = name
-        self.proc = popen
-
-    def stop(self, timeout: float = 10.0) -> None:
-        if self.proc.poll() is not None:
-            return
-        try:
-            self.proc.terminate()
-            self.proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-
-
-def _maybe_int(value: object) -> Optional[int]:
-    if value in (None, "", "None"):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _build_vllm_cli_args(server_config: dict) -> tuple[List[str], dict[str, str]]:
-    """Convert vllm_server config dict to CLI args and env vars.
-
-    Returns:
-        Tuple of (cli_args list, env_vars dict)
-    """
-    cli_args: List[str] = []
-    env_vars: dict[str, str] = {}
-
-    for key, value in server_config.items():
-        # Skip our internal fields
-        if key in _OUR_FIELDS:
-            continue
-
-        # Skip None/empty values
-        if value is None or value == "":
-            continue
-
-        # Handle extra_args (already a list of CLI args)
-        if key == "extra_args":
-            if isinstance(value, list):
-                cli_args.extend(str(v) for v in value)
-            continue
-
-        # Handle env var fields
-        if key in _ENV_VAR_FIELDS:
-            if value:  # Only set if truthy
-                env_vars[_ENV_VAR_FIELDS[key]] = "1"
-            continue
-
-        # Rename field if needed
-        arg_name = _FIELD_RENAMES.get(key, key)
-
-        # Convert underscore to dash for CLI
-        arg_name = arg_name.replace("_", "-")
-
-        # Handle boolean flags
-        if key in _BOOLEAN_FLAGS:
-            if value:  # Only add flag if True
-                cli_args.append(f"--{arg_name}")
-            continue
-
-        # Handle regular key-value args
-        if isinstance(value, bool):
-            # Non-flag booleans: pass as true/false string
-            cli_args.extend([f"--{arg_name}", str(value).lower()])
-        else:
-            cli_args.extend([f"--{arg_name}", str(value)])
-
-    return cli_args, env_vars
-
-
 def _apply_datagen_defaults(args: argparse.Namespace) -> None:
     args._vllm_cli_args: List[str] = []
     args._vllm_env_vars: dict[str, str] = {}
@@ -388,13 +299,13 @@ def _apply_datagen_defaults(args: argparse.Namespace) -> None:
     if args.model is None:
         args.model = vllm_cfg.get("model_path") or engine_cfg.get("model")
 
-    tp_default = _maybe_int(vllm_cfg.get("tensor_parallel_size")) or _maybe_int(
+    tp_default = maybe_int(vllm_cfg.get("tensor_parallel_size")) or maybe_int(
         backend_cfg.get("tensor_parallel_size")
     )
-    pp_default = _maybe_int(vllm_cfg.get("pipeline_parallel_size")) or _maybe_int(
+    pp_default = maybe_int(vllm_cfg.get("pipeline_parallel_size")) or maybe_int(
         backend_cfg.get("pipeline_parallel_size")
     )
-    dp_default = _maybe_int(vllm_cfg.get("data_parallel_size")) or _maybe_int(
+    dp_default = maybe_int(vllm_cfg.get("data_parallel_size")) or maybe_int(
         backend_cfg.get("data_parallel_size")
     )
 
@@ -406,109 +317,15 @@ def _apply_datagen_defaults(args: argparse.Namespace) -> None:
         args.data_parallel_size = dp_default
 
     if args.ray_port is None:
-        args.ray_port = _maybe_int(backend_cfg.get("ray_port")) or args.ray_port
+        args.ray_port = maybe_int(backend_cfg.get("ray_port")) or args.ray_port
     if args.api_port is None:
-        args.api_port = _maybe_int(backend_cfg.get("api_port")) or args.api_port
+        args.api_port = maybe_int(backend_cfg.get("api_port")) or args.api_port
 
     # Build CLI args and env vars from vllm_server config (pass-through to vLLM)
     merged_cfg = {**engine_cfg, **vllm_cfg}
     cli_args, env_vars = _build_vllm_cli_args(merged_cfg)
     args._vllm_cli_args = cli_args
     args._vllm_env_vars = env_vars
-
-
-def _start_ray(args: argparse.Namespace, log_path: Path | None) -> ManagedProcess:
-    cmd = [
-        "ray",
-        "start",
-        "--head",
-        f"--node-ip-address={args.host}",
-        f"--port={args.ray_port}",
-        f"--num-gpus={args.gpus}",
-        f"--num-cpus={args.cpus}",
-        "--dashboard-host=0.0.0.0",
-        "--block",
-    ]
-    env = os.environ.copy()
-    stdout = stderr = None
-    if log_path:
-        log_file = open(log_path, "w", encoding="utf-8")
-        stdout = log_file
-        stderr = log_file
-    else:
-        log_file = None
-    popen = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, env=env)
-    process = ManagedProcess("ray", popen)
-    process._log_handle = log_file  # type: ignore[attr-defined]
-    return process
-
-
-def _start_vllm_controller(
-    args: argparse.Namespace,
-    endpoint_path: Path,
-    log_path: Path | None,
-) -> ManagedProcess:
-    env = os.environ.copy()
-    # Set model path in env (controller reads this)
-    env["VLLM_MODEL_PATH"] = args.model
-
-    # Add any env vars from datagen config (e.g., VLLM_ENABLE_EXPERT_PARALLEL)
-    env.update(getattr(args, "_vllm_env_vars", {}))
-
-    # Build command with core args
-    cmd = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "vllm" / "start_vllm_ray_controller.py"),
-        "--ray-address",
-        f"{args.host}:{args.ray_port}",
-        "--host",
-        args.host,
-        "--port",
-        str(args.api_port),
-        "--model",
-        args.model,
-        "--tensor-parallel-size",
-        str(args.tensor_parallel_size),
-        "--pipeline-parallel-size",
-        str(args.pipeline_parallel_size),
-        "--data-parallel-size",
-        str(args.data_parallel_size),
-        "--endpoint-json",
-        str(endpoint_path),
-    ]
-
-    # Add served model name if set
-    served_model_id = getattr(args, "_served_model_id", None)
-    if served_model_id:
-        cmd.extend(["--served-model-name", served_model_id])
-
-    # Add pass-through vLLM CLI args from datagen config
-    vllm_cli_args = getattr(args, "_vllm_cli_args", [])
-    if vllm_cli_args:
-        cmd.extend(vllm_cli_args)
-
-    stdout = stderr = None
-    if log_path:
-        log_file = open(log_path, "w", encoding="utf-8")
-        stdout = log_file
-        stderr = log_file
-    else:
-        log_file = None
-    popen = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, env=env)
-    process = ManagedProcess("vllm_controller", popen)
-    process._log_handle = log_file  # type: ignore[attr-defined]
-    return process
-
-
-def _wait_for_endpoint(endpoint_path: Path, controller: ManagedProcess, timeout: int = 300) -> None:
-    start = time.time()
-    while time.time() - start < timeout:
-        if controller.proc.poll() is not None:
-            raise RuntimeError("vLLM controller exited before writing the endpoint JSON. Check logs.")
-        if endpoint_path.exists():
-            return
-        time.sleep(2)
-    raise TimeoutError(f"Timed out waiting for endpoint JSON at {endpoint_path}")
 
 
 def _run_endpoint_health_check(
@@ -671,16 +488,6 @@ def _run_harbor_cli(cmd: List[str], log_path: Path | None) -> None:
     run_harbor_cli(cmd, log_path)
 
 
-def _terminate(processes: Iterable[ManagedProcess]) -> None:
-    for proc in processes:
-        try:
-            proc.stop()
-        finally:
-            log_handle = getattr(proc, "_log_handle", None)
-            if log_handle:
-                log_handle.close()
-
-
 def main() -> None:
     args = _parse_args()
     _apply_datagen_defaults(args)
@@ -750,20 +557,43 @@ def main() -> None:
 
     def _handle_signal(signum, _frame):
         print(f"\nSignal {signum} received; shutting down...", file=sys.stderr)
-        _terminate(processes)
+        terminate_processes(processes)
         subprocess.run(["ray", "stop", "--force"], check=False)
         sys.exit(1)
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    ray_proc = _start_ray(args, ray_log)
+    controller_script = REPO_ROOT / "scripts" / "vllm" / "start_vllm_ray_controller.py"
+
+    ray_proc = start_ray(
+        host=args.host,
+        ray_port=args.ray_port,
+        num_gpus=args.gpus,
+        num_cpus=args.cpus,
+        log_path=ray_log,
+    )
     processes.append(ray_proc)
-    vllm_proc = _start_vllm_controller(args, endpoint_json, controller_log)
+
+    vllm_proc = start_vllm_controller(
+        model=args.model,
+        host=args.host,
+        ray_port=args.ray_port,
+        api_port=args.api_port,
+        tensor_parallel_size=args.tensor_parallel_size,
+        pipeline_parallel_size=args.pipeline_parallel_size,
+        data_parallel_size=args.data_parallel_size,
+        endpoint_path=endpoint_json,
+        controller_script=controller_script,
+        log_path=controller_log,
+        served_model_name=getattr(args, "_served_model_id", None),
+        extra_cli_args=getattr(args, "_vllm_cli_args", []),
+        extra_env_vars=getattr(args, "_vllm_env_vars", {}),
+    )
     processes.append(vllm_proc)
 
     try:
-        _wait_for_endpoint(endpoint_json, vllm_proc)
+        wait_for_endpoint(endpoint_json, vllm_proc)
         _run_endpoint_health_check(endpoint_json, args.health_max_attempts, args.health_retry_delay)
         endpoint_meta = _load_endpoint_metadata(endpoint_json)
         harbor_cmd = _build_harbor_command(args, dataset_label, endpoint_meta)
@@ -774,7 +604,7 @@ def main() -> None:
         elif args.upload_to_database:
             print("[upload] --upload-to-database ignored because --dry-run was requested.")
     finally:
-        _terminate(processes[::-1])
+        terminate_processes(processes[::-1])
         subprocess.run(["ray", "stop", "--force"], check=False)
 
 

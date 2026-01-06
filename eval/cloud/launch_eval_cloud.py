@@ -95,27 +95,32 @@ class PeriodicLogSync:
         """Perform a single log sync."""
         try:
             # Ensure local directory exists
-            Path(self.local_log_dir).mkdir(parents=True, exist_ok=True)
+            local_path = Path(self.local_log_dir)
+            local_path.mkdir(parents=True, exist_ok=True)
 
-            # Use rsync via sky exec for efficient incremental sync
-            sync_cmd = [
-                "sky", "exec", self.cluster_name,
-                f"rsync -avz --ignore-missing-args {self.remote_log_dir}/ /dev/stdout 2>/dev/null | head -5 || true"
+            # Use direct rsync via SSH (SkyPilot configures SSH with cluster name as host)
+            # Note: "sky rsync" command doesn't exist; use native rsync
+            rsync_cmd = [
+                "rsync", "-avz", "--ignore-missing-args",
+                f"{self.cluster_name}:{self.remote_log_dir}/",
+                f"{self.local_log_dir}/",
             ]
-            # Actually use sky rsync for proper file transfer
-            rsync_cmd = f"sky rsync {self.cluster_name}:{self.remote_log_dir}/ {self.local_log_dir}/"
             result = subprocess.run(
                 rsync_cmd,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=60,
             )
             if result.returncode == 0:
                 # Check what files we got
-                log_files = list(Path(self.local_log_dir).glob("*.log"))
+                log_files = list(local_path.glob("**/*.log"))
                 if log_files:
                     print(f"[log-sync] Synced {len(log_files)} log file(s) to {self.local_log_dir}")
+            elif "No such file" in result.stderr or "does not exist" in result.stderr.lower():
+                pass  # Remote directory doesn't exist yet, this is normal early in job lifecycle
+            else:
+                # Non-zero return but not a "file not found" error - log it
+                print(f"[log-sync] Warning: rsync returned {result.returncode}", file=sys.stderr)
         except subprocess.TimeoutExpired:
             pass  # Sync took too long, skip this iteration
         except Exception as e:
@@ -123,8 +128,8 @@ class PeriodicLogSync:
 
     def _run(self) -> None:
         """Background thread loop."""
-        # Initial delay to let the job start
-        time.sleep(30)
+        # Short initial delay to let the job start (5s instead of 30s for faster feedback)
+        time.sleep(5)
         while not self._stop_event.is_set():
             self._sync_logs()
             # Wait for interval or until stopped
@@ -552,26 +557,61 @@ def main() -> None:
         except Exception as e:
             print(f"[cloud] Warning: Could not check job status: {e}", file=sys.stderr)
 
-        # If job failed, try to retrieve vLLM logs for diagnostics
+        # If job failed, try to retrieve logs for diagnostics using direct rsync
+        # (sky exec submits Ray jobs which fail when raylet is dead)
         if job_failed and cluster_for_sync:
-            print("[cloud] Fetching vLLM and Ray logs for diagnostics...")
+            print("[cloud] Fetching logs for diagnostics via rsync...")
             try:
-                # vLLM controller log is in experiments_dir/logs/
-                vllm_log_path = f"{remote_output_dir}/logs/vllm_controller.log"
-                vllm_log_cmd = f"sky exec {cluster_for_sync} 'cat {vllm_log_path} 2>/dev/null || echo \"No vLLM controller log found at {vllm_log_path}\"'"
-                print(f"[cloud-debug] vLLM Controller Log ({vllm_log_path}):")
-                subprocess.run(vllm_log_cmd, shell=True)
+                # Sync logs directory to local (direct rsync, not "sky rsync" which doesn't exist)
+                local_logs_dir = Path(args.local_sync_dir) / "logs"
+                local_logs_dir.mkdir(parents=True, exist_ok=True)
+                remote_logs_dir = f"{remote_output_dir}/logs"
 
-                # Ray log is in experiments_dir/logs/
-                ray_log_path = f"{remote_output_dir}/logs/ray.log"
-                ray_log_cmd = f"sky exec {cluster_for_sync} 'tail -100 {ray_log_path} 2>/dev/null || echo \"No Ray log found at {ray_log_path}\"'"
-                print(f"\n[cloud-debug] Ray Log (last 100 lines):")
-                subprocess.run(ray_log_cmd, shell=True)
+                rsync_cmd = [
+                    "rsync", "-avz", "--ignore-missing-args",
+                    f"{cluster_for_sync}:{remote_logs_dir}/",
+                    f"{local_logs_dir}/",
+                ]
+                result = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=60)
 
-                # Also check system raylet logs
-                raylet_cmd = f"sky exec {cluster_for_sync} 'tail -50 /tmp/ray/session_latest/logs/raylet.out 2>/dev/null || echo \"No raylet.out found\"'"
-                print(f"\n[cloud-debug] Ray Raylet System Log (last 50 lines):")
-                subprocess.run(raylet_cmd, shell=True)
+                if result.returncode == 0:
+                    # Display log contents
+                    vllm_log = local_logs_dir / "vllm_controller.log"
+                    if vllm_log.exists():
+                        print(f"\n[cloud-debug] vLLM Controller Log ({vllm_log}):")
+                        print(vllm_log.read_text()[-5000:])  # Last 5KB
+                    else:
+                        print(f"[cloud-debug] No vLLM controller log found")
+
+                    ray_log = local_logs_dir / "ray.log"
+                    if ray_log.exists():
+                        content = ray_log.read_text()
+                        lines = content.splitlines()[-100:]  # Last 100 lines
+                        print(f"\n[cloud-debug] Ray Log (last 100 lines):")
+                        print("\n".join(lines))
+                    else:
+                        print(f"[cloud-debug] No Ray log found")
+                else:
+                    print(f"[cloud-debug] rsync failed: {result.stderr}", file=sys.stderr)
+
+                # Also try to sync Ray system logs
+                ray_system_dir = local_logs_dir / "ray_system"
+                ray_system_dir.mkdir(parents=True, exist_ok=True)
+                ray_sys_cmd = [
+                    "rsync", "-avz", "--ignore-missing-args",
+                    f"{cluster_for_sync}:/tmp/ray/session_latest/logs/",
+                    f"{ray_system_dir}/",
+                ]
+                subprocess.run(ray_sys_cmd, capture_output=True, timeout=30)
+
+                raylet_log = ray_system_dir / "raylet.out"
+                if raylet_log.exists():
+                    content = raylet_log.read_text()
+                    lines = content.splitlines()[-50:]  # Last 50 lines
+                    print(f"\n[cloud-debug] Ray Raylet System Log (last 50 lines):")
+                    print("\n".join(lines))
+            except subprocess.TimeoutExpired:
+                print(f"[cloud] Warning: Log retrieval timed out", file=sys.stderr)
             except Exception as e:
                 print(f"[cloud] Warning: Could not fetch diagnostic logs: {e}", file=sys.stderr)
 
@@ -585,8 +625,9 @@ def main() -> None:
 
     # 2. Sync trace_jobs directory (Harbor job outputs - the actual results)
     # Harbor puts outputs in ./trace_jobs relative to workdir
+    # Sync into the project subdirectory, not the base cloud_runs dir
     trace_jobs_remote = f"{remote_workdir}/trace_jobs"
-    trace_jobs_local = str(Path(args.local_sync_dir).parent / "trace_jobs")
+    trace_jobs_local = str(Path(args.local_sync_dir) / "trace_jobs")
     print(f"[cloud-sync] Also syncing Harbor trace_jobs from {trace_jobs_remote}...")
     sync_eval_outputs(
         cluster_name=cluster_for_sync,

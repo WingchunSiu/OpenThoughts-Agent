@@ -88,8 +88,8 @@ def run_harbor_cli(cmd: List[str], log_path: Optional[Path] = None) -> int:
         subprocess.CalledProcessError: If Harbor exits with non-zero status.
     """
     if log_path:
-        # File-based output - no PTY needed
-        with open(log_path, "w", encoding="utf-8") as harbor_log_file:
+        # File-based output - no PTY needed (line-buffered for real-time tail access)
+        with open(log_path, "w", encoding="utf-8", buffering=1) as harbor_log_file:
             print(f"Streaming Harbor output to {log_path}")
             result = subprocess.run(
                 cmd,

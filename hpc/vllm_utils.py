@@ -34,8 +34,21 @@ if TYPE_CHECKING:
     from hpc.ray_utils import RayCluster
 
 
-# Fields from vllm_server config that are for our system, not vLLM
-_OUR_FIELDS = {"num_replicas", "time_limit", "endpoint_json_path"}
+# Fields from vllm_server/engine config that are for our system, not vLLM
+# These are either internal fields, Harbor/Daytona-specific fields, or handled explicitly
+_OUR_FIELDS = {
+    # Internal/system fields
+    "num_replicas",
+    "time_limit",
+    "endpoint_json_path",
+    "model_path",
+    # Harbor/Daytona engine-specific fields (not vLLM args)
+    "type",                   # engine type (e.g., "vllm_local")
+    "max_output_tokens",      # Harbor config, not vLLM
+    "healthcheck_interval",   # Harbor config, not vLLM
+    "vllm_local",            # Daytona backend config
+    "model",                  # handled separately via --model
+}
 
 # Fields that map to different vLLM CLI arg names
 _FIELD_RENAMES = {
@@ -188,10 +201,10 @@ class VLLMServer:
         print(f"  Ray Address: {self.ray_cluster.address}")
         print(f"============================")
 
-        # Open log file if path provided
+        # Open log file if path provided (line-buffered for real-time tail access)
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            self._log_file = open(self.log_path, "w")
+            self._log_file = open(self.log_path, "w", buffering=1)  # Line buffering
             stdout_dest = self._log_file
             stderr_dest = subprocess.STDOUT
         else:
@@ -232,6 +245,7 @@ class VLLMServer:
         # Set environment
         env = os.environ.copy()
         env["VLLM_MODEL_PATH"] = self.config.model_path
+        env["PYTHONUNBUFFERED"] = "1"  # Ensure real-time log output
         if self.config.server_config:
             env.update(extra_env_vars)
 
