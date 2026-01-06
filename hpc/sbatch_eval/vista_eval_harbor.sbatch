@@ -22,9 +22,9 @@ module load cuda/12.8
 module load tacc-apptainer
 set -u
 
-if [ -n "$DCFT_PRIVATE" ]; then
+if [ -n "${DCFT_PRIVATE:-}" ]; then
   WORKDIR="$DCFT_PRIVATE"
-elif [ -n "$DCFT" ]; then
+elif [ -n "${DCFT:-}" ]; then
   WORKDIR="$DCFT"
 else
   WORKDIR="$PWD"
