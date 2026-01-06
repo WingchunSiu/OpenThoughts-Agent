@@ -89,7 +89,13 @@ def _sanitize_hf_repo_id(repo_id: str, max_length: int = 96) -> str:
 
 
 def _derive_default_hf_repo_id(args: argparse.Namespace, job_name: str) -> str:
-    benchmark_repo = args.eval_benchmark_repo or ""
+    # Use shared utility for benchmark derivation
+    from hpc.launch_utils import derive_benchmark_repo
+    benchmark_repo = derive_benchmark_repo(
+        harbor_dataset=args.dataset,
+        dataset_path=args.dataset_path,
+        explicit_repo=getattr(args, "eval_benchmark_repo", None),
+    )
     if "/" in benchmark_repo:
         org = benchmark_repo.split("/", 1)[0]
     else:
@@ -113,7 +119,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-env", default="daytona", help="Harbor environment name.")
     parser.add_argument("--n-concurrent", type=int, default=16, help="Concurrent eval trials.")
     parser.add_argument("--n-attempts", type=int, default=3, help="Retries (Harbor --n-attempts flag).")
-    parser.add_argument("--eval-benchmark-repo", required=True, help="Supabase benchmark repo id.")
     parser.add_argument(
         "--experiments-dir",
         default=str(DEFAULT_EXPERIMENTS_DIR),
@@ -374,9 +379,13 @@ def _maybe_upload_results(args: argparse.Namespace) -> None:
         print(f"[upload] Expected Harbor job directory {run_dir} does not exist; upload skipped.")
         return
 
-    # Use shared upload function from hpc.launch_utils
-    from hpc.launch_utils import sync_eval_to_database
+    # Use shared utilities from hpc.launch_utils
+    from hpc.launch_utils import sync_eval_to_database, derive_benchmark_repo
 
+    benchmark_name = derive_benchmark_repo(
+        harbor_dataset=args.dataset,
+        dataset_path=args.dataset_path,
+    )
     hf_repo_id = args.upload_hf_repo or _derive_default_hf_repo_id(args, job_name)
     if hf_repo_id:
         hf_repo_id = _sanitize_hf_repo_id(hf_repo_id)
@@ -387,7 +396,7 @@ def _maybe_upload_results(args: argparse.Namespace) -> None:
         error_mode=args.upload_error_mode,
         agent_name=args.agent,
         model_name=args.model,
-        benchmark_name=args.dataset or args.dataset_path,
+        benchmark_name=benchmark_name,
         register_benchmark=True,
         hf_repo_id=hf_repo_id,
         hf_private=args.upload_hf_private,

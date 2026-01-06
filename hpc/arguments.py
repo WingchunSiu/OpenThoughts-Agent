@@ -584,10 +584,6 @@ class DataGenArgs:
         default=None,
         metadata={"help": "Harbor registry dataset slug such as 'terminal-bench@2.0'"}
     )
-    eval_benchmark_repo: Optional[str] = field(
-        default=None,
-        metadata={"help": "Benchmark HF dataset repo used for Supabase registration"}
-    )
 @dataclass
 class ConsolidateArgs:
     consolidate_input: Optional[str] = field(

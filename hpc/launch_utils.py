@@ -844,6 +844,44 @@ def construct_sbatch_script(exp_args: dict) -> str:
 
 
 # =============================================================================
+# Benchmark Derivation Utilities
+# =============================================================================
+
+
+def derive_benchmark_repo(
+    harbor_dataset: Optional[str] = None,
+    dataset_path: Optional[PathInput] = None,
+    explicit_repo: Optional[str] = None,
+) -> str:
+    """Derive benchmark repository identifier from dataset info.
+
+    Single source of truth for deriving eval_benchmark_repo. Used by both
+    HPC eval jobs and local eval runner.
+
+    Args:
+        harbor_dataset: Harbor dataset slug (e.g., "terminal-bench@2.0").
+        dataset_path: Path to a local dataset directory.
+        explicit_repo: Explicitly provided benchmark repo (takes precedence).
+
+    Returns:
+        Normalized benchmark repository identifier string (filesystem-safe).
+    """
+    raw: Optional[str] = None
+    if explicit_repo:
+        raw = explicit_repo
+    elif harbor_dataset:
+        raw = harbor_dataset
+    elif dataset_path:
+        raw = Path(dataset_path).name
+
+    if not raw:
+        return "unknown-benchmark"
+
+    # Normalize using existing sanitize utility
+    return sanitize_repo_for_job(raw)
+
+
+# =============================================================================
 # Upload Utilities
 # =============================================================================
 
@@ -1080,6 +1118,8 @@ __all__ = [
     "construct_sbatch_script",
     "extract_template_keys",
     "fill_template",
+    # Benchmark derivation
+    "derive_benchmark_repo",
     # Upload utilities
     "upload_traces_to_hf",
     "sync_eval_to_database",

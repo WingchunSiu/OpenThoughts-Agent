@@ -137,11 +137,20 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
             "Eval jobs require either --harbor-dataset or --trace-input-path to specify tasks."
         )
 
-    benchmark_repo = exp_args.get("eval_benchmark_repo")
-    if not benchmark_repo:
+    # Derive eval_benchmark_repo using shared utility
+    from hpc.launch_utils import derive_benchmark_repo
+    benchmark_repo = derive_benchmark_repo(
+        harbor_dataset=exp_args.get("harbor_dataset"),
+        dataset_path=exp_args.get("_eval_dataset_path_resolved"),
+        explicit_repo=exp_args.get("eval_benchmark_repo"),
+    )
+    if benchmark_repo == "unknown-benchmark":
         raise ValueError(
-            "Eval jobs require --eval-benchmark-repo so Supabase rows can be created."
+            "Unable to derive eval_benchmark_repo. Provide "
+            "--harbor-dataset or --trace-input-path."
         )
+    exp_args["eval_benchmark_repo"] = benchmark_repo
+    print(f"[eval] Using benchmark repo: {benchmark_repo}")
 
     model_name = exp_args.get("trace_model")
     if not model_name:
