@@ -29,8 +29,8 @@ class HPC(BaseModel):
     total_partition_nodes: int
     train_sbatch_filename: str
     node_exclusion_list: str = ""
-    qos: str = "normal"
-    pretok_qos: str = "normal"
+    qos: str = ""  # Most clusters don't use QOS; set explicitly where needed
+    pretok_qos: str = ""
     pretok_cpus_per_node: int = 0  # will use all available cpus
     pretok_time_limit: str = "24:00:00"
     pretok_partition: str = ""
