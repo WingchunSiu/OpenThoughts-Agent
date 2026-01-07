@@ -686,6 +686,50 @@ def load_harbor_config(harbor_config_path: str) -> Dict[str, Any]:
         return {}
 
 
+def get_harbor_env_from_config(
+    harbor_config: Union[str, Dict[str, Any], None],
+    default: str = "daytona",
+) -> str:
+    """Extract Harbor environment type from config.
+
+    Reads the `environment.type` field from Harbor YAML config to determine
+    the sandbox backend (daytona, docker, modal).
+
+    Args:
+        harbor_config: Either a path to Harbor config YAML, a parsed config dict,
+                      or None.
+        default: Default environment type if not found in config (default: "daytona").
+
+    Returns:
+        Environment type string: "daytona", "docker", or "modal".
+
+    Examples:
+        >>> get_harbor_env_from_config("hpc/harbor_yaml/trace_docker_32concurrency_ctx131k.yaml")
+        'docker'
+        >>> get_harbor_env_from_config({"environment": {"type": "daytona"}})
+        'daytona'
+        >>> get_harbor_env_from_config(None)
+        'daytona'
+    """
+    if harbor_config is None:
+        return default
+
+    # Load config if path provided
+    if isinstance(harbor_config, str):
+        config_dict = load_harbor_config(harbor_config)
+    else:
+        config_dict = harbor_config
+
+    # Extract environment.type
+    env_config = config_dict.get("environment") or {}
+    env_type = env_config.get("type")
+
+    if env_type and isinstance(env_type, str):
+        return env_type.lower()
+
+    return default
+
+
 # ---------------------------------------------------------------------------
 # LocalHarborRunner base class
 # ---------------------------------------------------------------------------
@@ -1055,6 +1099,7 @@ __all__ = [
     "apply_datagen_defaults",
     "setup_docker_runtime_if_needed",
     "load_harbor_config",
+    "get_harbor_env_from_config",
     "resolve_jobs_dir_path",
     # Endpoint utilities
     "run_endpoint_health_check",

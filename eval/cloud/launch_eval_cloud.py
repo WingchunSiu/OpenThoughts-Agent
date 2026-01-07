@@ -114,12 +114,15 @@ class EvalCloudLauncher(CloudLauncher):
 
         cmd.extend([
             "--agent", args.agent,
-            "--harbor_env", args.harbor_env,
             "--n_concurrent", str(args.n_concurrent),
             "--n_attempts", str(args.n_attempts),
             "--gpus", str(args.gpus),
             "--experiments_dir", remote_output_dir,
         ])
+
+        # Only pass --harbor_env if explicitly specified (otherwise infer from config)
+        if args.harbor_env:
+            cmd.extend(["--harbor_env", args.harbor_env])
 
         if args.job_name:
             cmd.extend(["--job_name", args.job_name])

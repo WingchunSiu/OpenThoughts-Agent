@@ -88,14 +88,15 @@ def add_harbor_args(parser: ArgTarget, *, config_required: bool = True) -> None:
 def add_harbor_env_arg(
     parser: ArgTarget,
     *,
-    default: str = "daytona",
+    default: Optional[str] = None,
     legacy_names: Optional[List[str]] = None,
 ) -> None:
     """Add Harbor environment backend argument (unified name).
 
     Args:
         parser: ArgumentParser or argument group to add arguments to.
-        default: Default environment backend (default "daytona").
+        default: Default environment backend. If None (default), the environment
+                will be inferred from the Harbor config YAML's `environment.type` field.
         legacy_names: Optional list of legacy argument names to support as hidden aliases.
     """
     _add_arg_with_alias(
@@ -103,8 +104,9 @@ def add_harbor_env_arg(
         "--harbor_env",
         "--harbor-env",
         default=default,
-        choices=["daytona", "docker", "modal"],
-        help="Harbor environment backend: daytona (cloud), docker (local/podman), modal.",
+        choices=["daytona", "docker", "modal", None],
+        help="Harbor environment backend: daytona (cloud), docker (local/podman), modal. "
+             "If not specified, inferred from Harbor config YAML.",
     )
 
     # Support legacy names as hidden aliases for backwards compatibility

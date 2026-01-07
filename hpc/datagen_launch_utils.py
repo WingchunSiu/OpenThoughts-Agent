@@ -28,6 +28,7 @@ from hpc.launch_utils import (
     hosted_vllm_alias,
     strip_hosted_vllm_alias,
 )
+from hpc.local_runner_utils import get_harbor_env_from_config
 
 # Backward compatibility aliases
 _normalize_cli_args = normalize_cli_args
@@ -392,7 +393,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             model=harbor_model_name,
             served_model_id=served_model_id,
             agent=exp_args.get("trace_agent_name") or "",
-            trace_env=exp_args.get("trace_env") or "daytona",
+            trace_env=exp_args.get("trace_env") or get_harbor_env_from_config(harbor_config_resolved),
             n_concurrent=int(exp_args.get("trace_n_concurrent") or 64),
             n_attempts=int(exp_args.get("trace_n_attempts") or 3),
             agent_kwargs=agent_kwargs,
