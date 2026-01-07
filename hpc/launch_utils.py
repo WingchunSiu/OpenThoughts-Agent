@@ -981,6 +981,8 @@ def sync_eval_to_database(
     agent_name: Optional[str] = None,
     model_name: Optional[str] = None,
     benchmark_name: Optional[str] = None,
+    benchmark_version_hash: Optional[str] = None,
+    dataset_path: Optional[str] = None,
     register_benchmark: bool = True,
     hf_repo_id: Optional[str] = None,
     hf_private: bool = False,
@@ -1006,6 +1008,10 @@ def sync_eval_to_database(
         agent_name: Agent name (auto-detected if not provided).
         model_name: Model name (auto-detected if not provided).
         benchmark_name: Benchmark name (auto-detected if not provided).
+        benchmark_version_hash: Version hash for the benchmark. If not provided:
+            - Auto-detected from dataset_path if it contains HF cache-style "snapshots/" path
+            - Otherwise, generated from benchmark_name using SHA-256
+        dataset_path: Path to the dataset (used for auto-detecting benchmark_version_hash).
         register_benchmark: Auto-register benchmark if not found.
         hf_repo_id: HuggingFace repository ID for traces. If None, skips HF upload.
         hf_private: Whether to create a private HF repository.
@@ -1025,6 +1031,7 @@ def sync_eval_to_database(
         RuntimeError: If the database upload module is unavailable.
     """
     import getpass
+    import hashlib
 
     if dry_run:
         print(f"[upload] DRY RUN: Would sync eval results from {job_dir} to database")
@@ -1047,6 +1054,24 @@ def sync_eval_to_database(
         print("[upload] HF repo requested but no token provided; skipping HF upload step.")
         hf_repo_id = None
 
+    # Generate benchmark_version_hash if not provided
+    resolved_version_hash = benchmark_version_hash
+    if not resolved_version_hash:
+        # Try to extract from dataset_path if it's an HF cache path
+        if dataset_path and "snapshots/" in dataset_path:
+            snapshot_part = dataset_path.split("snapshots/")[1]
+            raw_hash = snapshot_part.strip("/").split("/")[0]
+            if len(raw_hash) == 40:
+                # Convert git hash to SHA-256 for consistency
+                resolved_version_hash = hashlib.sha256(raw_hash.encode()).hexdigest()
+            else:
+                resolved_version_hash = raw_hash
+            print(f"[upload] Auto-detected benchmark_version_hash from path: {resolved_version_hash[:16]}...")
+        elif benchmark_name:
+            # Generate deterministic hash from benchmark name
+            resolved_version_hash = hashlib.sha256(benchmark_name.encode()).hexdigest()
+            print(f"[upload] Generated benchmark_version_hash from name: {resolved_version_hash[:16]}...")
+
     _ensure_database_module_path()
     try:
         from unified_db.utils import upload_eval_results
@@ -1064,6 +1089,7 @@ def sync_eval_to_database(
         agent_name=agent_name,
         model_name=model_name,
         benchmark_name=benchmark_name,
+        benchmark_version_hash=resolved_version_hash,
         register_benchmark=register_benchmark,
         hf_repo_id=hf_repo_id,
         hf_private=hf_private,
