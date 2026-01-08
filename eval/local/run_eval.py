@@ -76,7 +76,7 @@ class EvalRunner(LocalHarborRunner):
         if self.args.harbor_env:
             return self.args.harbor_env
         # Infer from harbor config if not explicitly specified
-        from hpc.local_runner_utils import get_harbor_env_from_config
+        from hpc.harbor_utils import get_harbor_env_from_config
         return get_harbor_env_from_config(self.args.harbor_config)
 
     def get_dataset_label(self) -> str:

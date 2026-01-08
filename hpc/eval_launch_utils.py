@@ -447,54 +447,40 @@ class EvalJobRunner:
 
     def _run_harbor(self, endpoint: Optional[str]) -> int:
         """Execute the Harbor CLI."""
-        cmd = [
-            "harbor",
-            "jobs",
-            "start",
-            "--config",
-            self.config.harbor_config,
-            "--job-name",
-            self.config.job_name,
-            "--agent",
-            self.config.agent,
-            "--model",
-            self.config.model,
-            "--env",
-            self.config.eval_env,
-            "--n-concurrent",
-            str(self.config.n_concurrent),
-            "--n-attempts",
-            str(self.config.n_attempts),
-        ]
+        from hpc.harbor_utils import build_harbor_command, load_harbor_config
 
-        if self.config.dataset:
-            cmd.extend(["--dataset", self.config.dataset])
-        elif self.config.dataset_path:
-            cmd.extend(["-p", self.config.dataset_path])
-
-        # Build agent kwargs
-        agent_kwargs = dict(self.config.agent_kwargs)
+        # Build endpoint metadata for vLLM
+        endpoint_meta = None
         if endpoint:
-            agent_kwargs["api_base"] = endpoint
-            metrics_endpoint = endpoint.replace("/v1", "/metrics")
-            agent_kwargs["metrics_endpoint"] = metrics_endpoint
+            endpoint_meta = {
+                "api_base": endpoint,
+                "metrics_endpoint": endpoint.replace("/v1", "/metrics"),
+            }
 
-        for key, value in agent_kwargs.items():
-            if isinstance(value, (dict, list)):
-                cmd.extend(["--agent-kwarg", f"{key}={json.dumps(value)}"])
-            else:
-                cmd.extend(["--agent-kwarg", f"{key}={value}"])
+        # Load harbor config data for agent kwargs extraction
+        harbor_config_data = load_harbor_config(self.config.harbor_config)
 
         # Set jobs_dir inside experiments folder (not repo root)
         jobs_dir = str(Path(self.config.experiments_dir) / "trace_jobs")
-        cmd.extend(["--jobs-dir", jobs_dir])
 
-        # Standard export flags
-        cmd.extend([
-            "--export-traces",
-            "--export-verifier-metadata",
-            "--export-episodes", "last",
-        ])
+        # Build command using shared utility
+        cmd = build_harbor_command(
+            harbor_binary="harbor",
+            harbor_config_path=self.config.harbor_config,
+            harbor_config_data=harbor_config_data,
+            job_name=self.config.job_name,
+            agent_name=self.config.agent,
+            model_name=self.config.model,
+            env_type=self.config.eval_env,
+            n_concurrent=self.config.n_concurrent,
+            n_attempts=self.config.n_attempts,
+            endpoint_meta=endpoint_meta,
+            agent_kwarg_overrides=[],  # Config agent_kwargs already in harbor YAML
+            harbor_extra_args=[],
+            dataset_slug=self.config.dataset,
+            dataset_path=self.config.dataset_path,
+            jobs_dir=jobs_dir,
+        )
 
         print(f"Running Harbor command: {' '.join(cmd)}")
         sys.stdout.flush()
