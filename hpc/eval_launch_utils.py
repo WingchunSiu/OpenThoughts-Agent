@@ -26,6 +26,8 @@ from hpc.launch_utils import (
     generate_served_model_id,
     hosted_vllm_alias,
     strip_hosted_vllm_alias,
+    setup_experiments_dir,
+    substitute_template,
 )
 
 # Import Harbor utilities from consolidated module
@@ -392,15 +394,10 @@ class EvalJobRunner:
 
     def _run_harbor(self, endpoint: Optional[str]) -> int:
         """Execute the Harbor CLI."""
-        from hpc.harbor_utils import build_harbor_command, load_harbor_config
+        from hpc.harbor_utils import build_harbor_command, load_harbor_config, build_endpoint_meta
 
         # Build endpoint metadata for vLLM
-        endpoint_meta = None
-        if endpoint:
-            endpoint_meta = {
-                "api_base": endpoint,
-                "metrics_endpoint": endpoint.replace("/v1", "/metrics"),
-            }
+        endpoint_meta = build_endpoint_meta(endpoint) if endpoint else None
 
         # Load harbor config data for agent kwargs extraction
         harbor_config_data = load_harbor_config(self.config.harbor_config)
@@ -455,14 +452,8 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
     print("\n=== EVAL MODE (Universal Launcher) ===")
 
     # Resolve paths
-    experiments_subdir = exp_args.get("experiments_dir") or "experiments"
-    experiments_abs = resolve_workspace_path(experiments_subdir)
-    sbatch_dir = experiments_abs / "sbatch"
-    sbatch_dir.mkdir(parents=True, exist_ok=True)
-    configs_dir = experiments_abs / "configs"
-    configs_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir = experiments_abs / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    exp_paths = setup_experiments_dir(exp_args)
+    experiments_subdir = str(exp_paths.root)  # String form for config dicts
 
     job_name = exp_args.get("job_name")
     if not job_name:
@@ -550,7 +541,7 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
     )
 
     # Write config JSON
-    config_path = configs_dir / f"{job_name}_eval_config.json"
+    config_path = exp_paths.configs / f"{job_name}_eval_config.json"
     config_path.write_text(json.dumps(asdict(job_config), indent=2))
 
     # Load and populate universal template
@@ -579,12 +570,10 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
         "config_path": str(config_path),
     }
 
-    sbatch_text = template_text
-    for key, value in substitutions.items():
-        sbatch_text = sbatch_text.replace("{" + key + "}", value)
+    sbatch_text = substitute_template(template_text, substitutions)
 
     # Write sbatch script
-    sbatch_output = sbatch_dir / f"{job_name}_eval.sbatch"
+    sbatch_output = exp_paths.sbatch / f"{job_name}_eval.sbatch"
     sbatch_output.write_text(sbatch_text)
     os.chmod(sbatch_output, 0o750)
 

@@ -6,38 +6,26 @@ import os
 from pathlib import Path
 from typing import Optional, Callable
 
-from hpc.launch_utils import sanitize_repo_for_job
+from hpc.launch_utils import sanitize_repo_for_job, setup_experiments_dir
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _derive_consolidate_preamble(hpc) -> str:
     """
-    Attempt to reuse the environment setup section from the HPC training template so
-    consolidate jobs inherit module loads and activation commands.
+    Generate environment setup preamble for consolidate jobs using HPC config.
     """
-    template_path = getattr(hpc, "train_sbatch_path", None)
-    if not template_path or not os.path.exists(template_path):
-        return ""
-
     lines: list[str] = []
-    started = False
-    try:
-        with open(template_path, "r") as fh:
-            for raw_line in fh:
-                line = raw_line.rstrip("\n")
-                if line.startswith("#SBATCH") or line.startswith("#!/bin/bash"):
-                    continue
-                striped = line.strip()
-                if not started:
-                    if not striped:
-                        continue
-                    started = True
-                if "sft/llamafactory" in striped or striped.startswith("CONFIG="):
-                    break
-                lines.append(line)
-    except Exception:
-        return ""
+
+    # Add module commands
+    module_commands = getattr(hpc, "get_module_commands", lambda: "")()
+    if module_commands and module_commands.strip():
+        lines.append(module_commands)
+
+    # Add conda activation
+    conda_activate = getattr(hpc, "conda_activate", "")
+    if conda_activate and conda_activate.strip():
+        lines.append(conda_activate)
 
     return "\n".join(lines).strip()
 
@@ -101,16 +89,13 @@ def launch_consolidate_job(
             job_name = job_name[:96]
         exp_args = update_exp_args_fn(exp_args, {"job_name": job_name})
 
-    experiments_dir = exp_args.get("experiments_dir") or "experiments"
-    logs_dir = os.path.join(experiments_dir, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    exp_args = update_exp_args_fn(exp_args, {"logs_dir": logs_dir})
+    exp_paths = setup_experiments_dir(exp_args, sbatch_subdir="sbatch_scripts")
+    experiments_dir = str(exp_paths.root)
+    exp_args = update_exp_args_fn(exp_args, {"logs_dir": str(exp_paths.logs)})
 
     hpc_name = getattr(hpc, "name", "").lower()
 
-    sbatch_dir = os.path.join(experiments_dir, "sbatch_scripts")
-    os.makedirs(sbatch_dir, exist_ok=True)
-    sbatch_path = os.path.join(sbatch_dir, f"{job_name}.sbatch")
+    sbatch_path = exp_paths.sbatch / f"{job_name}.sbatch"
 
     partition = exp_args.get("partition") or getattr(hpc, "partition", "")
     account = exp_args.get("account") or getattr(hpc, "account", "")
@@ -126,7 +111,7 @@ def launch_consolidate_job(
         # Enforce a soft cap below the scheduler limit to avoid rejections.
         mem_directive = "#SBATCH --mem=188000"
 
-    output_path = os.path.join(logs_dir, f"{job_name}_%j.out")
+    output_path = exp_paths.logs / f"{job_name}_%j.out"
     gpu_directive = "#SBATCH --gpus-per-node=1"
     if hpc_name in {"vista", "lonestar"}:
         gpu_directive = ""

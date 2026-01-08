@@ -22,9 +22,24 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
 if TYPE_CHECKING:
     import sky
 
-# Default Docker image configuration
-GHCR_IMAGE_BASE = "ghcr.io/open-thoughts/openthoughts-agent"
-DEFAULT_DOCKER_IMAGE = f"{GHCR_IMAGE_BASE}:gpu-1x"
+# Re-export Docker image utilities from docker_runtime for backwards compatibility
+from hpc.docker_runtime import (
+    GHCR_IMAGE_BASE,
+    DEFAULT_DOCKER_IMAGE,
+    normalize_docker_image,
+    select_docker_image,
+    get_docker_image_for_providers,
+)
+
+# Re-export path utilities from launch_utils for backwards compatibility
+from hpc.launch_utils import PROJECT_ROOT, repo_relative
+
+# Re-export CLI utilities for backwards compatibility
+from hpc.cli_utils import parse_comma_separated
+
+# Re-export HuggingFace utilities for backwards compatibility
+from hpc.hf_utils import is_hf_dataset_path
+
 DEFAULT_LOG_SYNC_INTERVAL = 120  # 2 minutes
 
 
@@ -120,16 +135,8 @@ PeriodicLogSync = PeriodicRemoteSync
 
 
 # ---------------------------------------------------------------------------
-# Docker Image Utilities
+# Path Utilities
 # ---------------------------------------------------------------------------
-
-
-def normalize_docker_image(image: str) -> str:
-    """Ensure docker image has the 'docker:' prefix required by SkyPilot."""
-    if not image.startswith("docker:"):
-        return f"docker:{image}"
-    return image
-
 
 def parse_gpu_count(accelerator: str) -> int:
     """Parse GPU count from accelerator spec.
@@ -152,67 +159,13 @@ def parse_gpu_count(accelerator: str) -> int:
     return 1
 
 
-def select_docker_image(
-    accelerator: str,
-    default_image: str = DEFAULT_DOCKER_IMAGE,
-    base_image: str = GHCR_IMAGE_BASE,
-) -> str:
-    """Select appropriate Docker image variant based on GPU count.
-
-    If accelerator specifies count > 1, selects gpu-4x or gpu-8x variants.
-
-    Args:
-        accelerator: SkyPilot accelerator spec (e.g., "H100:2", "A100:1")
-        default_image: Default image to use for single GPU
-        base_image: Base image name for constructing variants
-
-    Returns:
-        Docker image name (without docker: prefix)
-    """
-    count = parse_gpu_count(accelerator)
-
-    # Select appropriate variant
-    if count <= 1:
-        return f"{base_image}:gpu-1x"
-    elif count <= 4:
-        return f"{base_image}:gpu-4x"
-    else:
-        return f"{base_image}:gpu-8x"
-
-
-# ---------------------------------------------------------------------------
-# Path Utilities
-# ---------------------------------------------------------------------------
-
-
 def get_repo_root() -> Path:
-    """Get the repository root directory."""
-    # Navigate up from hpc/ to repo root
-    return Path(__file__).resolve().parents[1]
+    """Get the repository root directory.
 
-
-def repo_relative(path_str: str, repo_root: Optional[Path] = None) -> str:
-    """Convert an absolute path to repo-relative path.
-
-    Args:
-        path_str: Path to convert
-        repo_root: Repository root (auto-detected if not provided)
-
-    Returns:
-        POSIX-style path relative to repo root
-
-    Raises:
-        ValueError: If path is not inside the repo
+    Note: This is a backwards compatibility alias for PROJECT_ROOT.
+    Prefer using PROJECT_ROOT directly.
     """
-    if repo_root is None:
-        repo_root = get_repo_root()
-
-    abs_path = Path(path_str).expanduser().resolve()
-    try:
-        relative = abs_path.relative_to(repo_root)
-    except ValueError as exc:
-        raise ValueError(f"Path '{abs_path}' must live inside the repo ({repo_root})") from exc
-    return relative.as_posix()
+    return PROJECT_ROOT
 
 
 def get_remote_workdir(no_sync: bool) -> str:
@@ -228,16 +181,6 @@ def get_remote_workdir(no_sync: bool) -> str:
         return "/opt/openthoughts"
     else:
         return "/sky/workdir"
-
-
-# ---------------------------------------------------------------------------
-# Comma-Separated Parsing
-# ---------------------------------------------------------------------------
-
-
-def parse_comma_separated(value: str) -> List[str]:
-    """Parse comma-separated string into list of stripped values."""
-    return [v.strip() for v in value.split(",") if v.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -434,41 +377,6 @@ def fetch_diagnostic_logs(
 # ---------------------------------------------------------------------------
 # HuggingFace Dataset Pre-Extract Helper
 # ---------------------------------------------------------------------------
-
-
-def is_hf_dataset_path(path: str) -> bool:
-    """Check if path looks like a HuggingFace dataset identifier.
-
-    HF identifiers have format: org/repo-name or username/repo-name
-    They contain exactly one "/" and no path separators like "./" or "../"
-
-    Args:
-        path: Path string to check
-
-    Returns:
-        True if path appears to be an HF dataset identifier
-    """
-    if not path:
-        return False
-
-    # Must contain exactly one "/"
-    if path.count("/") != 1:
-        return False
-
-    # Must not look like a filesystem path
-    if path.startswith(("./", "../", "/", "~")):
-        return False
-
-    # Must not contain backslashes (Windows paths)
-    if "\\" in path:
-        return False
-
-    # Both parts must be non-empty
-    parts = path.split("/")
-    if not all(p.strip() for p in parts):
-        return False
-
-    return True
 
 
 def prepare_hf_dataset_for_sync(
@@ -775,29 +683,15 @@ class CloudLauncher:
 
     def get_docker_image(self, args: "argparse.Namespace", provider_configs: list) -> str | None:
         """Select and normalize Docker image based on args and provider support."""
-        # Check if custom image specified
-        if args.docker_image != DEFAULT_DOCKER_IMAGE:
-            base_image = args.docker_image
-        else:
-            base_image = select_docker_image(args.accelerator)
-
-        # Check provider docker support
-        if all(pc.supports_docker_runtime for pc in provider_configs):
-            return normalize_docker_image(base_image)
-        else:
-            no_docker = [pc.display_name for pc in provider_configs if not pc.supports_docker_runtime]
-            if len(no_docker) == len(provider_configs):
-                print(
-                    "[cloud] Note: Selected providers do not support Docker as runtime.",
-                    file=sys.stderr,
-                )
-                return None
-            else:
-                print(
-                    f"[cloud] Note: {', '.join(no_docker)} do not support Docker as runtime.",
-                    file=sys.stderr,
-                )
-                return normalize_docker_image(base_image)
+        provider_docker_support = {
+            pc.display_name: pc.supports_docker_runtime
+            for pc in provider_configs
+        }
+        return get_docker_image_for_providers(
+            args.docker_image,
+            args.accelerator,
+            provider_docker_support,
+        )
 
     # -------------------------------------------------------------------------
     # HuggingFace Dataset Handling

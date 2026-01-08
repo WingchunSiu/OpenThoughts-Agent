@@ -482,3 +482,43 @@ def create_vllm_server(
         log_path = Path(log_dir) / "vllm_controller.log"
 
     return VLLMServer(config=config, ray_cluster=ray_cluster, log_path=log_path)
+
+
+def run_endpoint_health_check(
+    endpoint_json: Path,
+    max_attempts: int,
+    retry_delay: int,
+    repo_root: Optional[Path] = None,
+) -> None:
+    """Run the vLLM endpoint health check script.
+
+    This is a standalone function for running health checks outside of
+    the VLLMServer context manager (e.g., for local runners that manage
+    their own vLLM processes).
+
+    Args:
+        endpoint_json: Path to the endpoint JSON file
+        max_attempts: Maximum number of health check attempts
+        retry_delay: Delay in seconds between attempts
+        repo_root: Repository root path (defaults to parent of hpc/)
+
+    Raises:
+        subprocess.CalledProcessError: If health check fails
+    """
+    if repo_root is None:
+        # Default to repo root (parent of hpc/)
+        repo_root = Path(__file__).resolve().parent.parent
+
+    cmd = [
+        sys.executable,
+        str(repo_root / "scripts" / "vllm" / "wait_for_endpoint.py"),
+        "--endpoint-json",
+        str(endpoint_json),
+        "--max-attempts",
+        str(max_attempts),
+        "--retry-delay",
+        str(retry_delay),
+        "--health-path",
+        "v1/models",
+    ]
+    subprocess.run(cmd, check=True)

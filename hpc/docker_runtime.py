@@ -371,6 +371,150 @@ def ensure_docker_runtime(
     return runtime
 
 
+def setup_docker_runtime_if_needed(env_type: str) -> None:
+    """Configure Docker/Podman runtime if using docker backend.
+
+    Detects available Docker/Podman runtime, sets DOCKER_HOST environment
+    variable, and verifies connectivity. This is a user-friendly wrapper
+    that prints status messages and exits on failure.
+
+    Args:
+        env_type: Harbor environment type (daytona, docker, modal, apptainer)
+
+    Raises:
+        SystemExit: If docker backend requested but no runtime found
+    """
+    import sys
+
+    if env_type.lower() != "docker":
+        return
+
+    print("[docker] Detecting Docker/Podman runtime...")
+    runtime = detect_docker_runtime()
+
+    if runtime.runtime_type == DockerRuntimeType.UNAVAILABLE:
+        print("[docker] ERROR: Docker backend requested but no Docker/Podman runtime found.")
+        print("[docker] Please ensure Docker or Podman is installed and running,")
+        print("[docker] or set DOCKER_HOST to point to a remote Docker daemon.")
+        sys.exit(1)
+
+    # Set up environment variables
+    env = setup_docker_environment(runtime)
+    os.environ.update(env)
+
+    print(f"[docker] Runtime type: {runtime.runtime_type.value}")
+    print(f"[docker] DOCKER_HOST: {runtime.docker_host}")
+
+    # Verify connectivity
+    if not check_docker_connectivity(timeout=10):
+        print("[docker] WARNING: Docker daemon not responding. Continuing anyway...")
+    else:
+        print("[docker] Docker daemon is accessible.")
+
+
+# ---------------------------------------------------------------------------
+# Docker Image Utilities (for cloud/SkyPilot launches)
+# ---------------------------------------------------------------------------
+
+# Default Docker image configuration
+GHCR_IMAGE_BASE = "ghcr.io/open-thoughts/openthoughts-agent"
+DEFAULT_DOCKER_IMAGE = f"{GHCR_IMAGE_BASE}:gpu-1x"
+
+
+def normalize_docker_image(image: str) -> str:
+    """Ensure docker image has the 'docker:' prefix required by SkyPilot.
+
+    Args:
+        image: Docker image name (with or without docker: prefix)
+
+    Returns:
+        Image name with docker: prefix
+    """
+    if not image.startswith("docker:"):
+        return f"docker:{image}"
+    return image
+
+
+def select_docker_image(
+    accelerator: str,
+    default_image: str = DEFAULT_DOCKER_IMAGE,
+    base_image: str = GHCR_IMAGE_BASE,
+) -> str:
+    """Select appropriate Docker image variant based on GPU count.
+
+    If accelerator specifies count > 1, selects gpu-4x or gpu-8x variants.
+
+    Args:
+        accelerator: SkyPilot accelerator spec (e.g., "H100:2", "A100:1")
+        default_image: Default image to use for single GPU
+        base_image: Base image name for constructing variants
+
+    Returns:
+        Docker image name (without docker: prefix)
+    """
+    # Import here to avoid circular dependency
+    from hpc.cloud_launch_utils import parse_gpu_count
+
+    count = parse_gpu_count(accelerator)
+
+    # Select appropriate variant
+    if count <= 1:
+        return f"{base_image}:gpu-1x"
+    elif count <= 4:
+        return f"{base_image}:gpu-4x"
+    else:
+        return f"{base_image}:gpu-8x"
+
+
+def get_docker_image_for_providers(
+    docker_image: str,
+    accelerator: str,
+    provider_docker_support: Dict[str, bool],
+) -> Optional[str]:
+    """Select and normalize Docker image based on provider support.
+
+    This is the core logic for Docker image selection in cloud launches.
+    It handles auto-selection based on GPU count and provider compatibility.
+
+    Args:
+        docker_image: User-specified Docker image (or DEFAULT_DOCKER_IMAGE)
+        accelerator: SkyPilot accelerator spec (e.g., "H100:2")
+        provider_docker_support: Dict mapping provider display names to
+            whether they support Docker runtime (True/False)
+
+    Returns:
+        Normalized Docker image with 'docker:' prefix, or None if no
+        providers support Docker runtime.
+    """
+    import sys
+
+    # Determine base image (custom or auto-selected)
+    if docker_image != DEFAULT_DOCKER_IMAGE:
+        base_image = docker_image
+    else:
+        base_image = select_docker_image(accelerator)
+
+    # Check provider docker support
+    supports_docker = [name for name, supported in provider_docker_support.items() if supported]
+    no_docker = [name for name, supported in provider_docker_support.items() if not supported]
+
+    if not supports_docker:
+        # No providers support Docker
+        print(
+            "[cloud] Note: Selected providers do not support Docker as runtime.",
+            file=sys.stderr,
+        )
+        return None
+    elif no_docker:
+        # Some providers don't support Docker
+        print(
+            f"[cloud] Note: {', '.join(no_docker)} do not support Docker as runtime.",
+            file=sys.stderr,
+        )
+
+    return normalize_docker_image(base_image)
+
+
 if __name__ == "__main__":
     # CLI for testing runtime detection
     import json

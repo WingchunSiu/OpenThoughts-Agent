@@ -1,9 +1,5 @@
 """Shared utilities for local Ray/vLLM runners.
 
-This module consolidates common code used by:
-- eval/local/run_eval.py
-- data/local/run_tracegen.py
-
 It provides managed subprocess handling for Ray clusters and vLLM servers,
 datagen config parsing, Docker runtime setup, and Harbor command building.
 """
@@ -19,8 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hpc.vllm_utils import _build_vllm_cli_args
-from hpc.launch_utils import generate_served_model_id, hosted_vllm_alias
+from hpc.vllm_utils import _build_vllm_cli_args, run_endpoint_health_check
+from hpc.launch_utils import generate_served_model_id, hosted_vllm_alias, maybe_int, PROJECT_ROOT
 from hpc.arg_groups import (
     add_harbor_args,
     add_model_compute_args,
@@ -48,7 +44,13 @@ from hpc.harbor_utils import (
     build_harbor_command,
     merge_agent_kwargs,
     collect_extra_agent_kwargs,
+    resolve_jobs_dir_path,
+    build_endpoint_meta,
+    load_endpoint_metadata,
 )
+
+# Re-export docker runtime utilities for backward compatibility
+from hpc.docker_runtime import setup_docker_runtime_if_needed
 
 
 @dataclass
@@ -74,16 +76,6 @@ class ManagedProcess:
                     self._log_handle.close()
                 except Exception:
                     pass
-
-
-def maybe_int(value: object) -> Optional[int]:
-    """Parse a value as int, returning None if not possible."""
-    if value in (None, "", "None"):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _open_log_file(log_path: Optional[Path]) -> tuple:
@@ -254,95 +246,6 @@ def terminate_processes(processes: List[ManagedProcess]) -> None:
 # Shared utilities for local runners (eval + tracegen)
 # ---------------------------------------------------------------------------
 
-# REPO_ROOT is needed for health check script path - computed lazily
-_REPO_ROOT: Optional[Path] = None
-
-
-def _get_repo_root() -> Path:
-    """Get the repository root directory."""
-    global _REPO_ROOT
-    if _REPO_ROOT is None:
-        # This file is at hpc/local_runner_utils.py, so repo root is parent
-        _REPO_ROOT = Path(__file__).resolve().parent.parent
-    return _REPO_ROOT
-
-
-def resolve_jobs_dir_path(jobs_dir_value: Optional[str], repo_root: Optional[Path] = None) -> Path:
-    """Resolve jobs_dir from harbor config to an absolute path.
-
-    Args:
-        jobs_dir_value: The jobs_dir value from harbor config (or None)
-        repo_root: Repository root path (defaults to auto-detected)
-
-    Returns:
-        Absolute path to jobs directory
-    """
-    if repo_root is None:
-        repo_root = _get_repo_root()
-    raw_value = jobs_dir_value or "jobs"
-    path = Path(raw_value)
-    if not path.is_absolute():
-        path = (repo_root / path).resolve()
-    return path
-
-
-def run_endpoint_health_check(
-    endpoint_json: Path,
-    max_attempts: int,
-    retry_delay: int,
-    repo_root: Optional[Path] = None,
-) -> None:
-    """Run the vLLM endpoint health check script.
-
-    Args:
-        endpoint_json: Path to the endpoint JSON file
-        max_attempts: Maximum number of health check attempts
-        retry_delay: Delay in seconds between attempts
-        repo_root: Repository root path (defaults to auto-detected)
-
-    Raises:
-        subprocess.CalledProcessError: If health check fails
-    """
-    if repo_root is None:
-        repo_root = _get_repo_root()
-
-    cmd = [
-        sys.executable,
-        str(repo_root / "scripts" / "vllm" / "wait_for_endpoint.py"),
-        "--endpoint-json",
-        str(endpoint_json),
-        "--max-attempts",
-        str(max_attempts),
-        "--retry-delay",
-        str(retry_delay),
-        "--health-path",
-        "v1/models",
-    ]
-    subprocess.run(cmd, check=True)
-
-
-def load_endpoint_metadata(endpoint_json: Path) -> Dict[str, Any]:
-    """Load and parse vLLM endpoint metadata from JSON file.
-
-    Computes api_base and metrics_endpoint URLs from the endpoint_url.
-
-    Args:
-        endpoint_json: Path to the endpoint JSON file
-
-    Returns:
-        Dict with endpoint data plus computed api_base and metrics_endpoint
-    """
-    data = json.loads(endpoint_json.read_text())
-    base_url = (data.get("endpoint_url") or "").rstrip("/")
-    api_base = f"{base_url}/v1" if base_url else ""
-    metrics = base_url.rstrip("/")
-    if metrics.endswith("/v1"):
-        metrics = metrics[:-3].rstrip("/")
-    metrics = f"{metrics}/metrics" if metrics else ""
-    data["api_base"] = api_base
-    data["metrics_endpoint"] = metrics
-    return data
-
 
 def apply_datagen_defaults(args: argparse.Namespace) -> None:
     """Load datagen config and apply defaults to args.
@@ -416,52 +319,6 @@ def apply_datagen_defaults(args: argparse.Namespace) -> None:
     if is_gpt_oss_model(args.model):
         _, tiktoken_env = setup_gpt_oss_tiktoken()
         args._vllm_env_vars.update(tiktoken_env)
-
-
-def setup_docker_runtime_if_needed(env_type: str) -> None:
-    """Configure Docker/Podman runtime if using docker backend.
-
-    Detects available Docker/Podman runtime, sets DOCKER_HOST environment
-    variable, and verifies connectivity.
-
-    Args:
-        env_type: Harbor environment type (daytona, docker, modal)
-
-    Raises:
-        SystemExit: If docker backend requested but no runtime found
-    """
-    if env_type.lower() != "docker":
-        return
-
-    # Import docker runtime utilities (lazy import to avoid circular deps)
-    from hpc.docker_runtime import (
-        detect_docker_runtime,
-        setup_docker_environment,
-        DockerRuntimeType,
-        check_docker_connectivity,
-    )
-
-    print("[docker] Detecting Docker/Podman runtime...")
-    runtime = detect_docker_runtime()
-
-    if runtime.runtime_type == DockerRuntimeType.UNAVAILABLE:
-        print("[docker] ERROR: Docker backend requested but no Docker/Podman runtime found.")
-        print("[docker] Please ensure Docker or Podman is installed and running,")
-        print("[docker] or set DOCKER_HOST to point to a remote Docker daemon.")
-        sys.exit(1)
-
-    # Set up environment variables
-    env = setup_docker_environment(runtime)
-    os.environ.update(env)
-
-    print(f"[docker] Runtime type: {runtime.runtime_type.value}")
-    print(f"[docker] DOCKER_HOST: {runtime.docker_host}")
-
-    # Verify connectivity
-    if not check_docker_connectivity(timeout=10):
-        print("[docker] WARNING: Docker daemon not responding. Continuing anyway...")
-    else:
-        print("[docker] Docker daemon is accessible.")
 
 
 # ---------------------------------------------------------------------------

@@ -13,17 +13,17 @@ from hpc.arguments import JobType, LlamaFactoryArgs, parse_args
 from hpc.launch_utils import (
     _merge_dependencies,
     _parse_optional_int,
-    construct_sbatch_script,
-    extract_template_keys,
     get_job_name,
     launch_sbatch,
     sanitize_repo_component,
+    setup_experiments_dir,
     update_exp_args,
 )
 from hpc.pretokenize_launch_utils import schedule_pretokenize, should_run_pretokenize
 from hpc.sft_launch_utils import (
     apply_mca_training_template,
     build_training_parameters_link,
+    construct_sft_sbatch_script,
     ensure_deepspeed_config,
     maybe_apply_cluster_specific_env_overrides,
     maybe_compute_gradient_accumulation,
@@ -33,7 +33,6 @@ from hpc.wandb_launch_utils import collect_wandb_metadata
 from hpc.hpc import detect_hpc, set_environment
 from hpc.datagen_launch_utils import (
     _prepare_datagen_configuration,
-    _validate_sbatch_templates,
     launch_datagen_job_v2,
 )
 from hpc.consolidate_launch_utils import (
@@ -383,8 +382,8 @@ def _write_train_config(configs_dir: str, job_name: str, base_config: dict) -> s
 
 
 def construct_config_yaml(exp_args):
-    configs_dir = os.path.join(exp_args["experiments_dir"], "configs")
-    os.makedirs(configs_dir, exist_ok=True)
+    exp_paths = setup_experiments_dir(exp_args)
+    configs_dir = str(exp_paths.configs)
 
     train_config_path = exp_args.get("train_config_path")
     checkpoints_dir = exp_args.get("checkpoints_dir")
@@ -441,8 +440,8 @@ def submit_job(
     exp_args=None,
     dependency=None,
 ):
-    exp_args["logs_dir"] = os.path.join(exp_args["experiments_dir"], "logs")
-    os.makedirs(exp_args["logs_dir"], exist_ok=True)
+    exp_paths = setup_experiments_dir(exp_args)
+    exp_args["logs_dir"] = str(exp_paths.logs)
 
     base_dependency = _merge_dependencies(exp_args.get("dependency"), dependency)
     current_dependency = base_dependency
@@ -473,8 +472,8 @@ def display_args(exp_args, name):
     print()
 
 def pre_validation(exp_args, cli_args):
-
-    # Add arguments to experiment from train config file
+    """Validate experiment configuration before job submission."""
+    # Validate train config file exists
     if "train_config_path" in cli_args and os.path.exists(
         cli_args["train_config_path"]
     ):
@@ -483,26 +482,7 @@ def pre_validation(exp_args, cli_args):
         raise FileNotFoundError(
             f"Train config file {cli_args['train_config_path']} does not exist."
         )
-
-    # Fill in sbatch template
-    if "train_sbatch_path" in exp_args and os.path.exists(
-        exp_args["train_sbatch_path"]
-    ):
-        template_keys = extract_template_keys(exp_args["train_sbatch_path"])
-        allowlist = {"train_config_path_out", "accelerate_config_block"}
-        for key in template_keys:
-            if (
-                key not in exp_args
-                and key not in cli_args
-                and key not in allowlist
-            ):
-                raise ValueError(
-                    f"Template key {key} not found in experiment arguments or cli arguments."
-                )
-    elif "train_sbatch_path" in exp_args:
-        raise FileNotFoundError(
-            f"Train sbatch file {exp_args['train_sbatch_path']} does not exist."
-        )
+    # Note: sbatch template validation removed - universal template handles this
 
 def main():
     load_supabase_keys()
@@ -514,7 +494,6 @@ def main():
     # Add arguments to experiment from automatically detecting HPC
     hpc = detect_hpc()
     set_environment(hpc)
-    _validate_sbatch_templates(hpc)
 
     # Add arguments and validate
     exp_args = update_exp_args(exp_args, hpc.model_dump())
@@ -554,7 +533,7 @@ def main():
             exp_args,
             update_exp_args_fn=update_exp_args,
             construct_config_yaml_fn=construct_config_yaml,
-            construct_sbatch_script_fn=construct_sbatch_script,
+            construct_sbatch_script_fn=lambda args: construct_sft_sbatch_script(args, hpc),
             submit_job_fn=submit_job,
         )
         return
@@ -570,8 +549,8 @@ def main():
     )
     write_run_summary(exp_args, train_config)
 
-    # Construct the sbatch script
-    train_sbatch_path_out = construct_sbatch_script(exp_args)
+    # Construct the sbatch script using universal SFT template
+    train_sbatch_path_out = construct_sft_sbatch_script(exp_args, hpc)
     exp_args = update_exp_args(
         exp_args, {"train_sbatch_path_out": train_sbatch_path_out}
     )
@@ -592,7 +571,7 @@ def main():
                     exp_args,
                     update_exp_args_fn=update_exp_args,
                     construct_config_yaml_fn=construct_config_yaml,
-                    construct_sbatch_script_fn=construct_sbatch_script,
+                    construct_sbatch_script_fn=lambda args: construct_sft_sbatch_script(args, hpc),
                     submit_job_fn=submit_job,
                 )
                 dependency = f"afterok:{pretok_job_id}"

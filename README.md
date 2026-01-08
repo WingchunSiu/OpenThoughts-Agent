@@ -382,8 +382,7 @@ Adding a new cluster involves defining its resources, sbatch templates, and a do
 3. **Create sbatch templates** in `hpc/sbatch_data/` for your cluster:
    - Copy an existing template for a similar machine (GPU type / internet access) and adjust `#SBATCH` headers and module loads.
    - Keep placeholders like `{time_limit}`, `{job_name}`, `{experiments_dir}` etc. intact; they will be filled by `hpc.launch`.
-4. **Declare required templates** in `hpc/sbatch_data_requirements.json` so `_validate_sbatch_templates` can verify your cluster has all needed sbatch files for datagen and training.
-5. **Test with a dry run**:
+4. **Test with a dry run**:
 ```bash
 source hpc/dotenv/<your-cluster>.env
 eval "$DCFT_ACTIVATE_ENV"

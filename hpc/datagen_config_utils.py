@@ -21,6 +21,8 @@ from data.generation.utils import (
     load_datagen_config,
     resolve_engine_runtime,
 )
+from hpc.cli_utils import normalize_cli_args
+from hpc.launch_utils import maybe_int
 
 
 # API-based engines that don't require local Ray/vLLM
@@ -95,27 +97,6 @@ class ParsedDatagenConfig:
     ray_cgraph_submit_timeout: Optional[str] = None
     ray_cgraph_get_timeout: Optional[str] = None
     ray_cgraph_max_inflight_executions: Optional[str] = None
-
-
-def _coerce_optional_int(value: Any) -> Optional[int]:
-    """Parse a value as int, returning None if not possible."""
-    if value in (None, "", "None"):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalize_cli_args(raw_args: Any) -> List[str]:
-    """Normalize extra CLI args to a list of strings."""
-    if not raw_args:
-        return []
-    if isinstance(raw_args, str):
-        return raw_args.split()
-    if isinstance(raw_args, (list, tuple)):
-        return [str(arg) for arg in raw_args]
-    return []
 
 
 def parse_datagen_config(
@@ -211,14 +192,14 @@ def parse_datagen_config(
         endpoint_json_path = backend.endpoint_json_path
 
     # Extra vLLM CLI args
-    vllm_extra_args = _normalize_cli_args(vllm_cfg.extra_args if vllm_cfg else None)
+    vllm_extra_args = normalize_cli_args(vllm_cfg.extra_args if vllm_cfg else None)
 
     # Health check settings
-    health_max_attempts = _coerce_optional_int(backend.healthcheck_max_attempts)
-    health_retry_delay = _coerce_optional_int(backend.healthcheck_retry_delay)
+    health_max_attempts = maybe_int(backend.healthcheck_max_attempts)
+    health_retry_delay = maybe_int(backend.healthcheck_retry_delay)
 
     # HPC-specific settings
-    chunk_array_max = _coerce_optional_int(config.chunk_array_max)
+    chunk_array_max = maybe_int(config.chunk_array_max)
     ray_cgraph_submit_timeout = (
         str(backend.ray_cgraph_submit_timeout)
         if backend.ray_cgraph_submit_timeout is not None

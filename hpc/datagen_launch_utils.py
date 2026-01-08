@@ -18,11 +18,13 @@ from hpc.launch_utils import (
     cleanup_endpoint_file,
     normalize_cli_args,
     resolve_config_path,
-    coerce_positive_int,
     build_sbatch_directives,
     generate_served_model_id,
     hosted_vllm_alias,
     strip_hosted_vllm_alias,
+    set_or_pop,
+    setup_experiments_dir,
+    substitute_template,
 )
 from hpc.harbor_utils import (
     get_harbor_env_from_config,
@@ -40,34 +42,6 @@ DEFAULT_RAY_CGRAPH_MAX_INFLIGHT = os.environ.get("RAY_CGRAPH_MAX_INFLIGHT_DEFAUL
 HARBOR_MODEL_PLACEHOLDER = "placeholder/override-at-runtime"
 
 
-def _validate_sbatch_templates(hpc_obj) -> None:
-    """Validate that universal sbatch templates exist.
-
-    Since Phase 3 refactoring, we use universal templates for all clusters.
-    """
-    if getattr(hpc_obj, "local_mode", False):
-        print(f"Local execution detected for {hpc_obj.name}; skipping sbatch template validation.")
-        return
-
-    # Validate universal templates exist
-    universal_templates = [
-        Path(__file__).parent / "sbatch_data" / "universal_taskgen.sbatch",
-        Path(__file__).parent / "sbatch_data" / "universal_tracegen.sbatch",
-        Path(__file__).parent / "sbatch_eval" / "universal_eval.sbatch",
-    ]
-
-    missing = [str(t) for t in universal_templates if not t.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Missing universal sbatch templates: " + ", ".join(missing)
-        )
-
-
-def resolve_datagen_config_path(raw_value: str) -> Path:
-    """Resolve ``raw_value`` to an absolute datagen config path."""
-    return resolve_config_path(raw_value, DATAGEN_CONFIG_DIR, "datagen")
-
-
 def _prepare_datagen_configuration(exp_args: dict):
     """Load the YAML datagen configuration and derive launch metadata.
 
@@ -82,96 +56,49 @@ def _prepare_datagen_configuration(exp_args: dict):
             "Data generation requires --datagen-config or DATAGEN_CONFIG_PATH to specify the engine YAML."
         )
 
-    # Resolve path with fallback to config directory
-    resolved_path = resolve_datagen_config_path(raw_config)
-
-    # Use consolidated parser
-    trace_model_override = exp_args.get("trace_model")
+    # Resolve path and parse config
+    resolved_path = resolve_config_path(raw_config, DATAGEN_CONFIG_DIR, "datagen")
     parsed = parse_datagen_config(
         config_path=str(resolved_path),
-        model_override=trace_model_override,
+        model_override=exp_args.get("trace_model"),
     )
 
-    # Store parsed config and related objects
-    exp_args["_parsed_datagen_config"] = parsed
-    exp_args["_datagen_config_original_path"] = str(parsed.config_path)
-    exp_args["_datagen_config_raw"] = parsed.loaded.raw
-    exp_args["_datagen_config_obj"] = parsed.loaded.config
-    exp_args["datagen_config_path"] = str(parsed.config_path)
-
-    # Engine runtime (for backwards compatibility with code expecting runtime object)
+    # Engine runtime (for backwards compatibility)
     runtime = resolve_engine_runtime(parsed.loaded.config)
-    exp_args["_datagen_engine_runtime"] = runtime
-
-    # Extra agent kwargs
-    exp_args["_datagen_extra_agent_kwargs"] = parsed.extra_agent_kwargs
-
-    # HPC-specific settings
-    exp_args["_chunk_array_max"] = parsed.chunk_array_max
-
-    # Engine settings
-    exp_args["datagen_engine"] = parsed.engine_type
-    exp_args["datagen_healthcheck_interval"] = parsed.healthcheck_interval
-
-    # Model
-    if parsed.model:
-        exp_args["datagen_model"] = parsed.model
-    else:
-        exp_args.pop("datagen_model", None)
-
-    # Max tokens
-    if parsed.max_output_tokens is not None:
-        exp_args["datagen_max_tokens"] = parsed.max_output_tokens
-    else:
-        exp_args.pop("datagen_max_tokens", None)
-
-    # Backend settings
     backend = parsed.loaded.config.backend
-    exp_args["_datagen_backend_config"] = backend
-    exp_args["datagen_backend"] = backend.type
-    exp_args["datagen_wait_for_endpoint"] = parsed.wait_for_endpoint
-    exp_args["datagen_ray_port"] = parsed.ray_port
-    exp_args["datagen_api_port"] = parsed.api_port
 
-    # Endpoint JSON path
-    if parsed.endpoint_json_path:
-        exp_args["vllm_endpoint_json_path"] = parsed.endpoint_json_path
+    # Direct assignments (always set)
+    exp_args.update({
+        # Internal objects
+        "_parsed_datagen_config": parsed,
+        "_datagen_config_original_path": str(parsed.config_path),
+        "_datagen_config_raw": parsed.loaded.raw,
+        "_datagen_config_obj": parsed.loaded.config,
+        "_datagen_engine_runtime": runtime,
+        "_datagen_extra_agent_kwargs": parsed.extra_agent_kwargs,
+        "_datagen_backend_config": backend,
+        "_datagen_vllm_server_config": parsed.vllm_server_config,
+        "_chunk_array_max": parsed.chunk_array_max,
+        # Public settings
+        "datagen_config_path": str(parsed.config_path),
+        "datagen_engine": parsed.engine_type,
+        "datagen_healthcheck_interval": parsed.healthcheck_interval,
+        "datagen_backend": backend.type,
+        "datagen_wait_for_endpoint": parsed.wait_for_endpoint,
+        "datagen_ray_port": parsed.ray_port,
+        "datagen_api_port": parsed.api_port,
+    })
 
-    # Ray cgraph settings (HPC-specific)
-    if parsed.ray_cgraph_submit_timeout is not None:
-        exp_args["ray_cgraph_submit_timeout"] = parsed.ray_cgraph_submit_timeout
-    else:
-        exp_args.pop("ray_cgraph_submit_timeout", None)
-
-    if parsed.ray_cgraph_get_timeout is not None:
-        exp_args["ray_cgraph_get_timeout"] = parsed.ray_cgraph_get_timeout
-    else:
-        exp_args.pop("ray_cgraph_get_timeout", None)
-
-    if parsed.ray_cgraph_max_inflight_executions is not None:
-        exp_args["ray_cgraph_max_inflight_executions"] = parsed.ray_cgraph_max_inflight_executions
-    else:
-        exp_args.pop("ray_cgraph_max_inflight_executions", None)
-
-    # Health check settings
-    if parsed.health_max_attempts is not None:
-        exp_args["trace_health_max_attempts"] = parsed.health_max_attempts
-    elif "trace_health_max_attempts" in exp_args:
-        exp_args.pop("trace_health_max_attempts")
-
-    if parsed.health_retry_delay is not None:
-        exp_args["trace_health_retry_delay"] = parsed.health_retry_delay
-    elif "trace_health_retry_delay" in exp_args:
-        exp_args.pop("trace_health_retry_delay")
-
-    # vLLM server config
-    vllm_cfg = parsed.vllm_server_config
-    exp_args["_datagen_vllm_server_config"] = vllm_cfg
-
-    if parsed.vllm_extra_args:
-        exp_args["_vllm_server_extra_args"] = parsed.vllm_extra_args
-    elif "_vllm_server_extra_args" in exp_args:
-        exp_args.pop("_vllm_server_extra_args")
+    # Conditional assignments (set if present, remove if None)
+    set_or_pop(exp_args, "datagen_model", parsed.model)
+    set_or_pop(exp_args, "datagen_max_tokens", parsed.max_output_tokens)
+    set_or_pop(exp_args, "vllm_endpoint_json_path", parsed.endpoint_json_path)
+    set_or_pop(exp_args, "ray_cgraph_submit_timeout", parsed.ray_cgraph_submit_timeout)
+    set_or_pop(exp_args, "ray_cgraph_get_timeout", parsed.ray_cgraph_get_timeout)
+    set_or_pop(exp_args, "ray_cgraph_max_inflight_executions", parsed.ray_cgraph_max_inflight_executions)
+    set_or_pop(exp_args, "trace_health_max_attempts", parsed.health_max_attempts)
+    set_or_pop(exp_args, "trace_health_retry_delay", parsed.health_retry_delay)
+    set_or_pop(exp_args, "_vllm_server_extra_args", parsed.vllm_extra_args or None)
 
     return runtime
 
@@ -188,10 +115,6 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
 
     print("\n=== DATA GENERATION MODE (Universal Launcher) ===")
 
-    hpc_name = str(getattr(hpc, "name", "")).lower()
-    if hpc_name == "nyutorch":
-        raise RuntimeError("Datagen jobs are not supported on the NYU Torch cluster.")
-
     # Determine what to run
     task_enabled = str(exp_args.get("enable_task_gen", True)).lower() not in {"false", "0", "no", "none"}
     trace_enabled = str(exp_args.get("enable_trace_gen", False)).lower() not in {"false", "0", "no", "none"}
@@ -203,14 +126,8 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         raise ValueError("--datagen-script is required for task generation")
 
     # Resolve paths
-    experiments_subdir = exp_args.get("experiments_dir") or "experiments"
-    experiments_abs = Path(experiments_subdir).expanduser().resolve()
-    sbatch_dir = experiments_abs / "sbatch"
-    sbatch_dir.mkdir(parents=True, exist_ok=True)
-    configs_dir = experiments_abs / "configs"
-    configs_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir = experiments_abs / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    exp_paths = setup_experiments_dir(exp_args)
+    experiments_subdir = str(exp_paths.root)  # String form for config dicts
 
     job_name = exp_args.get("job_name")
     if not job_name:
@@ -271,7 +188,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         )
 
         # Write task config JSON
-        task_config_path = configs_dir / f"{job_name}_taskgen_config.json"
+        task_config_path = exp_paths.configs / f"{job_name}_taskgen_config.json"
         task_config_path.write_text(json.dumps(asdict(task_config), indent=2))
 
         # Load and populate taskgen template
@@ -297,11 +214,9 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             "config_path": str(task_config_path),
         }
 
-        sbatch_text = template_text
-        for key, value in substitutions.items():
-            sbatch_text = sbatch_text.replace("{" + key + "}", value)
+        sbatch_text = substitute_template(template_text, substitutions)
 
-        task_sbatch_output = sbatch_dir / f"{job_name}_taskgen.sbatch"
+        task_sbatch_output = exp_paths.sbatch / f"{job_name}_taskgen.sbatch"
         task_sbatch_output.write_text(sbatch_text)
         os.chmod(task_sbatch_output, 0o750)
 
@@ -327,7 +242,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         tasks_input_path = exp_args.get("trace_input_path")
         if not tasks_input_path and task_enabled:
             tasks_input_path = exp_args.get("datagen_output_dir") or str(
-                experiments_abs / "outputs" / "tasks"
+                exp_paths.root / "outputs" / "tasks"
             )
 
         trace_model = exp_args.get("trace_model") or exp_args.get("datagen_model") or ""
@@ -390,7 +305,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         )
 
         # Write trace config JSON
-        trace_config_path = configs_dir / f"{job_name}_tracegen_config.json"
+        trace_config_path = exp_paths.configs / f"{job_name}_tracegen_config.json"
         trace_config_path.write_text(json.dumps(asdict(trace_config), indent=2))
 
         # Load and populate tracegen template
@@ -416,11 +331,9 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             "config_path": str(trace_config_path),
         }
 
-        sbatch_text = template_text
-        for key, value in substitutions.items():
-            sbatch_text = sbatch_text.replace("{" + key + "}", value)
+        sbatch_text = substitute_template(template_text, substitutions)
 
-        trace_sbatch_output = sbatch_dir / f"{job_name}_tracegen.sbatch"
+        trace_sbatch_output = exp_paths.sbatch / f"{job_name}_tracegen.sbatch"
         trace_sbatch_output.write_text(sbatch_text)
         os.chmod(trace_sbatch_output, 0o750)
 
@@ -837,15 +750,10 @@ class TracegenJobRunner:
 
     def _run_harbor(self, endpoint: Optional[str]) -> int:
         """Execute the Harbor CLI for trace generation."""
-        from hpc.harbor_utils import build_harbor_command, load_harbor_config
+        from hpc.harbor_utils import build_harbor_command, load_harbor_config, build_endpoint_meta
 
         # Build endpoint metadata for vLLM
-        endpoint_meta = None
-        if endpoint:
-            endpoint_meta = {
-                "api_base": endpoint,
-                "metrics_endpoint": endpoint.replace("/v1", "/metrics"),
-            }
+        endpoint_meta = build_endpoint_meta(endpoint) if endpoint else None
 
         # Load harbor config data for agent kwargs extraction
         harbor_config_data = load_harbor_config(self.config.harbor_config)
@@ -942,7 +850,6 @@ __all__ = [
     # Config utilities
     "_normalize_cli_args",
     "_prepare_datagen_configuration",
-    "resolve_datagen_config_path",
     "resolve_harbor_config_path",
     # Universal launcher
     "launch_datagen_job_v2",

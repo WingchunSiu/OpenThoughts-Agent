@@ -14,8 +14,12 @@ These utilities are shared across all execution paths:
 from __future__ import annotations
 
 import copy
+import errno
 import json
 import os
+import pty
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -71,6 +75,35 @@ def resolve_harbor_config_path(
         f"Harbor job config not found: {raw_value} "
         f"(also checked {config_dir})"
     )
+
+
+def resolve_jobs_dir_path(
+    jobs_dir_value: Optional[str],
+    repo_root: Optional[Path] = None,
+) -> Path:
+    """Resolve jobs_dir from Harbor config to an absolute path.
+
+    Args:
+        jobs_dir_value: The jobs_dir value from Harbor config (or None).
+                       Defaults to "jobs" if not provided.
+        repo_root: Repository root path for resolving relative paths.
+                  Defaults to PROJECT_ROOT from launch_utils.
+
+    Returns:
+        Absolute path to jobs directory
+    """
+    if repo_root is None:
+        try:
+            from hpc.launch_utils import PROJECT_ROOT
+            repo_root = PROJECT_ROOT
+        except ImportError:
+            repo_root = Path(__file__).resolve().parent.parent
+
+    raw_value = jobs_dir_value or "jobs"
+    path = Path(raw_value)
+    if not path.is_absolute():
+        path = (repo_root / path).resolve()
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +256,68 @@ def get_harbor_env_from_config(
         return env_type.lower()
 
     return default
+
+
+# ---------------------------------------------------------------------------
+# Endpoint metadata utilities
+# ---------------------------------------------------------------------------
+
+
+def build_endpoint_meta(endpoint_url: str) -> Dict[str, str]:
+    """Build endpoint metadata dict from a vLLM endpoint URL.
+
+    Handles both formats:
+    - With /v1 suffix: "http://host:port/v1" (from VLLMServer.endpoint)
+    - Without suffix: "http://host:port" (from endpoint JSON)
+
+    Args:
+        endpoint_url: vLLM endpoint URL (with or without /v1 suffix)
+
+    Returns:
+        Dict with 'api_base' and 'metrics_endpoint' keys
+    """
+    url = endpoint_url.rstrip("/")
+
+    # Determine base URL (without /v1)
+    if url.endswith("/v1"):
+        base_url = url[:-3].rstrip("/")
+        api_base = url
+    else:
+        base_url = url
+        api_base = f"{url}/v1"
+
+    metrics_endpoint = f"{base_url}/metrics"
+
+    return {
+        "api_base": api_base,
+        "metrics_endpoint": metrics_endpoint,
+    }
+
+
+def load_endpoint_metadata(endpoint_json: Path) -> Dict[str, Any]:
+    """Load and parse vLLM endpoint metadata from JSON file.
+
+    Reads the endpoint JSON written by vLLM and computes api_base and
+    metrics_endpoint URLs from the endpoint_url field.
+
+    Args:
+        endpoint_json: Path to the endpoint JSON file
+
+    Returns:
+        Dict with all endpoint data plus computed api_base and metrics_endpoint
+    """
+    data = json.loads(endpoint_json.read_text())
+    endpoint_url = data.get("endpoint_url") or ""
+
+    if endpoint_url:
+        meta = build_endpoint_meta(endpoint_url)
+        data["api_base"] = meta["api_base"]
+        data["metrics_endpoint"] = meta["metrics_endpoint"]
+    else:
+        data["api_base"] = ""
+        data["metrics_endpoint"] = ""
+
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +645,69 @@ def build_harbor_command(
     return cmd
 
 
+def run_harbor_cli(cmd: List[str], log_path: Optional[Path] = None) -> int:
+    """Run Harbor CLI with proper TTY handling.
+
+    Harbor CLI requires a pseudo-terminal (PTY) for proper output handling.
+    Without it, Harbor may buffer output indefinitely or hang waiting for
+    terminal interaction.
+
+    Args:
+        cmd: Command list to execute (e.g., ["harbor", "jobs", "start", ...])
+        log_path: Optional path to write Harbor output to a file instead of stdout.
+
+    Returns:
+        Exit code from Harbor process.
+
+    Raises:
+        subprocess.CalledProcessError: If Harbor exits with non-zero status.
+    """
+    if log_path:
+        # File-based output - no PTY needed (line-buffered for real-time tail access)
+        with open(log_path, "w", encoding="utf-8", buffering=1) as harbor_log_file:
+            print(f"Streaming Harbor output to {log_path}")
+            result = subprocess.run(
+                cmd,
+                check=False,
+                stdout=harbor_log_file,
+                stderr=subprocess.STDOUT,
+            )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd)
+        return result.returncode
+
+    # PTY-based output for interactive-like behavior
+    master_fd, slave_fd = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            text=False,
+        )
+        os.close(slave_fd)
+
+        # Read and forward output in real-time
+        while True:
+            try:
+                data = os.read(master_fd, 4096)
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise
+                break
+            if not data:
+                break
+            os.write(sys.stdout.fileno(), data)
+    finally:
+        os.close(master_fd)
+
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
+    return ret
+
+
 # ---------------------------------------------------------------------------
 # Module exports
 # ---------------------------------------------------------------------------
@@ -557,10 +715,14 @@ def build_harbor_command(
 __all__ = [
     # Constants
     "HARBOR_CONFIG_DIR",
-    # Config resolution
+    # Config/path resolution
     "resolve_harbor_config_path",
+    "resolve_jobs_dir_path",
     "load_harbor_config",
     "get_harbor_env_from_config",
+    # Endpoint metadata
+    "build_endpoint_meta",
+    "load_endpoint_metadata",
     # Registry utilities
     "load_harbor_registry",
     "build_dataset_slug_set",
@@ -574,6 +736,7 @@ __all__ = [
     "merge_agent_kwargs",
     # Job naming
     "default_job_name",
-    # Command building
+    # Command building and execution
     "build_harbor_command",
+    "run_harbor_cli",
 ]

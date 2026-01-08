@@ -9,20 +9,20 @@ import json
 import os
 import re
 import shlex
-import socket
-import shutil
 import subprocess
 import time
-from collections import defaultdict
+from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
 
 from hpc.hpc import detect_hpc
 
+# Re-export HuggingFace utilities for backwards compatibility
+from hpc.hf_utils import sanitize_hf_repo_id
+
 from .job_name_ignore_list import JOB_NAME_IGNORE_KEYS
 from .arguments import JobType
-from .sft_launch_utils import build_accelerate_config_block
 
 # =============================================================================
 # Type Aliases
@@ -62,45 +62,6 @@ def strip_hosted_vllm_alias(model_name: Optional[str]) -> str:
     if is_hosted_vllm_alias(model_name):
         return str(model_name)[len(_HOSTED_VLLM_PREFIX) :]
     return str(model_name)
-
-
-def sanitize_hf_repo_id(repo_id: str, max_length: int = 96) -> str:
-    """Sanitize a HuggingFace repo_id to comply with naming rules.
-
-    Keeps org prefix (e.g. 'mlfoundations-dev/') and cleans up the rest.
-    Used when deriving HF dataset repo names from job names or model paths.
-
-    Args:
-        repo_id: The repository ID to sanitize (e.g., 'org/some-name').
-        max_length: Maximum allowed length for the full repo_id.
-
-    Returns:
-        Sanitized repo_id that complies with HuggingFace naming rules.
-    """
-
-    def collapse(value: str) -> str:
-        prev = None
-        while value != prev:
-            prev = value
-            value = value.replace("--", "-").replace("..", ".")
-        return value
-
-    org, name = repo_id.split("/", 1) if "/" in repo_id else (None, repo_id)
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", name)
-    name = collapse(name).strip("-.")
-    if not name:
-        name = "repo"
-    limit = max_length - (len(org) + 1 if org else 0)
-    if len(name) > limit > 8:
-        digest = hashlib.sha1(name.encode()).hexdigest()[:8]
-        keep = max(1, limit - len(digest))
-        base = name[:keep].rstrip("-.") or "r"
-        name = collapse(f"{base}{digest}").strip("-.")
-    if name[0] in "-.":
-        name = f"r{name[1:]}"
-    if name[-1] in "-.":
-        name = f"{name[:-1]}0"
-    return f"{org}/{name}" if org else name
 
 
 # =============================================================================
@@ -207,6 +168,27 @@ def normalize_cli_args(args_spec: Any) -> list[str]:
 
 
 # =============================================================================
+# Dict Utilities
+# =============================================================================
+
+def set_or_pop(d: dict, key: str, value) -> None:
+    """Set key in dict if value is not None, otherwise remove it.
+
+    Useful for conditionally populating config dicts where None values
+    should result in the key being absent rather than present with None.
+
+    Args:
+        d: Dictionary to modify in place.
+        key: Key to set or remove.
+        value: Value to set, or None to remove the key.
+    """
+    if value is not None:
+        d[key] = value
+    else:
+        d.pop(key, None)
+
+
+# =============================================================================
 # Global Constants
 # =============================================================================
 
@@ -246,6 +228,80 @@ def resolve_workspace_path(path_like: str) -> Path:
     if path.is_absolute():
         return path
     return (PROJECT_ROOT / path).resolve()
+
+
+@dataclass
+class ExperimentsPaths:
+    """Paths for experiment artifacts."""
+    root: Path
+    sbatch: Path
+    configs: Path
+    logs: Path
+
+
+def setup_experiments_dir(
+    exp_args: dict,
+    *,
+    create_dirs: bool = True,
+    sbatch_subdir: str = "sbatch",
+) -> ExperimentsPaths:
+    """Resolve experiments directory and create standard subdirectories.
+
+    This consolidates the common pattern of setting up experiment paths
+    used across datagen, eval, and other job launchers.
+
+    Args:
+        exp_args: Experiment arguments dict containing optional "experiments_dir".
+        create_dirs: Whether to create directories (default True).
+        sbatch_subdir: Name of sbatch subdirectory (default "sbatch",
+                       use "sbatch_scripts" for backwards compat where needed).
+
+    Returns:
+        ExperimentsPaths with root, sbatch, configs, and logs paths.
+    """
+    experiments_subdir = exp_args.get("experiments_dir") or "experiments"
+    experiments_abs = resolve_workspace_path(experiments_subdir)
+
+    paths = ExperimentsPaths(
+        root=experiments_abs,
+        sbatch=experiments_abs / sbatch_subdir,
+        configs=experiments_abs / "configs",
+        logs=experiments_abs / "logs",
+    )
+
+    if create_dirs:
+        paths.sbatch.mkdir(parents=True, exist_ok=True)
+        paths.configs.mkdir(parents=True, exist_ok=True)
+        paths.logs.mkdir(parents=True, exist_ok=True)
+
+    return paths
+
+
+def repo_relative(path_str: str, repo_root: Optional[Path] = None) -> str:
+    """Convert an absolute path to repo-relative path.
+
+    This is the inverse of resolve_repo_path() - it takes an absolute path
+    and returns a POSIX-style path relative to the repo root.
+
+    Args:
+        path_str: Path to convert (absolute or relative)
+        repo_root: Repository root (defaults to PROJECT_ROOT)
+
+    Returns:
+        POSIX-style path relative to repo root
+
+    Raises:
+        ValueError: If path is not inside the repo
+    """
+    if repo_root is None:
+        repo_root = PROJECT_ROOT
+
+    abs_path = Path(path_str).expanduser().resolve()
+    try:
+        relative = abs_path.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError(f"Path '{abs_path}' must live inside the repo ({repo_root})") from exc
+    return relative.as_posix()
 
 
 def resolve_config_path(
@@ -630,71 +686,42 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
         return derive_datagen_job_name(cli_args)
     return derive_default_job_name(cli_args)
 
-def _parse_optional_int(value: Any, label: str) -> Optional[int]:
+def _parse_optional_int(value: Any, label: Optional[str] = None) -> Optional[int]:
+    """Parse a value as int, returning None if empty/missing.
+
+    Args:
+        value: Value to parse (int, float, str, or None)
+        label: If provided, raises ValueError with this label on invalid input.
+               If None, returns None on invalid input (permissive mode).
+
+    Returns:
+        Parsed integer or None
+
+    Raises:
+        ValueError: If label is provided and value is invalid (strict mode)
+    """
     if value in (None, "", "None"):
         return None
     if isinstance(value, bool):
-        raise ValueError(f"{label} must be an integer, got boolean {value!r}")
+        if label:
+            raise ValueError(f"{label} must be an integer, got boolean {value!r}")
+        return None
     if isinstance(value, (int, float)):
         return int(value)
     try:
         return int(str(value))
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be an integer, got {value!r}") from exc
+        if label:
+            raise ValueError(f"{label} must be an integer, got {value!r}") from exc
+        return None
 
 
-def _inject_env_block(text: str, env_map: dict) -> str:
-    exports = []
-    for k, v in env_map.items():
-        if v in (None, ""):
-            continue
-        quoted = shlex.quote(str(v))
-        exports.append(f"export {k}={quoted}")
-    if not exports:
-        return text
-    lines = text.splitlines(True)
-    idx = 0
-    if lines and lines[0].startswith("#!"):
-        idx = 1
-    while idx < len(lines) and (
-        lines[idx].startswith("#SBATCH")
-        or lines[idx].strip() == ""
-        or lines[idx].startswith("#")
-    ):
-        idx += 1
-    return "".join(lines[:idx] + ["\n".join(exports) + "\n"] + lines[idx:])
+def maybe_int(value: Any) -> Optional[int]:
+    """Parse a value as int, returning None if not possible.
 
-
-def _ensure_dependency_directive(text: str, dependency: Optional[str]) -> str:
-    if not dependency:
-        return text
-
-    directive_prefix = "#SBATCH --dependency"
-    lines = text.splitlines()
-    for line in lines:
-        if directive_prefix in line:
-            return text
-
-    insert_idx = 0
-    for idx, line in enumerate(lines):
-        if idx == 0 and line.startswith("#!"):
-            insert_idx = 1
-            continue
-        stripped = line.strip()
-        if stripped.startswith("#SBATCH"):
-            insert_idx = idx + 1
-            continue
-        if not stripped:
-            insert_idx = idx + 1
-            continue
-        break
-
-    dependency_line = f"#SBATCH --dependency={dependency}"
-    lines.insert(insert_idx, dependency_line)
-    new_text = "\n".join(lines)
-    if text.endswith("\n"):
-        new_text += "\n"
-    return new_text
+    This is a permissive alias for _parse_optional_int(value, label=None).
+    """
+    return _parse_optional_int(value, label=None)
 
 
 def _merge_dependencies(*deps: Optional[str]) -> Optional[str]:
@@ -791,96 +818,31 @@ def fill_template(file_path: str, exp_args: dict, new_file_path: str) -> None:
         f.write(file)
 
 
-def _escape_bash_variables(text: str) -> str:
-    result: list[str] = []
-    i = 0
-    length = len(text)
-    while i < length:
-        if text[i] == "$" and i + 1 < length and text[i + 1] == "{":
-            start = i
-            depth = 1
-            j = i + 2
-            while j < length and depth > 0:
-                if text[j] == "{":
-                    depth += 1
-                elif text[j] == "}":
-                    depth -= 1
-                j += 1
-            inner = text[i + 2 : j - 1]
-            escaped_inner = _escape_bash_variables(inner)
-            result.append("${{" + escaped_inner + "}}")
-            i = j
-        else:
-            result.append(text[i])
-            i += 1
-    return "".join(result)
+def substitute_template(template_text: str, substitutions: Dict[str, Any]) -> str:
+    """Substitute {key} placeholders in template text with values from substitutions dict.
 
+    This is a simpler alternative to str.format() that only replaces keys present
+    in the substitutions dict, leaving other {placeholders} untouched.
 
-def construct_sbatch_script(exp_args: dict) -> str:
-    base_script_path = exp_args["train_sbatch_path"]
-    with open(base_script_path, "r") as f:
-        base_script = f.read()
+    Args:
+        template_text: Template string with {key} placeholders.
+        substitutions: Dict mapping placeholder names to replacement values.
+            Values are converted to strings.
 
-    kwargs = defaultdict(str, **exp_args)
-    kwargs["accelerate_config_block"] = build_accelerate_config_block(exp_args)
+    Returns:
+        Template text with placeholders replaced.
 
-    json_files_cat = re.findall(r"cat.*?<<EOT >.*?EOT", base_script, re.DOTALL)
-    json_filenames = []
-    for json_file in json_files_cat:
-        json_file_name = re.match(
-            r"cat.*?<<EOT >.*?(\S+).*?EOT", json_file, re.DOTALL
-        ).group(1)
-        json_filenames.append(json_file_name)
-
-        base_script = re.sub(
-            r"cat.*?<<EOT >.*?" + json_file_name.replace("$", "\\$") + r".*?EOT",
-            f"cat {json_file_name}",
-            base_script,
-            count=1,
-            flags=re.DOTALL,
-        )
-
-    base_script = _escape_bash_variables(base_script)
-
-    time_limit = kwargs.get("time_limit")
-    if time_limit is None:
-        time_limit = "01:00:00"
-        kwargs["time_limit"] = time_limit
-
-    hpc = detect_hpc()
-    hpc_name = hpc.name
-    if hpc_name == "jureca" or hpc_name == "juwels":
-        login_node = socket.gethostname().split(".")[0] + "i"
-        if "{login_node}" in base_script:
-            if kwargs.get("internet_node", False):
-                if not shutil.which("proxychains4"):
-                    raise RuntimeError("proxychains4 not found, please install it to use internet_node")
-            base_script = base_script.replace("{login_node}", login_node)
-
-    sbatch_script = base_script.format(**kwargs)
-    sbatch_script = _ensure_dependency_directive(sbatch_script, exp_args.get("dependency"))
-
-    env_block = {
-        "DISABLE_VERSION_CHECK": "1",
-    }
-    stage_value = str(exp_args.get("stage") or "").lower()
-    if exp_args.get("use_mca") and stage_value == "sft":
-        env_block["USE_MCA"] = "1"
-        os.environ.setdefault("USE_MCA", "1")
-
-    sbatch_script = _inject_env_block(sbatch_script, env_block)
-
-    for json_file, json_file_name in zip(json_files_cat, json_filenames):
-        sbatch_script = sbatch_script.replace(f"cat {json_file_name}", json_file)
-
-    sbatch_dir = os.path.join(kwargs["experiments_dir"], "sbatch_scripts")
-    os.makedirs(sbatch_dir, exist_ok=True)
-    sbatch_script_path = os.path.join(sbatch_dir, f"{kwargs['job_name']}.sbatch")
-    with open(sbatch_script_path, "w") as f:
-        f.write(sbatch_script)
-        print(f"Wrote sbatch script to {sbatch_script_path}")
-
-    return sbatch_script_path
+    Example:
+        >>> substitute_template("Job: {job_name}, Time: {time_limit}", {
+        ...     "job_name": "my_job",
+        ...     "time_limit": "24:00:00",
+        ... })
+        'Job: my_job, Time: 24:00:00'
+    """
+    result = template_text
+    for key, value in substitutions.items():
+        result = result.replace("{" + key + "}", str(value))
+    return result
 
 
 # =============================================================================
@@ -1151,9 +1113,15 @@ __all__ = [
     # Path resolution
     "resolve_repo_path",
     "resolve_workspace_path",
+    "repo_relative",
     "resolve_config_path",
+    # Experiments directory setup
+    "ExperimentsPaths",
+    "setup_experiments_dir",
     # Value coercion
     "coerce_positive_int",
+    # Dict utilities
+    "set_or_pop",
     # JSON/Config parsing
     "coerce_agent_kwargs",
     # Endpoint file utilities
@@ -1175,16 +1143,15 @@ __all__ = [
     "sanitize_hf_repo_id",
     # SBATCH utilities
     "_parse_optional_int",
-    "_inject_env_block",
-    "_ensure_dependency_directive",
+    "maybe_int",
     "_merge_dependencies",
     "launch_sbatch",
     "update_exp_args",
     # File utilities
     "check_exists",
-    "construct_sbatch_script",
     "extract_template_keys",
     "fill_template",
+    "substitute_template",
     # Benchmark derivation
     "derive_benchmark_repo",
     # Upload utilities

@@ -27,7 +27,6 @@ class HPC(BaseModel):
     internet_node: bool
     gpus_type: str
     total_partition_nodes: int
-    train_sbatch_filename: str
     node_exclusion_list: str = ""
     qos: str = ""  # Most clusters don't use QOS; set explicitly where needed
     # GPU directive format: "--gres=gpu:{n}", "--gres=gpu:{type}:{n}", "--gpus-per-node={n}", or "" (no directive)
@@ -49,18 +48,24 @@ class HPC(BaseModel):
     env_vars: Dict[str, str] = {}
     library_paths: Dict[str, str] = {}
 
+    # NCCL/Networking settings (cluster-specific, used by universal templates)
+    nccl_settings: Dict[str, str] = {}
+
+    # Training launcher preference: "torchrun" or "accelerate"
+    training_launcher: str = "torchrun"
+
+    # SSH tunneling for no-internet clusters (JSC)
+    needs_ssh_tunnel: bool = False
+
+    # CUDA path detection for complex clusters (Perlmutter)
+    needs_cuda_detection: bool = False
+
     def model_post_init(self, __context) -> None:
         # Derive a default CPU-per-GPU ratio when not explicitly provided.
         if not self.cpus_per_gpu:
             gpus = max(self.gpus_per_node, 1)
             if self.cpus_per_node:
                 self.cpus_per_gpu = math.ceil(self.cpus_per_node / gpus)
-
-    @computed_field
-    def train_sbatch_path(self) -> str:
-        # All sbatch files should be in the "dcft/hpc/sbatch" directory
-        hpc_dir = os.path.dirname(os.path.realpath(__file__))
-        return os.path.join(hpc_dir, "sbatch", self.train_sbatch_filename)
 
     @computed_field
     def dotenv_path(self) -> str:
@@ -187,11 +192,65 @@ class HPC(BaseModel):
         env_parts.append("HF_HOME=${HF_HOME:-}")
         return " ".join(env_parts)
 
+    def get_nccl_exports(self) -> str:
+        """Generate export statements for NCCL/networking settings."""
+        if not self.nccl_settings:
+            return "# No cluster-specific NCCL settings"
+
+        lines = ["# Cluster-specific NCCL/networking settings"]
+        for key, value in self.nccl_settings.items():
+            lines.append(f'export {key}="{value}"')
+        return "\n".join(lines)
+
+    def get_ssh_tunnel_setup(self) -> str:
+        """Generate SSH tunnel setup script for no-internet clusters (JSC).
+
+        This keeps the battle-tested bash logic for SSH tunneling intact,
+        preserving the exact behavior from jsc_train.sbatch.
+        """
+        if not self.needs_ssh_tunnel:
+            return "# No SSH tunnel needed for this cluster"
+
+        return r'''# SSH tunnel setup for no-internet clusters
+if [ -n "${SSH_KEY:-}" ]; then
+    USER_NAME="$(whoami)"
+    LOGIN_NODE="${SLURM_SUBMIT_HOST:-$(hostname -f | sed 's/^[^.]*\.//')}"
+    PORT_TO_USE=$((20000 + RANDOM % 10000))
+    head_node_ip=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+    head_node_ip="$(nslookup "$head_node_ip" | grep -oP '(?<=Address: ).*')"
+
+    SSH_TUNNEL_CMD="ssh -g -f -N -D 0.0.0.0:$PORT_TO_USE \\
+        -o StrictHostKeyChecking=no \\
+        -o ConnectTimeout=1000 \\
+        -o ServerAliveInterval=15 \\
+        -o ServerAliveCountMax=15 \\
+        -o TCPKeepAlive=no \\
+        -o ExitOnForwardFailure=yes \\
+        -o BatchMode=yes \\
+        -i $SSH_KEY \\
+        ${USER_NAME}@$LOGIN_NODE"
+
+    mkdir -p ~/.proxychains
+    cat > ~/.proxychains/proxychains.conf <<-EOT
+        strict_chain
+        proxy_dns
+        tcp_read_time_out 30000
+        tcp_connect_time_out 15000
+        localnet 127.0.0.0/255.0.0.0
+        [ProxyList]
+        socks5 ${head_node_ip} ${PORT_TO_USE}
+EOT
+    eval "$SSH_TUNNEL_CMD"
+    sleep 1
+    PROXY_CMD="proxychains4"
+else
+    PROXY_CMD=""
+fi'''
+
 
 jureca = HPC(
     name="jureca",
     hostname_pattern=r"jr.*?.jureca",
-    train_sbatch_filename="jsc_train.sbatch",
     dotenv_filename="jureca.env",
     account="westai0007",  # synthlaion (24 nodes per job)
     partition="dc-hwai",  # dc-gpu
@@ -206,12 +265,19 @@ jureca = HPC(
     env_vars={
         "PYTHONFAULTHANDLER": "1",
     },
+    # NCCL/networking settings for SFT training (InfiniBand, no internet)
+    nccl_settings={
+        "NCCL_NET_GDR_LEVEL": "0",
+        "NCCL_SOCKET_IFNAME": "ib0",
+        "NCCL_IB_TIMEOUT": "60",
+    },
+    training_launcher="accelerate",
+    needs_ssh_tunnel=True,
 )
 
 jupiter = HPC(
     name="jupiter",
     hostname_pattern=r"j.*?.jupiter.internal",
-    train_sbatch_filename="jsc_train.sbatch",
     dotenv_filename="jupiter.env",
     account="jureap1",
     partition="all",
@@ -221,12 +287,19 @@ jupiter = HPC(
     gpus_type="GH200 96GB",
     total_partition_nodes=48,
     gpu_directive_format="--gres=gpu:{n}",
+    # NCCL/networking settings for SFT training (InfiniBand, no internet)
+    nccl_settings={
+        "NCCL_NET_GDR_LEVEL": "0",
+        "NCCL_SOCKET_IFNAME": "ib0",
+        "NCCL_IB_TIMEOUT": "60",
+    },
+    training_launcher="accelerate",
+    needs_ssh_tunnel=True,
 )
 
 juwels = HPC(
     name="juwels",
     hostname_pattern=r"jw.*?.juwels",
-    train_sbatch_filename="jsc_train.sbatch",
     dotenv_filename="juwels.env",
     account="laionize",
     partition="booster",
@@ -237,12 +310,19 @@ juwels = HPC(
     total_partition_nodes=936,
     node_exclusion_list="jwb[0059,0067,0069,0193,0198,0215,0266,0284,0287,0294,0359,0418,0637,0647,0829,0832,0838,0898,0907,0921,0971,1004,1023,1029,1213]",
     gpu_directive_format="--gres=gpu:{n}",
+    # NCCL/networking settings for SFT training (InfiniBand, no internet)
+    nccl_settings={
+        "NCCL_NET_GDR_LEVEL": "0",
+        "NCCL_SOCKET_IFNAME": "ib0",
+        "NCCL_IB_TIMEOUT": "60",
+    },
+    training_launcher="accelerate",
+    needs_ssh_tunnel=True,
 )
 
 leonardo = HPC(
     name="leonardo",
     hostname_pattern=r".*?.leonardo.local",
-    train_sbatch_filename="leonardo_train.sbatch",
     dotenv_filename="leonardo.env",
     account="EUHPC_E03_068",
     partition="boost_usr_prod",
@@ -267,7 +347,6 @@ leonardo = HPC(
 capella = HPC(
     name="capella",
     hostname_pattern=r"c\d",
-    train_sbatch_filename="zih_capella_train.sbatch",
     dotenv_filename="zih_capella.env",
     account="p_agents_finetuning",
     partition="capella",
@@ -289,12 +368,23 @@ capella = HPC(
         "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "1",
         "RAY_NOSET_CUDA_VISIBLE_DEVICES": "1",
     },
+    # NCCL/networking settings for SFT training (InfiniBand)
+    nccl_settings={
+        "NCCL_DEBUG": "INFO",
+        "NCCL_PROTO": "simple",
+        "NCCL_IB_TIMEOUT": "23",
+        "FI_EFA_FORK_SAFE": "1",
+        "FI_LOG_LEVEL": "1",
+        "FI_EFA_USE_DEVICE_RDMA": "1",
+        "NCCL_NET_GDR_LEVEL": "SYS",
+        "NCCL_NET_GDR_READ": "1",
+    },
+    training_launcher="torchrun",
 )
 
 alpha = HPC(
     name="alpha",
     hostname_pattern=r".*?.alpha.hpc.tu-dresden.de",
-    train_sbatch_filename="alpha_train.sbatch",
     dotenv_filename="alpha.env",
     account="p_finetuning",
     partition="alpha",
@@ -305,12 +395,23 @@ alpha = HPC(
     gpus_type="A100 40GB",
     total_partition_nodes=37,
     gpu_directive_format="--gpus-per-node={n}",
+    # NCCL/networking settings for SFT training (similar to Capella, ZIH cluster)
+    nccl_settings={
+        "NCCL_DEBUG": "INFO",
+        "NCCL_PROTO": "simple",
+        "NCCL_IB_TIMEOUT": "23",
+        "FI_EFA_FORK_SAFE": "1",
+        "FI_LOG_LEVEL": "1",
+        "FI_EFA_USE_DEVICE_RDMA": "1",
+        "NCCL_NET_GDR_LEVEL": "SYS",
+        "NCCL_NET_GDR_READ": "1",
+    },
+    training_launcher="torchrun",
 )
 
 dip = HPC(
     name="dip",
     hostname_pattern=r".*dip\.tu-dresden\.de$",
-    train_sbatch_filename="local_stub.sbatch",
     dotenv_filename="dip.env",
     account="",
     partition="",
@@ -325,7 +426,6 @@ dip = HPC(
 lrz = HPC(
     name="lrz",
     hostname_pattern=r"lrz.*?",  # Placeholder pattern
-    train_sbatch_filename="lrz_train.sbatch",
     dotenv_filename="lrz.env",
     account="XXXXX",
     partition="mcml-hgx-h100-92x4",
@@ -340,7 +440,6 @@ lrz = HPC(
 vista = HPC(
     name="vista",
     hostname_pattern=r".*?.vista.tacc.utexas.edu",
-    train_sbatch_filename="vista_train.sbatch",
     dotenv_filename="tacc.env",
     account="CCR24067",
     partition="gh",
@@ -366,12 +465,25 @@ vista = HPC(
         "TRITON_CC": "/home1/apps/gcc/15.1.0/bin/gcc",
         "LD_PRELOAD": "/home1/apps/gcc/15.1.0/lib64/libstdc++.so.6",
     },
+    # NCCL/networking settings for SFT training (EFA networking)
+    nccl_settings={
+        "NCCL_PROTO": "simple",
+        "NCCL_DEBUG": "INFO",
+        "FI_EFA_FORK_SAFE": "1",
+        "FI_LOG_LEVEL": "1",
+        "FI_EFA_ENABLE_SHM_TRANSFER": "0",
+        "FI_PROVIDER": "efa",
+        "FI_EFA_TX_MIN_CREDITS": "64",
+        "NCCL_TREE_THRESHOLD": "0",
+        "NCCL_TIMEOUT": "1800",
+        "NCCL_IB_TIMEOUT": "23",
+    },
+    training_launcher="torchrun",
 )
 
 lonestar = HPC(
     name="lonestar",
     hostname_pattern=r".*?.ls6.tacc.utexas.edu",
-    train_sbatch_filename="lonestar_train.sbatch",
     dotenv_filename="tacc.env",
     account="CCR24067",
     partition="gpu-a100",
@@ -385,7 +497,6 @@ lonestar = HPC(
 claix = HPC(
     name="claix",
     hostname_pattern=r".*?.hpc.itc.rwth-aachen.de",
-    train_sbatch_filename="claix_train.sbatch",
     dotenv_filename="claix.env",
     account="rwth1775",
     partition="c23g",
@@ -400,7 +511,6 @@ claix = HPC(
 nyugreene = HPC(
     name="nyugreene",
     hostname_pattern=r"log-\d+\.hpc\.nyu\.edu",
-    train_sbatch_filename="nyugreene_train.sbatch",
     dotenv_filename="nyugreene.env",
     account="pr_95_tandon_advanced",
     partition="gpu",
@@ -417,7 +527,6 @@ nyutorch = HPC(
     name="nyutorch",
     # hostname_pattern=r"gh\d+\.hpc\.nyu\.edu",
     hostname_pattern=r"torch-login.*\.hpc\.nyu\.edu",
-    train_sbatch_filename="nyutorch_train.sbatch",
     dotenv_filename="nyutorch.env",
     account="torch_pr_40_tandon_advanced",
     partition="",
@@ -445,7 +554,6 @@ nyutorch = HPC(
 oumi = HPC(
     name="oumi",
     hostname_pattern=r"oumi-login\d+",
-    train_sbatch_filename="oumi_train.sbatch",
     dotenv_filename="oumi.env",
     account="",
     partition="",
@@ -461,7 +569,6 @@ oumi = HPC(
 perlmutter = HPC(
     name="perlmutter",
     hostname_pattern=r"login\d+\.perlmutter\.nersc\.gov",
-    train_sbatch_filename="perlmutter_train.sbatch",
     dotenv_filename="perlmutter.env",
     account="m5091",
     partition="",
@@ -473,12 +580,19 @@ perlmutter = HPC(
     total_partition_nodes=256,
     qos="regular",
     gpu_directive_format="--gpus-per-node={n}",
+    # NCCL/networking settings for SFT training
+    nccl_settings={
+        "NCCL_DEBUG": "INFO",
+        "NCCL_PROTO": "simple",
+        "NCCL_IB_TIMEOUT": "22",
+    },
+    training_launcher="torchrun",
+    needs_cuda_detection=True,  # Complex CUDA SDK path detection
 )
 
 frontier = HPC(
     name="frontier",
     hostname_pattern=r"login\d+\.frontier\.olcf\.ornl\.gov",
-    train_sbatch_filename="frontier_train.sbatch",
     dotenv_filename="frontier.env",
     account="LRN081",
     partition="batch",

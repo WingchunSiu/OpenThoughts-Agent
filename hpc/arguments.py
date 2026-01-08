@@ -332,9 +332,6 @@ class LaunchArgs:
         default="DCAgent",
         metadata={"help": "Name responsible for launching the job (<=96 characters)"}
     )
-    train_sbatch_path: Optional[str] = field(
-        default=None, metadata={"help": "Path to training sbatch file"}
-    )
     train_config_path: Optional[str] = field(
         default=None, metadata={"help": "Path to config file"}
     )
