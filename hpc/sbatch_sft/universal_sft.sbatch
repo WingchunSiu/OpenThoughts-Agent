@@ -79,6 +79,7 @@ export CUDA_LAUNCH_BLOCKING=0
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export OMP_NUM_THREADS=1
 export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
+export DISABLE_VERSION_CHECK=1  # Skip LlamaFactory transformers version check
 
 # --- Distributed training setup ---
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
