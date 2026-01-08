@@ -99,7 +99,7 @@ def launch_consolidate_job(
 
     partition = exp_args.get("partition") or getattr(hpc, "partition", "")
     account = exp_args.get("account") or getattr(hpc, "account", "")
-    time_limit = exp_args.get("time_limit") or os.environ.get("DEFAULT_TIME_LIMIT", "24:00:00")
+    time_limit = exp_args.get("time_limit") or getattr(hpc, "default_time_limit", "24:00:00")
 
     cpus_per_task = int(exp_args.get("cpus_per_task") or getattr(hpc, "cpus_per_node", 1) or 1)
     if hpc_name == "capella":

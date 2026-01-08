@@ -60,6 +60,15 @@ class HPC(BaseModel):
     # CUDA path detection for complex clusters (Perlmutter)
     needs_cuda_detection: bool = False
 
+    # Job time limits (cluster-specific)
+    default_time_limit: str = "24:00:00"
+    max_time_limit: str = "48:00:00"
+
+    # Node scaling presets for gosmall/gotrain/gofast helpers
+    num_nodes_slow: int = 1
+    num_nodes_default: int = 4
+    num_nodes_fast: int = 8
+
     def model_post_init(self, __context) -> None:
         # Derive a default CPU-per-GPU ratio when not explicitly provided.
         if not self.cpus_per_gpu:
@@ -273,6 +282,10 @@ jureca = HPC(
     },
     training_launcher="accelerate",
     needs_ssh_tunnel=True,
+    # Job scaling (from jureca.env)
+    default_time_limit="24:00:00",
+    num_nodes_default=1,
+    num_nodes_fast=4,
 )
 
 jupiter = HPC(
@@ -295,6 +308,11 @@ jupiter = HPC(
     },
     training_launcher="accelerate",
     needs_ssh_tunnel=True,
+    # Job scaling (from jupiter.env)
+    default_time_limit="12:00:00",
+    num_nodes_slow=1,
+    num_nodes_default=4,
+    num_nodes_fast=8,
 )
 
 juwels = HPC(
@@ -318,6 +336,10 @@ juwels = HPC(
     },
     training_launcher="accelerate",
     needs_ssh_tunnel=True,
+    # Job scaling (from juwels.env)
+    default_time_limit="24:00:00",
+    num_nodes_default=4,
+    num_nodes_fast=8,
 )
 
 leonardo = HPC(
@@ -380,12 +402,17 @@ capella = HPC(
         "NCCL_NET_GDR_READ": "1",
     },
     training_launcher="torchrun",
+    # Job scaling (from zih_capella.env)
+    default_time_limit="47:59:00",
+    num_nodes_slow=1,
+    num_nodes_default=1,
+    num_nodes_fast=4,
 )
 
 alpha = HPC(
     name="alpha",
     hostname_pattern=r".*?.alpha.hpc.tu-dresden.de",
-    dotenv_filename="alpha.env",
+    dotenv_filename="zih_capella.env",  # Alpha uses same ZIH env as Capella
     account="p_finetuning",
     partition="alpha",
     gpus_per_node=8,
@@ -407,6 +434,11 @@ alpha = HPC(
         "NCCL_NET_GDR_READ": "1",
     },
     training_launcher="torchrun",
+    # Job scaling (same as Capella, ZIH cluster)
+    default_time_limit="47:59:00",
+    num_nodes_slow=1,
+    num_nodes_default=1,
+    num_nodes_fast=4,
 )
 
 dip = HPC(
@@ -479,6 +511,12 @@ vista = HPC(
         "NCCL_IB_TIMEOUT": "23",
     },
     training_launcher="torchrun",
+    # Job scaling (from tacc.env)
+    default_time_limit="24:00:00",
+    max_time_limit="48:00:00",
+    num_nodes_slow=4,
+    num_nodes_default=16,
+    num_nodes_fast=32,
 )
 
 lonestar = HPC(
@@ -492,6 +530,12 @@ lonestar = HPC(
     internet_node=True,
     gpus_type="A100 40GB",
     total_partition_nodes=73,
+    # Job scaling (from tacc.env)
+    default_time_limit="24:00:00",
+    max_time_limit="48:00:00",
+    num_nodes_slow=4,
+    num_nodes_default=16,
+    num_nodes_fast=32,
 )
 
 claix = HPC(
@@ -521,6 +565,12 @@ nyugreene = HPC(
     gpus_type="A100/H100 80GB",
     total_partition_nodes=48,
     gpu_directive_format="--gres=gpu:{n}",
+    # Job scaling (from nyugreene.env)
+    default_time_limit="24:00:00",
+    max_time_limit="47:59:00",
+    num_nodes_slow=1,
+    num_nodes_default=2,
+    num_nodes_fast=4,
 )
 
 nyutorch = HPC(
@@ -549,6 +599,12 @@ nyutorch = HPC(
     library_paths={
         "TRITON_CC": "/usr/bin/gcc",
     },
+    # Job scaling (from nyutorch.env)
+    default_time_limit="24:00:00",
+    max_time_limit="47:59:00",
+    num_nodes_slow=1,
+    num_nodes_default=2,
+    num_nodes_fast=4,
 )
 
 oumi = HPC(
@@ -564,6 +620,12 @@ oumi = HPC(
     gpus_type="H100 80GB",
     total_partition_nodes=4,
     gpu_directive_format="--gpus-per-node={n}",
+    # Job scaling (from oumi.env)
+    default_time_limit="168:00:00",
+    max_time_limit="168:00:00",
+    num_nodes_slow=4,
+    num_nodes_default=16,
+    num_nodes_fast=32,
 )
 
 perlmutter = HPC(
@@ -588,6 +650,12 @@ perlmutter = HPC(
     },
     training_launcher="torchrun",
     needs_cuda_detection=True,  # Complex CUDA SDK path detection
+    # Job scaling (from perlmutter.env)
+    default_time_limit="168:00:00",
+    max_time_limit="168:00:00",
+    num_nodes_slow=1,
+    num_nodes_default=4,
+    num_nodes_fast=8,
 )
 
 frontier = HPC(

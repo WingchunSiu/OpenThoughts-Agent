@@ -40,6 +40,7 @@ datagen = [
     "google-genai>=0.1.0",
     "nvidia-cuda-nvcc-cu12==12.8.93; platform_system != 'Darwin'",
     "vllm[flashinfer]==0.11.2; platform_system != 'Darwin'",
+    "transformers==4.57.3",
     "torch==2.9.0+cu128; platform_system != 'Darwin' or platform_machine != 'arm64'",
     "torch==2.9.0; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]

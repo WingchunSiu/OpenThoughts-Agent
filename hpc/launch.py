@@ -115,7 +115,7 @@ def _apply_env_overrides(exp_args: dict, cli_args_filtered: dict, hpc) -> tuple[
     exp_args = update_exp_args(exp_args, {"job_creator": job_creator})
 
     if exp_args.get("time_limit") in (None, "",):
-        default_time = os.path.expandvars(os.environ.get("DEFAULT_TIME_LIMIT", "24:00:00"))
+        default_time = getattr(hpc, "default_time_limit", "24:00:00")
         exp_args = update_exp_args(exp_args, {"time_limit": default_time})
         print(f"Using default time_limit: {default_time}")
 
