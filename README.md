@@ -55,14 +55,13 @@ uv pip install -e ".[datagen]"            # add ,cloud or other extras as needed
 ```
 
 * **SFT stack**:  
-  * Ensure the git submodule is initialized:  
-    `git submodule update --init --recursive sft/llamafactory`
-  * Install LLaMA Factory directly from the submodule since OT-Agent does not ship an `[sft]` extra:  
+* Install the new `[sft]` extra to auto-sync the submodule and pull its heavy dependencies in one go (runs `git submodule update --init --remote sft/llamafactory` unless you set `OT_AGENT_SKIP_SFT_SYNC=1`):
     ```bash
-    cd sft/llamafactory
-    pip install -e .[train,liger-kernel,deepspeed]  # select the extras you need
-    cd -
+    uv pip install -e "[sft]"                              # only SFT runtime
+    uv pip install -e "[datagen,sft]"                      # convenient combined env
+    uv pip install -e "[datagen,sft,cloud]"                # pull whatever extras you need
     ```
+  * Under the hood we install LLaMA-Factory from `sft/llamafactory` with the `hf-kernels,liger-kernel,deepspeed,bitsandbytes` extras. If you need additional LLaMA-Factory extras, continue to `cd sft/llamafactory && uv pip install -e .[...more...]`.
   * Training configs that pair with OT-Agent live under `sft/lf_configs/**`; refer to `sft/llamafactory/README.md` for detailed flags and dependency notes.
 * **Data stack**
   * Dataset tooling docs live under `data/README.md`; install per-generator requirements in addition to the `datagen` extras above when needed.
