@@ -31,6 +31,14 @@ from hpc.arg_groups import (
     add_log_path_args,
 )
 
+# Re-export model-specific utilities for backward compatibility
+from hpc.model_utils import (
+    is_gpt_oss_model,
+    setup_gpt_oss_tiktoken,
+    get_model_specific_env_vars,
+    GPT_OSS_TIKTOKEN_FILES,
+)
+
 
 @dataclass
 class ManagedProcess:
@@ -359,6 +367,7 @@ def build_harbor_command(
     harbor_extra_args: List[str],
     dataset_slug: Optional[str] = None,
     dataset_path: Optional[str] = None,
+    jobs_dir: Optional[str] = None,
 ) -> List[str]:
     """Build the harbor jobs start command.
 
@@ -382,6 +391,7 @@ def build_harbor_command(
         harbor_extra_args: Additional args to pass through to harbor
         dataset_slug: Harbor dataset slug (mutually exclusive with dataset_path)
         dataset_path: Path to tasks directory (mutually exclusive with dataset_slug)
+        jobs_dir: Override for --jobs-dir (where Harbor writes job outputs)
 
     Returns:
         Complete harbor command as list of strings
@@ -622,6 +632,11 @@ def apply_datagen_defaults(args: argparse.Namespace) -> None:
     cli_args, env_vars = _build_vllm_cli_args(merged_cfg)
     args._vllm_cli_args = cli_args
     args._vllm_env_vars = env_vars
+
+    # Setup tiktoken encodings for GPT-OSS models
+    if is_gpt_oss_model(args.model):
+        _, tiktoken_env = setup_gpt_oss_tiktoken()
+        args._vllm_env_vars.update(tiktoken_env)
 
 
 def setup_docker_runtime_if_needed(env_type: str) -> None:

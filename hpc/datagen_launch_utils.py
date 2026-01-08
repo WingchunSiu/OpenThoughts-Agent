@@ -562,6 +562,7 @@ class TaskgenJobRunner:
         """Run task generation with managed Ray cluster and vLLM server."""
         from hpc.ray_utils import RayCluster, RayClusterConfig
         from hpc.vllm_utils import VLLMServer, VLLMConfig
+        from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
         hpc = self._get_hpc()
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
@@ -579,8 +580,16 @@ class TaskgenJobRunner:
             ray_env_vars=hpc.get_ray_env_vars(),
         )
 
+        model_path = self.config.vllm_model_path or ""
+
+        # Setup tiktoken encodings for GPT-OSS models
+        extra_env_vars = {}
+        if is_gpt_oss_model(model_path):
+            _, tiktoken_env = setup_gpt_oss_tiktoken()
+            extra_env_vars.update(tiktoken_env)
+
         vllm_cfg = VLLMConfig(
-            model_path=self.config.vllm_model_path or "",
+            model_path=model_path,
             tensor_parallel_size=self.config.tensor_parallel_size,
             pipeline_parallel_size=self.config.pipeline_parallel_size,
             data_parallel_size=self.config.data_parallel_size,
@@ -600,6 +609,7 @@ class TaskgenJobRunner:
                 config=vllm_cfg,
                 ray_cluster=ray_cluster,
                 log_path=vllm_log,
+                extra_env_vars=extra_env_vars if extra_env_vars else None,
             )
             with vllm_server:
                 return self._run_datagen(endpoint=vllm_server.endpoint)
@@ -789,6 +799,7 @@ class TracegenJobRunner:
         """Run trace generation with managed Ray cluster and vLLM server."""
         from hpc.ray_utils import RayCluster, RayClusterConfig
         from hpc.vllm_utils import VLLMServer, VLLMConfig
+        from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
         hpc = self._get_hpc()
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
@@ -808,6 +819,12 @@ class TracegenJobRunner:
 
         raw_model_path = self.config.vllm_model_path or self.config.model
         model_path = strip_hosted_vllm_alias(raw_model_path) or raw_model_path
+
+        # Setup tiktoken encodings for GPT-OSS models
+        extra_env_vars = {}
+        if is_gpt_oss_model(model_path):
+            _, tiktoken_env = setup_gpt_oss_tiktoken()
+            extra_env_vars.update(tiktoken_env)
 
         vllm_cfg = VLLMConfig(
             model_path=model_path,
@@ -831,6 +848,7 @@ class TracegenJobRunner:
                 config=vllm_cfg,
                 ray_cluster=ray_cluster,
                 log_path=vllm_log,
+                extra_env_vars=extra_env_vars if extra_env_vars else None,
             )
             with vllm_server:
                 return self._run_harbor(endpoint=vllm_server.endpoint)

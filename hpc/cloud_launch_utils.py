@@ -307,6 +307,7 @@ def build_remote_setup_script(
     main_cmd: str,
     secrets_path: Optional[str] = None,
     add_pythonpath: bool = True,
+    extra_env_vars: Optional[Dict[str, str]] = None,
 ) -> str:
     """Build the remote setup script to run in the container.
 
@@ -315,6 +316,7 @@ def build_remote_setup_script(
         main_cmd: Main command to execute
         secrets_path: Optional path to secrets file to source
         add_pythonpath: Whether to add workdir to PYTHONPATH
+        extra_env_vars: Additional environment variables to export
 
     Returns:
         Shell script as string (commands joined with &&)
@@ -323,6 +325,11 @@ def build_remote_setup_script(
 
     if add_pythonpath:
         cmds.append(f"export PYTHONPATH={workdir}:${{PYTHONPATH:-}}")
+
+    # Add extra environment variables
+    if extra_env_vars:
+        for key, value in extra_env_vars.items():
+            cmds.append(f"export {key}={value}")
 
     if secrets_path:
         cmds.append(f"set -a && source {secrets_path} && set +a")
@@ -836,6 +843,56 @@ class CloudLauncher:
             file_mounts[remote_secret_path] = os.path.abspath(args.secrets_env)
         return file_mounts
 
+    def setup_gpt_oss_if_needed(
+        self,
+        args: "argparse.Namespace",
+        file_mounts: dict,
+    ) -> Dict[str, str]:
+        """Setup tiktoken encodings for GPT-OSS models if needed.
+
+        Downloads tiktoken encoding files locally and adds file mount for
+        remote access. Returns extra environment variables to set on remote.
+
+        See: https://github.com/vllm-project/vllm/issues/22525
+
+        Args:
+            args: Parsed arguments (checks args.model and datagen_config)
+            file_mounts: File mounts dict to update with tiktoken mount
+
+        Returns:
+            Dict of environment variables to export on remote (may be empty)
+        """
+        from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
+
+        # Check model from args or datagen config
+        model = getattr(args, "model", None)
+        if not model:
+            datagen_config = getattr(args, "datagen_config", None)
+            if datagen_config:
+                try:
+                    import yaml
+                    cfg_path = Path(datagen_config).expanduser().resolve()
+                    if cfg_path.exists():
+                        with cfg_path.open("r", encoding="utf-8") as f:
+                            cfg = yaml.safe_load(f) or {}
+                        engine_cfg = cfg.get("engine") or {}
+                        model = engine_cfg.get("model")
+                except Exception:
+                    pass
+
+        if not is_gpt_oss_model(model):
+            return {}
+
+        print("[cloud] Detected GPT-OSS model, setting up tiktoken encodings...")
+        local_cache, env_vars = setup_gpt_oss_tiktoken()
+
+        # Add mount for tiktoken cache
+        remote_tiktoken_path = "/opt/tiktoken_encodings"
+        file_mounts[remote_tiktoken_path] = str(local_cache)
+
+        # Return env vars with remote path
+        return {"TIKTOKEN_ENCODINGS_BASE": remote_tiktoken_path}
+
     # -------------------------------------------------------------------------
     # Resource Building
     # -------------------------------------------------------------------------
@@ -1147,16 +1204,20 @@ class CloudLauncher:
                 raise FileNotFoundError(f"secrets env file not found: {secret_src}")
             remote_secret_path = "/tmp/openthoughts_secrets.env"
 
+        # Build file mounts
+        base_mounts = self.build_file_mounts(args, remote_workdir, remote_secret_path)
+        file_mounts.update(base_mounts)
+
+        # Setup GPT-OSS tiktoken encodings if needed (modifies file_mounts)
+        extra_env_vars = self.setup_gpt_oss_if_needed(args, file_mounts)
+
         final_cmd = build_remote_setup_script(
             workdir=remote_workdir,
             main_cmd=task_cmd_str,
             secrets_path=remote_secret_path,
             add_pythonpath=not args.no_sync,
+            extra_env_vars=extra_env_vars,
         )
-
-        # Build file mounts
-        base_mounts = self.build_file_mounts(args, remote_workdir, remote_secret_path)
-        file_mounts.update(base_mounts)
 
         # Build resources
         resources = self.build_resources(args, provider_names, provider_configs, docker_image)

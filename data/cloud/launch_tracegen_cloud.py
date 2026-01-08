@@ -132,17 +132,17 @@ class TracegenCloudLauncher(CloudLauncher):
     def get_periodic_sync_paths(self, args, remote_output_dir: str, remote_workdir: str) -> List[tuple]:
         """Return paths to sync periodically during job execution.
 
-        Syncs logs and Harbor jobs directory to track trace generation progress.
+        Syncs logs and Harbor trace_jobs directory to track trace generation progress.
         """
         return [
             (f"{remote_output_dir}/logs", str(Path(args.local_sync_dir) / "logs")),
-            (f"{remote_workdir}/jobs", str(Path(args.local_sync_dir) / "jobs")),
+            (f"{remote_workdir}/trace_jobs", str(Path(args.local_sync_dir) / "trace_jobs")),
         ]
 
     def sync_additional_outputs(self, cluster_name: str, args, remote_workdir: str) -> None:
-        """Sync Harbor jobs directory (final sync after job completes)."""
-        jobs_remote = f"{remote_workdir}/jobs"
-        jobs_local = str(Path(args.local_sync_dir) / "jobs")
+        """Sync Harbor trace_jobs directory (final sync after job completes)."""
+        jobs_remote = f"{remote_workdir}/trace_jobs"
+        jobs_local = str(Path(args.local_sync_dir) / "trace_jobs")
         print(f"[cloud-sync] Also syncing Harbor jobs from {jobs_remote}...")
         sync_outputs(
             cluster_name=cluster_name,

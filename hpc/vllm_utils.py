@@ -163,6 +163,7 @@ class VLLMServer:
     config: VLLMConfig
     ray_cluster: "RayCluster"
     log_path: Optional[Path] = None
+    extra_env_vars: Optional[Dict[str, str]] = None  # Additional env vars (e.g., tiktoken)
     _process: Optional[subprocess.Popen] = None
     _log_file: Optional[object] = None
 
@@ -248,6 +249,9 @@ class VLLMServer:
         env["PYTHONUNBUFFERED"] = "1"  # Ensure real-time log output
         if self.config.server_config:
             env.update(extra_env_vars)
+        # Merge extra env vars from caller (e.g., TIKTOKEN_ENCODINGS_BASE for GPT-OSS)
+        if self.extra_env_vars:
+            env.update(self.extra_env_vars)
 
         # Start the server process
         self._process = subprocess.Popen(
