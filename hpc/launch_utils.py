@@ -413,6 +413,9 @@ def build_sbatch_directives(
         directives.append(mem_directive)
     if hpc.node_exclusion_list:
         directives.append(f"#SBATCH --exclude={hpc.node_exclusion_list}")
+    # Add any extra cluster-specific directives (e.g., licenses)
+    for directive in getattr(hpc, "extra_sbatch_directives", []):
+        directives.append(directive)
 
     return directives
 
