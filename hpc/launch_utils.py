@@ -570,8 +570,6 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
     job_type_hint = str(cli_args.get("job_type") or "").lower()
     prefix = "eval" if job_type_hint == JobType.EVAL.value else "datagen"
     parts: list[str] = [prefix]
-    engine = cli_args.get("datagen_engine") or cli_args.get("trace_engine") or "engine"
-    parts.append(str(engine or "engine"))
 
     repo_candidate = cli_args.get("datagen_target_repo") or cli_args.get("trace_target_repo")
     model_candidate = cli_args.get("datagen_model") or cli_args.get("trace_model")
