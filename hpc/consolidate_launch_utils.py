@@ -6,7 +6,12 @@ import os
 from pathlib import Path
 from typing import Optional, Callable
 
-from hpc.launch_utils import sanitize_repo_for_job, setup_experiments_dir, parse_bool_with_default
+from hpc.launch_utils import (
+    sanitize_repo_for_job,
+    setup_experiments_dir,
+    parse_bool_with_default,
+    scale_memory_for_partial_gpus,
+)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -100,12 +105,19 @@ def launch_consolidate_job(
     cpus_per_task = int(exp_args.get("cpus_per_task") or getattr(hpc, "cpus_per_node", 1) or 1)
     if hpc_name == "capella":
         cpus_per_task = min(cpus_per_task, 14)
+
+    # Scale memory proportionally when requesting fewer GPUs than available on node
+    # (required by ZIH Capella and other schedulers for fair sharing)
     mem_per_node = getattr(hpc, "mem_per_node", "") or ""
-    mem_directive = f"#SBATCH --mem={mem_per_node}" if mem_per_node else "#SBATCH --mem=0"
-    if hpc_name == "capella":
-        # Capella throttles non-exclusive jobs to 188130 MB per GPU.
-        # Enforce a soft cap below the scheduler limit to avoid rejections.
-        mem_directive = "#SBATCH --mem=188000"
+    gpus_requested = 1  # consolidate jobs use 1 GPU
+    total_gpus = getattr(hpc, "gpus_per_node", 1) or 1
+    if mem_per_node and gpus_requested < total_gpus:
+        scaled_mem = scale_memory_for_partial_gpus(mem_per_node, gpus_requested, total_gpus)
+        mem_directive = f"#SBATCH --mem={scaled_mem}"
+    elif mem_per_node:
+        mem_directive = f"#SBATCH --mem={mem_per_node}"
+    else:
+        mem_directive = "#SBATCH --mem=0"
 
     output_path = exp_paths.logs / f"{job_name}_%j.out"
     gpu_directive = "#SBATCH --gpus-per-node=1"
