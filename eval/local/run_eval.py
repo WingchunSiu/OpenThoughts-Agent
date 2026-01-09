@@ -13,9 +13,10 @@ import argparse
 from pathlib import Path
 from typing import Optional, Tuple
 
-from hpc.launch_utils import PROJECT_ROOT, sanitize_hf_repo_id
+from hpc.launch_utils import PROJECT_ROOT
 from hpc.local_runner_utils import LocalHarborRunner
 from hpc.arg_groups import add_harbor_env_arg, add_hf_upload_args, add_database_upload_args
+from hpc.hf_utils import resolve_hf_repo_id
 
 
 class EvalRunner(LocalHarborRunner):
@@ -118,20 +119,6 @@ class EvalRunner(LocalHarborRunner):
         """Upload results to Supabase/HuggingFace after Harbor completes."""
         self._maybe_upload_results()
 
-    def _derive_default_hf_repo_id(self, job_name: str) -> str:
-        """Derive default HF repo ID from benchmark repo."""
-        from hpc.launch_utils import derive_benchmark_repo
-        benchmark_repo = derive_benchmark_repo(
-            harbor_dataset=self.args.dataset,
-            dataset_path=self.args.dataset_path,
-            explicit_repo=getattr(self.args, "eval_benchmark_repo", None),
-        )
-        if "/" in benchmark_repo:
-            org = benchmark_repo.split("/", 1)[0]
-        else:
-            org = benchmark_repo or "openthoughts-agent"
-        return f"{org}/{job_name}"
-
     def _maybe_upload_results(self) -> None:
         """Upload eval results using the shared upload functions from hpc.launch_utils."""
         args = self.args
@@ -152,16 +139,23 @@ class EvalRunner(LocalHarborRunner):
             print(f"[upload] Expected Harbor job directory {run_dir} does not exist; upload skipped.")
             return
 
-        # Use shared utilities from hpc.launch_utils
+        # Use shared utilities
         from hpc.launch_utils import sync_eval_to_database, derive_benchmark_repo
 
         benchmark_name = derive_benchmark_repo(
             harbor_dataset=args.dataset,
             dataset_path=args.dataset_path,
         )
-        hf_repo_id = args.upload_hf_repo or self._derive_default_hf_repo_id(job_name)
-        if hf_repo_id:
-            hf_repo_id = sanitize_hf_repo_id(hf_repo_id)
+
+        # Use shared HF repo ID resolution (auto-derives if upload_to_database is True)
+        hf_repo_id = resolve_hf_repo_id(
+            explicit_repo=args.upload_hf_repo,
+            upload_to_database=True,  # We already checked upload_to_database above
+            job_name=job_name,
+            harbor_dataset=args.dataset,
+            dataset_path=args.dataset_path,
+            eval_benchmark_repo=getattr(args, "eval_benchmark_repo", None),
+        )
 
         result = sync_eval_to_database(
             job_dir=run_dir,

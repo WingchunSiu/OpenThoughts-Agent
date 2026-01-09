@@ -29,6 +29,7 @@ from hpc.launch_utils import (
     setup_experiments_dir,
     substitute_template,
 )
+from hpc.hf_utils import resolve_hf_repo_id
 
 # Import Harbor utilities from consolidated module
 from hpc.harbor_utils import (
@@ -534,7 +535,14 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
         # Upload settings
         upload_to_database=bool(exp_args.get("upload_to_database")),
         upload_mode=exp_args.get("upload_error_mode") or "skip_on_error",
-        hf_repo_id=exp_args.get("upload_hf_repo") or None,
+        hf_repo_id=resolve_hf_repo_id(
+            explicit_repo=exp_args.get("upload_hf_repo"),
+            upload_to_database=bool(exp_args.get("upload_to_database")),
+            job_name=job_name,
+            harbor_dataset=dataset_slug,
+            dataset_path=dataset_path,
+            eval_benchmark_repo=exp_args.get("eval_benchmark_repo"),
+        ),
         hf_private=bool(exp_args.get("upload_hf_private")),
         hf_episodes=exp_args.get("upload_hf_episodes") or "last",
         upload_forced_update=bool(exp_args.get("upload_forced_update")),
