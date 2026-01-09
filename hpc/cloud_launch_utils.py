@@ -44,7 +44,11 @@ DEFAULT_LOG_SYNC_INTERVAL = 120  # 2 minutes
 
 # Harbor git URL for cloud reinstalls (always fetch latest from branch)
 HARBOR_GIT_URL = "git+https://github.com/laude-institute/harbor.git@penfever/temp-override"
-HARBOR_REINSTALL_CMD = f'pip install --upgrade --force-reinstall "harbor @ {HARBOR_GIT_URL}"'
+# Use uv for better dependency resolution (pip doesn't track all installed packages)
+HARBOR_REINSTALL_CMD = f'uv pip install --upgrade --force-reinstall "harbor @ {HARBOR_GIT_URL}"'
+
+# Pin huggingface-hub to <1.0 after harbor install (transformers/vLLM require huggingface-hub>=0.34.0,<1.0)
+HUGGINGFACE_HUB_PIN_CMD = 'uv pip install "huggingface-hub>=0.34.0,<1.0"'
 
 
 # ---------------------------------------------------------------------------
@@ -1082,6 +1086,8 @@ class CloudLauncher:
         return [
             f'echo "[cloud-setup] Reinstalling harbor from latest commit..."',
             HARBOR_REINSTALL_CMD,
+            f'echo "[cloud-setup] Pinning huggingface-hub for vLLM/transformers compatibility..."',
+            HUGGINGFACE_HUB_PIN_CMD,
         ]
 
     def run(self, args: "argparse.Namespace") -> None:
@@ -1177,6 +1183,7 @@ __all__ = [
     "DEFAULT_LOG_SYNC_INTERVAL",
     "HARBOR_GIT_URL",
     "HARBOR_REINSTALL_CMD",
+    "HUGGINGFACE_HUB_PIN_CMD",
     # Periodic sync
     "PeriodicRemoteSync",
     "PeriodicLogSync",
