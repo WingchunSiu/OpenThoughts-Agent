@@ -29,7 +29,7 @@ from hpc.launch_utils import (
     setup_experiments_dir,
     substitute_template,
 )
-from hpc.hf_utils import resolve_hf_repo_id
+from hpc.hf_utils import resolve_hf_repo_id, resolve_dataset_path
 
 # Import Harbor utilities from consolidated module
 from hpc.harbor_utils import (
@@ -70,9 +70,10 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
             "Eval jobs accept either --trace-input-path or --harbor-dataset, but not both."
         )
     if dataset_path:
-        resolved_dataset = resolve_repo_path(dataset_path)
-        exp_args["_eval_dataset_path_resolved"] = str(resolved_dataset)
-        exp_args["trace_input_path"] = str(resolved_dataset)
+        # Use shared utility to handle both HF repos and local paths
+        resolved_dataset = resolve_dataset_path(dataset_path, verbose=True)
+        exp_args["_eval_dataset_path_resolved"] = resolved_dataset
+        exp_args["trace_input_path"] = resolved_dataset
     if harbor_dataset:
         slug = harbor_dataset.strip()
         if not slug:
@@ -539,9 +540,6 @@ def launch_eval_job_v2(exp_args: dict, hpc) -> None:
             explicit_repo=exp_args.get("upload_hf_repo"),
             upload_to_database=bool(exp_args.get("upload_to_database")),
             job_name=job_name,
-            harbor_dataset=dataset_slug,
-            dataset_path=dataset_path,
-            eval_benchmark_repo=exp_args.get("eval_benchmark_repo"),
         ),
         hf_private=bool(exp_args.get("upload_hf_private")),
         hf_episodes=exp_args.get("upload_hf_episodes") or "last",

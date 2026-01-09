@@ -31,6 +31,7 @@ from hpc.harbor_utils import (
     HARBOR_CONFIG_DIR,
     resolve_harbor_config_path,
 )
+from hpc.hf_utils import resolve_dataset_path
 
 # Backward compatibility aliases
 _normalize_cli_args = normalize_cli_args
@@ -240,7 +241,11 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         harbor_config_resolved = str(resolve_harbor_config_path(harbor_config))
 
         tasks_input_path = exp_args.get("trace_input_path")
-        if not tasks_input_path and task_enabled:
+        if tasks_input_path:
+            # Use shared utility to handle both HF repos and local paths
+            tasks_input_path = resolve_dataset_path(tasks_input_path, verbose=True)
+        elif task_enabled:
+            # Fallback to generated output dir from task generation
             tasks_input_path = exp_args.get("datagen_output_dir") or str(
                 exp_paths.root / "outputs" / "tasks"
             )

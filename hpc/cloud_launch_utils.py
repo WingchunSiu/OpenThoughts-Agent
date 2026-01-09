@@ -44,7 +44,17 @@ DEFAULT_LOG_SYNC_INTERVAL = 120  # 2 minutes
 
 # Harbor git URL for cloud reinstalls (always fetch latest from branch)
 HARBOR_GIT_URL = "git+https://github.com/laude-institute/harbor.git@penfever/temp-override"
-HARBOR_REINSTALL_CMD = f'pip install --upgrade --force-reinstall "harbor @ {HARBOR_GIT_URL}"'
+
+# Combined cloud dependency install command.
+# Use uv for better dependency resolution (pip doesn't track all installed packages).
+# Installs harbor from git, pins huggingface-hub <1.0 (vLLM/transformers compat),
+# and pins numpy==2.2.6 (Numba compat: "Numba needs NumPy 2.2 or less").
+CLOUD_DEPS_INSTALL_CMD = (
+    f'uv pip install --upgrade --force-reinstall '
+    f'"harbor @ {HARBOR_GIT_URL}" '
+    f'"huggingface-hub>=0.34.0,<1.0" '
+    f'"numpy==2.2.6"'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1068,8 +1078,8 @@ class CloudLauncher:
     def get_pre_task_commands(self, args: "argparse.Namespace") -> List[str]:
         """Return commands to run before the main task on remote.
 
-        By default, reinstalls harbor from the latest commit on the branch
-        to ensure cloud runs use the most up-to-date version.
+        By default, reinstalls harbor and pins dependencies to ensure
+        compatibility (huggingface-hub <1.0 for vLLM, numpy <=2.2 for Numba).
 
         Override in subclasses to customize or disable.
 
@@ -1080,8 +1090,8 @@ class CloudLauncher:
             List of shell commands to run before the main task
         """
         return [
-            f'echo "[cloud-setup] Reinstalling harbor from latest commit..."',
-            HARBOR_REINSTALL_CMD,
+            'echo "[cloud-setup] Installing dependencies (harbor, pinned huggingface-hub, numpy)..."',
+            CLOUD_DEPS_INSTALL_CMD,
         ]
 
     def run(self, args: "argparse.Namespace") -> None:
@@ -1176,7 +1186,7 @@ __all__ = [
     "DEFAULT_DOCKER_IMAGE",
     "DEFAULT_LOG_SYNC_INTERVAL",
     "HARBOR_GIT_URL",
-    "HARBOR_REINSTALL_CMD",
+    "CLOUD_DEPS_INSTALL_CMD",
     # Periodic sync
     "PeriodicRemoteSync",
     "PeriodicLogSync",

@@ -40,6 +40,90 @@ _HOSTED_VLLM_PREFIX = "hosted_vllm/"
 """Provider prefix expected by LiteLLM when routing to managed vLLM endpoints."""
 
 
+# =============================================================================
+# Memory Scaling Utilities
+# =============================================================================
+
+
+def parse_memory_string(mem_str: str) -> int:
+    """Parse a memory string (e.g., '710GB', '192G', '188130M') to megabytes.
+
+    Args:
+        mem_str: Memory string with unit suffix (G/GB/M/MB/T/TB).
+
+    Returns:
+        Memory in megabytes.
+
+    Raises:
+        ValueError: If the memory string cannot be parsed.
+    """
+    if not mem_str:
+        return 0
+
+    mem_str = mem_str.strip().upper()
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*(TB?|GB?|MB?|KB?)?$", mem_str)
+    if not match:
+        raise ValueError(f"Cannot parse memory string: {mem_str}")
+
+    value = float(match.group(1))
+    unit = match.group(2) or "M"  # Default to MB if no unit
+
+    # Convert to MB
+    if unit.startswith("T"):
+        return int(value * 1024 * 1024)
+    elif unit.startswith("G"):
+        return int(value * 1024)
+    elif unit.startswith("K"):
+        return int(value / 1024)
+    else:  # M or MB
+        return int(value)
+
+
+def format_memory_mb(mem_mb: int) -> str:
+    """Format memory in MB to a human-readable string.
+
+    Args:
+        mem_mb: Memory in megabytes.
+
+    Returns:
+        Formatted memory string (e.g., '188G', '512M').
+    """
+    if mem_mb >= 1024:
+        return f"{mem_mb // 1024}G"
+    return f"{mem_mb}M"
+
+
+def scale_memory_for_partial_gpus(
+    mem_str: str,
+    requested_gpus: int,
+    total_gpus: int,
+) -> str:
+    """Scale memory request proportionally to GPU allocation.
+
+    When requesting fewer GPUs than available on a node, some schedulers
+    (e.g., ZIH Capella) require memory to be scaled proportionally.
+
+    Args:
+        mem_str: Full node memory string (e.g., '710GB').
+        requested_gpus: Number of GPUs being requested.
+        total_gpus: Total GPUs available per node.
+
+    Returns:
+        Scaled memory string (e.g., '177G' for 1/4 of 710GB).
+    """
+    if not mem_str or requested_gpus <= 0 or total_gpus <= 0:
+        return mem_str
+
+    # If requesting all GPUs, no scaling needed
+    if requested_gpus >= total_gpus:
+        return mem_str
+
+    total_mb = parse_memory_string(mem_str)
+    scaled_mb = (total_mb * requested_gpus) // total_gpus
+
+    return format_memory_mb(scaled_mb)
+
+
 def generate_served_model_id() -> str:
     """Return a unique identifier for a hosted vLLM model."""
     return str(int(time.time() * 1_000_000))
@@ -409,8 +493,20 @@ def build_sbatch_directives(
     gpu_directive = hpc.get_gpu_directive(gpus_requested, gpu_type_resolved)
     if gpu_directive:
         directives.append(gpu_directive)
-    # Add memory directive if the cluster uses one
-    mem_directive = hpc.get_mem_directive(mem)
+
+    # Scale memory proportionally when requesting partial GPUs
+    # (required by some schedulers like ZIH Capella for fair sharing)
+    total_gpus = hpc.gpus_per_node or 1
+    if mem is None and gpus_requested < total_gpus and hpc.mem_per_node:
+        scaled_mem = scale_memory_for_partial_gpus(
+            hpc.mem_per_node,
+            gpus_requested,
+            total_gpus,
+        )
+        mem_directive = hpc.get_mem_directive(scaled_mem)
+    else:
+        mem_directive = hpc.get_mem_directive(mem)
+
     if mem_directive:
         directives.append(mem_directive)
     if hpc.node_exclusion_list:
@@ -570,8 +666,6 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
     job_type_hint = str(cli_args.get("job_type") or "").lower()
     prefix = "eval" if job_type_hint == JobType.EVAL.value else "datagen"
     parts: list[str] = [prefix]
-    engine = cli_args.get("datagen_engine") or cli_args.get("trace_engine") or "engine"
-    parts.append(str(engine or "engine"))
 
     repo_candidate = cli_args.get("datagen_target_repo") or cli_args.get("trace_target_repo")
     model_candidate = cli_args.get("datagen_model") or cli_args.get("trace_model")
@@ -1316,7 +1410,12 @@ __all__ = [
     "sanitize_repo_for_job",
     "sanitize_repo_component",
     "sanitize_hf_repo_id",
+    # Memory scaling utilities
+    "parse_memory_string",
+    "format_memory_mb",
+    "scale_memory_for_partial_gpus",
     # SBATCH utilities
+    "build_sbatch_directives",
     "_parse_optional_int",
     "maybe_int",
     "_merge_dependencies",

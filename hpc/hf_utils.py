@@ -9,8 +9,13 @@ This module provides common utilities for working with HuggingFace Hub:
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from typing import Optional
+
+# Default HuggingFace org for auto-derived repo IDs (override with env var)
+DEFAULT_HF_ORG = "DCAgent"
+HF_ORG_ENV_VAR = "DCAGENT_HF_ORG"
 
 
 def is_hf_dataset_path(path: str) -> bool:
@@ -87,53 +92,71 @@ def sanitize_hf_repo_id(repo_id: str, max_length: int = 96) -> str:
     return f"{org}/{name}" if org else name
 
 
-def derive_default_hf_repo_id(
-    job_name: str,
-    harbor_dataset: Optional[str] = None,
-    dataset_path: Optional[str] = None,
-    explicit_repo: Optional[str] = None,
-) -> str:
-    """Derive default HF repo ID from benchmark repo.
+def derive_default_hf_repo_id(job_name: str) -> str:
+    """Derive default HF repo ID from job name.
 
     Used by both local and HPC eval runners to auto-derive an HF repo ID
     when --upload_to_database is set but --upload_hf_repo is not provided.
 
+    The org defaults to "DCAgent" but can be overridden via the
+    DCAGENT_HF_ORG environment variable.
+
     Args:
-        job_name: Name of the eval job
-        harbor_dataset: Harbor dataset slug (e.g., "terminal-bench@2.0")
-        dataset_path: Path to dataset directory
-        explicit_repo: Explicitly specified benchmark repo
+        job_name: Name of the eval job (used as the repo name)
 
     Returns:
         HF repo ID in format "<org>/<job_name>"
     """
-    # Import here to avoid circular imports
-    from hpc.launch_utils import derive_benchmark_repo
-
-    benchmark_repo = derive_benchmark_repo(
-        harbor_dataset=harbor_dataset,
-        dataset_path=dataset_path,
-        explicit_repo=explicit_repo,
-    )
-    if "/" in benchmark_repo:
-        org = benchmark_repo.split("/", 1)[0]
-    else:
-        org = benchmark_repo or "openthoughts-agent"
+    org = os.environ.get(HF_ORG_ENV_VAR, DEFAULT_HF_ORG)
     return f"{org}/{job_name}"
+
+
+def resolve_dataset_path(
+    path_or_repo: str,
+    *,
+    verbose: bool = True,
+) -> str:
+    """Resolve a dataset path, downloading from HuggingFace if needed.
+
+    Handles both local filesystem paths and HuggingFace dataset identifiers.
+    Used by both eval and datagen launchers to resolve --trace_input_path.
+
+    Args:
+        path_or_repo: Either a local path or HF dataset identifier (e.g., "org/repo")
+        verbose: Whether to print status messages
+
+    Returns:
+        Resolved local filesystem path (absolute)
+    """
+    from pathlib import Path
+
+    if is_hf_dataset_path(path_or_repo):
+        # It's an HF dataset identifier - download it
+        from huggingface_hub import snapshot_download
+
+        if verbose:
+            print(f"[hf_utils] Downloading HF dataset: {path_or_repo}")
+        local_path = snapshot_download(repo_id=path_or_repo, repo_type="dataset")
+        if verbose:
+            print(f"[hf_utils] Downloaded to: {local_path}")
+        return local_path
+    else:
+        # It's a local path - resolve relative to PROJECT_ROOT
+        from hpc.launch_utils import resolve_repo_path
+
+        resolved = resolve_repo_path(path_or_repo)
+        return str(resolved)
 
 
 def resolve_hf_repo_id(
     explicit_repo: Optional[str],
     upload_to_database: bool,
     job_name: str,
-    harbor_dataset: Optional[str] = None,
-    dataset_path: Optional[str] = None,
-    eval_benchmark_repo: Optional[str] = None,
 ) -> Optional[str]:
     """Resolve HF repo ID for eval upload.
 
     If explicit_repo is provided, use it.
-    If upload_to_database is True but no explicit repo, auto-derive from benchmark.
+    If upload_to_database is True but no explicit repo, auto-derive from job_name.
     Otherwise return None.
 
     Used by both local and HPC eval runners to determine the HF repo ID.
@@ -141,10 +164,7 @@ def resolve_hf_repo_id(
     Args:
         explicit_repo: Explicitly specified HF repo ID (--upload_hf_repo)
         upload_to_database: Whether database upload is enabled
-        job_name: Name of the eval job
-        harbor_dataset: Harbor dataset slug
-        dataset_path: Path to dataset directory
-        eval_benchmark_repo: Explicit benchmark repo
+        job_name: Name of the eval job (used as repo name if auto-deriving)
 
     Returns:
         Sanitized HF repo ID, or None if HF upload should be skipped
@@ -153,21 +173,19 @@ def resolve_hf_repo_id(
         return sanitize_hf_repo_id(explicit_repo)
 
     if upload_to_database:
-        # Auto-derive HF repo ID when database upload is enabled
-        derived_repo = derive_default_hf_repo_id(
-            job_name=job_name,
-            harbor_dataset=harbor_dataset,
-            dataset_path=dataset_path,
-            explicit_repo=eval_benchmark_repo,
-        )
+        # Auto-derive HF repo ID: <org>/<job_name>
+        derived_repo = derive_default_hf_repo_id(job_name)
         return sanitize_hf_repo_id(derived_repo)
 
     return None
 
 
 __all__ = [
+    "DEFAULT_HF_ORG",
+    "HF_ORG_ENV_VAR",
     "is_hf_dataset_path",
     "sanitize_hf_repo_id",
     "derive_default_hf_repo_id",
+    "resolve_dataset_path",
     "resolve_hf_repo_id",
 ]

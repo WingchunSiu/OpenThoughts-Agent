@@ -148,13 +148,11 @@ class EvalRunner(LocalHarborRunner):
         )
 
         # Use shared HF repo ID resolution (auto-derives if upload_to_database is True)
+        # Default org is DCAgent, override via DCAGENT_HF_ORG env var
         hf_repo_id = resolve_hf_repo_id(
             explicit_repo=args.upload_hf_repo,
             upload_to_database=True,  # We already checked upload_to_database above
             job_name=job_name,
-            harbor_dataset=args.dataset,
-            dataset_path=args.dataset_path,
-            eval_benchmark_repo=getattr(args, "eval_benchmark_repo", None),
         )
 
         result = sync_eval_to_database(
