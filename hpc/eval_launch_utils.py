@@ -29,7 +29,7 @@ from hpc.launch_utils import (
     setup_experiments_dir,
     substitute_template,
 )
-from hpc.hf_utils import resolve_hf_repo_id
+from hpc.hf_utils import resolve_hf_repo_id, is_hf_dataset_path
 
 # Import Harbor utilities from consolidated module
 from hpc.harbor_utils import (
@@ -70,7 +70,15 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
             "Eval jobs accept either --trace-input-path or --harbor-dataset, but not both."
         )
     if dataset_path:
-        resolved_dataset = resolve_repo_path(dataset_path)
+        # Check if it's a HuggingFace dataset identifier (e.g., "org/repo")
+        if is_hf_dataset_path(dataset_path):
+            from huggingface_hub import snapshot_download
+            print(f"[eval] Downloading HF dataset: {dataset_path}")
+            local_path = snapshot_download(repo_id=dataset_path, repo_type="dataset")
+            resolved_dataset = Path(local_path)
+            print(f"[eval] Downloaded to: {resolved_dataset}")
+        else:
+            resolved_dataset = resolve_repo_path(dataset_path)
         exp_args["_eval_dataset_path_resolved"] = str(resolved_dataset)
         exp_args["trace_input_path"] = str(resolved_dataset)
     if harbor_dataset:
