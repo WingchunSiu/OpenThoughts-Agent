@@ -129,6 +129,16 @@ mkdir -p "${SCRATCH:-/tmp}/ray_logs"
 # --- SSH Tunneling (JSC clusters only) ---
 {ssh_tunnel_setup}
 
+# --- Clean up stale Ray instances on all nodes ---
+# This prevents collisions with Ray sessions from previous/crashed jobs.
+# Run on all allocated nodes using srun.
+echo "Cleaning up stale Ray instances on all nodes..."
+for node in $(scontrol show hostnames "$SLURM_JOB_NODELIST"); do
+  srun --export=ALL --nodes=1 --ntasks=1 --overlap -w "$node" \
+    ray stop --force 2>/dev/null || true
+done
+sleep 2  # Brief pause to let processes terminate
+
 # --- Run the RL training job via Python runner ---
 # Ray cluster management is handled by hpc/ray_utils.py using proper srun calls
 echo "=== Universal RL Training Runner ==="
