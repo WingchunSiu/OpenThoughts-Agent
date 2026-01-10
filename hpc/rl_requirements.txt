@@ -10,7 +10,7 @@
 
 # SkyRL-train from penfever fork (with vllm extra)
 # Note: Install from skyrl-train subdirectory (root is metadata-only)
-skyrl[vllm] @ git+https://github.com/penfever/SkyRL.git@penfever/working#subdirectory=skyrl-train
+skyrl-train[vllm] @ git+https://github.com/penfever/SkyRL.git@penfever/working#subdirectory=skyrl-train
 
 # Harbor - MUST match the branch used in main pyproject.toml for compatibility
 # This is the laude-institute fork with custom patches
