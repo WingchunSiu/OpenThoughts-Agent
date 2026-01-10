@@ -112,54 +112,8 @@ def derive_skyrl_export_path(
     return str(Path(experiments_dir) / run_name / exports_subdir)
 
 
-def derive_rl_job_name(cli_args: Mapping[str, Any]) -> str:
-    """
-    Derive a job name for RL training jobs.
-
-    Pattern: rl_{model}_{dataset}_{nodes}n
-
-    Args:
-        cli_args: Command line arguments dictionary.
-
-    Returns:
-        Derived job name string.
-    """
-    components = ["rl"]
-
-    # Extract model name (strip org prefix)
-    model_path = cli_args.get("model_path") or cli_args.get("model_name_or_path", "")
-    if model_path:
-        model_name = model_path.split("/")[-1]
-        # Truncate long model names
-        if len(model_name) > 30:
-            model_name = model_name[:30]
-        components.append(model_name)
-
-    # Extract dataset name (strip org prefix, take first if list)
-    train_data = cli_args.get("train_data", [])
-    if isinstance(train_data, list) and train_data:
-        dataset = train_data[0]
-    elif isinstance(train_data, str):
-        dataset = train_data
-    else:
-        dataset = ""
-
-    if dataset:
-        dataset_name = dataset.split("/")[-1]
-        # Truncate long dataset names
-        if len(dataset_name) > 30:
-            dataset_name = dataset_name[:30]
-        components.append(dataset_name)
-
-    # Add node count
-    num_nodes = cli_args.get("num_nodes", 1)
-    components.append(f"{num_nodes}n")
-
-    job_name = "_".join(components)
-
-    # Sanitize: replace special chars, lowercase, truncate
-    job_name = job_name.replace("-", "_").replace(".", "_").lower()
-    return job_name[:63]  # SLURM job name limit
+# Import derive_rl_job_name from launch_utils (centralized job name derivation)
+from hpc.launch_utils import derive_rl_job_name  # noqa: E402 - re-exported for backward compat
 
 
 def build_rl_env_vars(

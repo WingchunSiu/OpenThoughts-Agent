@@ -103,6 +103,9 @@ export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
 export VLLM_USE_V1=1
 export RAY_RUNTIME_ENV_HOOK=ray._private.runtime_env.uv_runtime_env_hook.hook
 
+# --- Hydra debugging ---
+export HYDRA_FULL_ERROR=1
+
 # --- Ray logging (store all logs in experiments_dir) ---
 export RAY_TMPDIR="$DCFT/{experiments_dir}/ray_tmp"
 export RAY_LOG_DIR="$DCFT/{experiments_dir}/ray_logs"

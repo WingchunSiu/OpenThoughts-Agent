@@ -771,6 +771,55 @@ def derive_consolidate_job_name(cli_args: Mapping[str, Any]) -> str:
     return f"{identifier}{suffix}"
 
 
+def derive_rl_job_name(cli_args: Mapping[str, Any]) -> str:
+    """Construct job name for RL training jobs.
+
+    Pattern: rl_{model}_{dataset}_{nodes}n
+
+    Args:
+        cli_args: Command line arguments dictionary.
+
+    Returns:
+        Derived job name string (max 63 chars for SLURM compatibility).
+    """
+    components = ["rl"]
+
+    # Extract model name (strip org prefix)
+    model_path = cli_args.get("model_path") or cli_args.get("model_name_or_path", "")
+    if model_path:
+        model_name = str(model_path).split("/")[-1]
+        # Truncate long model names
+        if len(model_name) > 30:
+            model_name = model_name[:30]
+        components.append(model_name)
+
+    # Extract dataset name (strip org prefix, take first if list)
+    train_data = cli_args.get("train_data", [])
+    if isinstance(train_data, list) and train_data:
+        dataset = train_data[0]
+    elif isinstance(train_data, str):
+        dataset = train_data
+    else:
+        dataset = ""
+
+    if dataset:
+        dataset_name = str(dataset).split("/")[-1]
+        # Truncate long dataset names
+        if len(dataset_name) > 30:
+            dataset_name = dataset_name[:30]
+        components.append(dataset_name)
+
+    # Add node count
+    num_nodes = cli_args.get("num_nodes", 1)
+    components.append(f"{num_nodes}n")
+
+    job_name = "_".join(components)
+
+    # Sanitize using shared utility (strips brackets, quotes, special chars)
+    job_name = sanitize_repo_for_job(job_name).lower()
+    return job_name[:63]  # SLURM job name limit
+
+
 def derive_default_job_name(cli_args: Mapping[str, Any]) -> str:
     """Construct job names for non-datagen, non-consolidate workloads."""
 
@@ -842,6 +891,8 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
         return derive_consolidate_job_name(cli_args)
     if job_type in (JobType.DATAGEN.value, JobType.EVAL.value):
         return derive_datagen_job_name(cli_args)
+    if job_type == JobType.RL.value:
+        return derive_rl_job_name(cli_args)
     return derive_default_job_name(cli_args)
 
 def _parse_optional_int(value: Any, label: Optional[str] = None) -> Optional[int]:
@@ -1467,6 +1518,7 @@ __all__ = [
     "submit_script",
     # Job naming
     "derive_datagen_job_name",
+    "derive_rl_job_name",
     "get_job_name",
     "sanitize_repo_for_job",
     "sanitize_repo_component",
