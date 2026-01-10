@@ -184,9 +184,9 @@ generator:
     top_k: -1  # Disabled
 
   # Engine initialization kwargs
+  # Note: These keys get + prefix automatically since engine_init_kwargs is empty in base config
   engine_init_kwargs:
-    # Chat template for Qwen3 Base model
-    # Note: You may need to provide a custom template for base models
+    # Chat template for Qwen3 Base model (path relative to SKYRL_HOME or absolute)
     custom_chat_template_chat_completion_path: skyrl-train/examples/terminal_bench/qwen3_thinking_acc.jinja2
     # Enforce eager mode for long context (avoids CUDA graph issues)
     enforce_eager: false

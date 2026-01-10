@@ -36,6 +36,9 @@ trainer:
   policy:
     optimizer_config:
       lr: 1.0e-6
+      weight_decay: 0.01
+      adam_betas: [0.9, 0.999]
+      max_grad_norm: 1.0
 
   ref:
     fsdp_config:

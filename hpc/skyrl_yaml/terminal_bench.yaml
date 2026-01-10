@@ -57,6 +57,9 @@ trainer:
   policy:
     optimizer_config:
       lr: 1.0e-6
+      weight_decay: 0.01
+      adam_betas: [0.9, 0.999]
+      max_grad_norm: 1.0
 
   ref:
     fsdp_config:
@@ -87,9 +90,10 @@ generator:
   append_eos_token_after_stop_str_in_multi_turn: true
   sampling_params:
     max_generate_length: 30720
+  # Note: engine_init_kwargs keys get + prefix automatically since base config has empty struct
   engine_init_kwargs:
-    # Relative to SKYRL_HOME
     custom_chat_template_chat_completion_path: skyrl-train/examples/terminal_bench/qwen3_thinking_acc.jinja2
+    trust_remote_code: true
 
 # Data paths (set via CLI --train_data, --val_data)
 data:

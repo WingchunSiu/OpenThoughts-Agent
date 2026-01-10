@@ -159,7 +159,7 @@ def _flatten_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
     return items
 
 
-def _format_hydra_arg(key: str, value: Any) -> str:
+def _format_hydra_arg(key: str, value: Any, use_plus_prefix: bool = False) -> str:
     """Format a single Hydra CLI argument.
 
     Handles special formatting for different types:
@@ -170,21 +170,23 @@ def _format_hydra_arg(key: str, value: Any) -> str:
     Args:
         key: Dotted key name (e.g., "trainer.epochs").
         value: Value to format.
+        use_plus_prefix: If True, prepend '+' for adding new keys to struct configs.
 
     Returns:
-        Formatted Hydra argument string (e.g., "trainer.epochs=10").
+        Formatted Hydra argument string (e.g., "trainer.epochs=10" or "+key=val").
     """
+    prefix = "+" if use_plus_prefix else ""
     if isinstance(value, bool):
-        return f"{key}={str(value).lower()}"
+        return f"{prefix}{key}={str(value).lower()}"
     elif isinstance(value, (list, tuple)):
         # Format list items, quoting strings
         items = ",".join(
             f"'{v}'" if isinstance(v, str) else str(v)
             for v in value
         )
-        return f'{key}="[{items}]"'
+        return f'{prefix}{key}="[{items}]"'
     else:
-        return f"{key}={value}"
+        return f"{prefix}{key}={value}"
 
 
 def build_skyrl_hydra_args(
@@ -276,9 +278,12 @@ def build_skyrl_hydra_args(
         trainer.setdefault("policy", {}).setdefault("model", {})["path"] = exp_args["model_path"]
 
     # Build args for each section
+    # Keys under engine_init_kwargs need + prefix since base config has empty struct
     for section, values in [("trainer", trainer), ("generator", generator), ("data", data)]:
         for key, val in _flatten_dict(values, section).items():
-            args.append(_format_hydra_arg(key, val))
+            # engine_init_kwargs keys need + prefix to add to empty struct in base config
+            needs_plus = ".engine_init_kwargs." in key
+            args.append(_format_hydra_arg(key, val, use_plus_prefix=needs_plus))
 
     # Terminal bench with + prefix (these are Hydra overrides)
     if parsed.terminal_bench:
