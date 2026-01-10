@@ -148,6 +148,48 @@ def resolve_dataset_path(
         return str(resolved)
 
 
+def is_raw_tasks_directory(snapshot_dir) -> bool:
+    """Check if a directory contains raw task folders (not parquet with task_binary).
+
+    Raw task directories have subdirectories with instruction.md files,
+    rather than parquet files with task_binary columns that need extraction.
+
+    Used to auto-detect HuggingFace dataset format:
+    - Parquet with task_binary: needs extraction via tasks_parquet_converter
+    - Raw task dirs: can be used directly or copied
+
+    Args:
+        snapshot_dir: Path to directory to check (str or Path)
+
+    Returns:
+        True if directory contains raw task folders, False if it has parquet with task_binary
+    """
+    from pathlib import Path
+
+    snapshot_dir = Path(snapshot_dir)
+
+    # Check if there are any parquet files
+    parquet_files = list(snapshot_dir.rglob("*.parquet"))
+    if parquet_files:
+        # Has parquet files - check if they have task_binary column
+        try:
+            import pyarrow.parquet as pq
+            for pf in parquet_files[:1]:  # Check first parquet
+                table = pq.read_table(pf)
+                if "task_binary" in table.column_names:
+                    return False  # Needs extraction
+        except Exception:
+            pass
+
+    # Check for raw task directories (subdirs with instruction.md)
+    # Look for any instruction.md file recursively
+    instruction_files = list(snapshot_dir.rglob("instruction.md"))
+    if instruction_files:
+        return True  # Already raw tasks
+
+    return False
+
+
 def resolve_hf_repo_id(
     explicit_repo: Optional[str],
     upload_to_database: bool,
@@ -184,6 +226,7 @@ __all__ = [
     "DEFAULT_HF_ORG",
     "HF_ORG_ENV_VAR",
     "is_hf_dataset_path",
+    "is_raw_tasks_directory",
     "sanitize_hf_repo_id",
     "derive_default_hf_repo_id",
     "resolve_dataset_path",
