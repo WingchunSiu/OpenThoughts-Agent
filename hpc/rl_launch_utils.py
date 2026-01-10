@@ -8,6 +8,7 @@ This module provides:
 - RLJobConfig: Configuration dataclass for RL training jobs
 - launch_rl_job(): Main entry point for submitting RL jobs
 - RLJobRunner: Class for executing RL jobs from sbatch
+- resolve_rl_train_data(): Extracts HF datasets to local task directories
 - Helper functions for computing inference engines, tensor parallelism, etc.
 """
 
@@ -20,6 +21,97 @@ import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
+
+from hpc.hf_utils import is_hf_dataset_path
+
+
+def resolve_rl_train_data(
+    train_data: List[str],
+    scratch_dir: Optional[str] = None,
+    on_exist: str = "skip",
+    verbose: bool = True,
+) -> List[str]:
+    """Resolve train_data paths, extracting HF datasets to local task directories.
+
+    SkyRL's TerminalBenchTaskDataset expects local directory paths where each
+    subdirectory is a task containing an instruction.md file. This function:
+    1. Detects HuggingFace dataset identifiers (e.g., "org/repo-name")
+    2. Extracts them to $SCRATCH/tasks/<repo-name>/ using extract_tasks_from_parquet
+    3. Returns local filesystem paths for all datasets
+
+    Args:
+        train_data: List of dataset paths (local paths or HF repo IDs).
+        scratch_dir: Base directory for extracted tasks (default: $SCRATCH/tasks or /tmp/tasks).
+        on_exist: How to handle existing task directories ("skip", "overwrite", "error").
+        verbose: Whether to print status messages.
+
+    Returns:
+        List of resolved local filesystem paths.
+
+    Example:
+        >>> resolve_rl_train_data(["penfever/my-dataset", "/local/path/tasks"])
+        ['/scratch/tasks/my-dataset', '/local/path/tasks']
+    """
+    if not train_data:
+        return []
+
+    # Determine scratch directory for extracted tasks
+    if scratch_dir is None:
+        scratch_dir = os.environ.get("SCRATCH", "/tmp")
+    tasks_base = Path(scratch_dir) / "tasks"
+
+    resolved_paths = []
+
+    for data_path in train_data:
+        if is_hf_dataset_path(data_path):
+            # It's a HuggingFace dataset - extract to local directory
+            # Extract repo name from "org/repo-name" -> "repo-name"
+            repo_name = data_path.split("/")[-1]
+            output_dir = tasks_base / repo_name
+
+            if verbose:
+                print(f"[rl_launch_utils] Extracting HF dataset: {data_path}")
+                print(f"[rl_launch_utils] Output directory: {output_dir}")
+
+            # Check if already extracted (when on_exist="skip")
+            if on_exist == "skip" and output_dir.exists() and any(output_dir.iterdir()):
+                if verbose:
+                    print(f"[rl_launch_utils] Tasks already extracted, skipping: {output_dir}")
+                resolved_paths.append(str(output_dir))
+                continue
+
+            # Run extract_tasks_from_parquet
+            cmd = [
+                sys.executable, "-m", "scripts.datagen.extract_tasks_from_parquet",
+                "--parquet", data_path,
+                "--output_dir", str(output_dir),
+                "--on_exist", on_exist,
+            ]
+
+            if verbose:
+                print(f"[rl_launch_utils] Running: {' '.join(cmd)}")
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                if verbose and result.stdout:
+                    print(result.stdout)
+            except subprocess.CalledProcessError as e:
+                print(f"[rl_launch_utils] ERROR extracting {data_path}:")
+                print(f"  stdout: {e.stdout}")
+                print(f"  stderr: {e.stderr}")
+                raise RuntimeError(f"Failed to extract HF dataset: {data_path}") from e
+
+            resolved_paths.append(str(output_dir))
+        else:
+            # It's a local path - use as-is
+            resolved_paths.append(data_path)
+
+    return resolved_paths
 
 
 def compute_num_inference_engines(
@@ -277,6 +369,42 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
 
     parsed = parse_rl_config(rl_config_path, model_override=exp_args.get("model_path"))
     print(f"Loaded RL config from: {parsed.config_path}")
+
+    # Resolve train_data: extract HF datasets to local task directories
+    # This must happen BEFORE building Hydra args so the local paths are used
+    train_data_raw = exp_args.get("train_data") or []
+    if isinstance(train_data_raw, str):
+        # Handle JSON string from CLI
+        import ast
+        try:
+            train_data_raw = ast.literal_eval(train_data_raw)
+        except (ValueError, SyntaxError):
+            train_data_raw = [train_data_raw]
+
+    if train_data_raw:
+        print(f"Resolving train_data: {train_data_raw}")
+        resolved_train_data = resolve_rl_train_data(train_data_raw)
+        exp_args["train_data"] = resolved_train_data
+        print(f"Resolved train_data: {resolved_train_data}")
+
+    # Resolve val_data similarly (eval datasets may also be HF repos)
+    # Check CLI first, then fall back to YAML config default
+    val_data_raw = exp_args.get("val_data")
+    if val_data_raw is None:
+        # Get default from YAML config
+        val_data_raw = parsed.data.get("val_data", [])
+    if isinstance(val_data_raw, str):
+        import ast
+        try:
+            val_data_raw = ast.literal_eval(val_data_raw)
+        except (ValueError, SyntaxError):
+            val_data_raw = [val_data_raw]
+
+    if val_data_raw:
+        print(f"Resolving val_data: {val_data_raw}")
+        resolved_val_data = resolve_rl_train_data(val_data_raw)
+        exp_args["val_data"] = resolved_val_data
+        print(f"Resolved val_data: {resolved_val_data}")
 
     # Build Hydra args from YAML + CLI overrides
     hydra_args = build_skyrl_hydra_args(parsed, exp_args, hpc)
