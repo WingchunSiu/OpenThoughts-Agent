@@ -722,9 +722,9 @@ class RLJobRunner:
         cmd = ["python", "-m", self.config.skyrl_entrypoint]
         cmd.extend(self.config.skyrl_hydra_args)
 
-        print(f"\nRunning SkyRL:")
-        print(f"  Entrypoint: {self.config.skyrl_entrypoint}")
-        print(f"  Args: {len(self.config.skyrl_hydra_args)} Hydra arguments")
+        print(f"\nRunning SkyRL:", flush=True)
+        print(f"  Entrypoint: {self.config.skyrl_entrypoint}", flush=True)
+        print(f"  Args: {len(self.config.skyrl_hydra_args)} Hydra arguments", flush=True)
 
         # Change to SKYRL_HOME if set
         skyrl_home = os.environ.get("SKYRL_HOME")
@@ -732,7 +732,7 @@ class RLJobRunner:
         if skyrl_home:
             cwd = os.path.join(skyrl_home, "skyrl-train")
             if os.path.isdir(cwd):
-                print(f"  Working dir: {cwd}")
+                print(f"  Working dir: {cwd}", flush=True)
             else:
                 cwd = None
 

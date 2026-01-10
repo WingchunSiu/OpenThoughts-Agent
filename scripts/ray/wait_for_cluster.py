@@ -56,12 +56,7 @@ def wait_for_cluster(address: str, expected_gpus: float, expected_nodes: int, ti
     connected = False
     while time.time() < deadline:
         try:
-            # Set a shorter timeout for connection attempts so we can retry
-            ray.init(
-                address=address,
-                ignore_reinit_error=True,
-                _redis_max_memory=10**8,  # Prevent memory warnings
-            )
+            ray.init(address=address, ignore_reinit_error=True)
             connected = True
             log("Ray connection established, polling for resources...")
             break
