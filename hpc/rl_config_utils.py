@@ -21,6 +21,91 @@ import yaml
 # Directory containing built-in SkyRL config YAML files
 SKYRL_CONFIG_DIR = Path(__file__).parent / "skyrl_yaml"
 
+# =============================================================================
+# SkyRL Internal Engine Kwargs - DO NOT SET IN YAML CONFIGS
+# =============================================================================
+# These kwargs are set internally by SkyRL and will cause "duplicate keyword
+# argument" errors if also specified in engine_init_kwargs.
+#
+# Source: skyrl_train/inference_engines/ray_wrapped_inference_engine.py
+# =============================================================================
+
+SKYRL_INTERNAL_ENGINE_KWARGS = frozenset({
+    # Hardcoded values
+    "trust_remote_code",        # Always True
+    "worker_extension_cls",     # vLLM SkyRL extension path
+    "data_parallel_backend",    # Hardcoded "mp"
+    "max_logprobs",             # Hardcoded 1
+    # Calculated from config/environment
+    "distributed_executor_backend",  # Calculated from TP size ("uni" or "ray")
+    "enforce_eager",            # Set from generator.enforce_eager config
+    "tensor_parallel_size",     # Set from generator config
+    "data_parallel_size",       # Set from generator config
+    "seed",                     # Set from config
+    "enable_prefix_caching",    # Set from generator config
+    "dtype",                    # Set from generator.model_dtype
+    "gpu_memory_utilization",   # Set from generator config
+    "max_num_batched_tokens",   # Set from generator config
+    "max_num_seqs",             # Set from generator config
+    "enable_sleep_mode",        # Set from trainer.placement.colocate_all
+    "vllm_v1_disable_multiproc",  # Set from generator config
+    # Ray internal management
+    "bundle_indices",           # Calculated from parallelism config
+    "num_gpus",                 # Ray resource allocation
+    "noset_visible_devices",    # Ray CUDA_VISIBLE_DEVICES handling
+    # SGLang-specific (if using SGLang backend)
+    "model_path",               # Set from trainer.policy.model.path
+    "tp_size",                  # Alias for tensor_parallel_size
+    "mem_fraction_static",      # Alias for gpu_memory_utilization
+    "random_seed",              # Alias for seed
+    "disable_radix_cache",      # Inverse of enable_prefix_caching
+    "max_prefill_tokens",       # Alias for max_num_batched_tokens
+    "max_running_requests",     # Alias for max_num_seqs
+    "mm_attention_backend",     # Hardcoded "fa3"
+    "attention_backend",        # Hardcoded "fa3"
+    "enable_memory_saver",      # Set from inference_engine_enable_sleep
+    "tokenizer",                # Passed from external tokenizer
+    "custom_weight_loader",     # Hardcoded SkyRL path
+    "skip_tokenizer_init",      # Hardcoded True for SGLang
+})
+
+
+def validate_engine_init_kwargs(
+    engine_init_kwargs: Dict[str, Any],
+    config_path: Optional[Path] = None,
+) -> None:
+    """Validate that engine_init_kwargs doesn't contain SkyRL-internal keys.
+
+    SkyRL sets certain vLLM/SGLang engine kwargs internally. If users also
+    specify these in their YAML config, it causes "duplicate keyword argument"
+    errors at runtime. This function fails fast with a clear error message.
+
+    Args:
+        engine_init_kwargs: The engine_init_kwargs dict from parsed YAML.
+        config_path: Optional path to config file for error message context.
+
+    Raises:
+        ValueError: If any forbidden keys are found in engine_init_kwargs.
+    """
+    if not engine_init_kwargs:
+        return
+
+    forbidden_found = set(engine_init_kwargs.keys()) & SKYRL_INTERNAL_ENGINE_KWARGS
+
+    if forbidden_found:
+        config_context = f" in {config_path}" if config_path else ""
+        forbidden_list = "\n".join(f"  - {k}" for k in sorted(forbidden_found))
+        all_forbidden = "\n".join(f"  - {k}" for k in sorted(SKYRL_INTERNAL_ENGINE_KWARGS))
+
+        raise ValueError(
+            f"engine_init_kwargs{config_context} contains keys that SkyRL sets internally.\n"
+            f"These will cause 'duplicate keyword argument' errors at runtime.\n\n"
+            f"FORBIDDEN KEYS FOUND:\n{forbidden_list}\n\n"
+            f"Remove these from your config. SkyRL handles them automatically.\n\n"
+            f"FULL LIST OF SKYRL-INTERNAL KWARGS (never set these):\n{all_forbidden}\n\n"
+            f"SAFE TO SET: custom_chat_template_*, kv_cache_dtype, quantization, cpu_offload_gb, etc."
+        )
+
 
 @dataclass
 class ParsedRLConfig:
@@ -114,6 +199,10 @@ def parse_rl_config(
     generator = raw.get("generator", {})
     data = raw.get("data", {})
     terminal_bench = raw.get("terminal_bench")
+
+    # Validate engine_init_kwargs doesn't contain SkyRL-internal keys
+    engine_init_kwargs = generator.get("engine_init_kwargs", {})
+    validate_engine_init_kwargs(engine_init_kwargs, config_path=path)
 
     # Apply model override if provided
     if model_override:
@@ -338,6 +427,8 @@ def get_skyrl_command_preview(
 __all__ = [
     "ParsedRLConfig",
     "SKYRL_CONFIG_DIR",
+    "SKYRL_INTERNAL_ENGINE_KWARGS",
+    "validate_engine_init_kwargs",
     "resolve_rl_config_path",
     "parse_rl_config",
     "build_skyrl_hydra_args",

@@ -103,6 +103,20 @@ export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
 export VLLM_USE_V1=1
 export RAY_RUNTIME_ENV_HOOK=ray._private.runtime_env.uv_runtime_env_hook.hook
 
+# --- Triton cache settings ---
+# Use node-local storage for Triton cache to avoid shared filesystem race conditions.
+# On HPC clusters with Lustre/GPFS, multiple workers racing to compile kernels can
+# corrupt cache files. Using /tmp ensures each node has its own isolated cache.
+TRITON_CACHE_BASE="/tmp/triton_cache_${USER:-unknown}_$$"
+mkdir -p "$TRITON_CACHE_BASE"
+export TRITON_CACHE_DIR="$TRITON_CACHE_BASE"
+export TRITON_CACHE_MANAGER="triton.runtime.cache:FileCacheManager"
+# Also set torch inductor cache to node-local storage
+export TORCHINDUCTOR_CACHE_DIR="/tmp/torchinductor_cache_${USER:-unknown}_$$"
+mkdir -p "$TORCHINDUCTOR_CACHE_DIR"
+echo "Triton cache: $TRITON_CACHE_DIR"
+echo "TorchInductor cache: $TORCHINDUCTOR_CACHE_DIR"
+
 # --- Hydra debugging ---
 export HYDRA_FULL_ERROR=1
 
