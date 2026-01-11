@@ -42,7 +42,9 @@ IMAGE_BASE="${REGISTRY}/${ORG}/${IMAGE_NAME}"
 PLATFORMS="linux/amd64,linux/arm64"
 
 # Available image variants
-VARIANTS=("gpu-1x" "gpu-4x" "gpu-8x")
+# gpu-Nx: Standard images with N GPUs configured
+# gpu-rl: RL training image with SkyRL and separate RL environment
+VARIANTS=("gpu-1x" "gpu-4x" "gpu-8x" "gpu-rl")
 
 # Parse arguments
 BUILD=true
