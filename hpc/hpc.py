@@ -72,6 +72,12 @@ class HPC(BaseModel):
     # Extra SBATCH directives (cluster-specific, e.g., licenses)
     extra_sbatch_directives: List[str] = []
 
+    # GPU type to constraint mapping (e.g., Perlmutter needs --constraint for A100 variants)
+    # Keys are GPU type strings (matching gpus_type or user-specified gpu_type)
+    # Values are constraint strings (without #SBATCH prefix)
+    # Special key "_default" is used when no gpu_type is specified
+    gpu_type_constraints: Dict[str, str] = {}
+
     def model_post_init(self, __context) -> None:
         # Derive a default CPU-per-GPU ratio when not explicitly provided.
         if not self.cpus_per_gpu:
@@ -179,6 +185,12 @@ class HPC(BaseModel):
             lines.append(mem_directive)
         if self.node_exclusion_list:
             lines.append(f"#SBATCH --exclude={self.node_exclusion_list}")
+        # Add constraint directive based on GPU type (e.g., Perlmutter A100 variants)
+        if self.gpu_type_constraints:
+            constraint_key = gpu_type if gpu_type else "_default"
+            constraint = self.gpu_type_constraints.get(constraint_key)
+            if constraint:
+                lines.append(f"#SBATCH --constraint {constraint}")
         # Add any extra cluster-specific directives (e.g., licenses)
         for directive in self.extra_sbatch_directives:
             lines.append(directive)
@@ -662,6 +674,14 @@ perlmutter = HPC(
     total_partition_nodes=256,
     qos="premium",
     gpu_directive_format="--gpus-per-node={n}",
+    # GPU type constraints for A100 variants
+    # _default (80GB): requires hbm80g constraint
+    # A100 40GB: requires gpu constraint only
+    gpu_type_constraints={
+        "_default": '"gpu&hbm80g"',
+        "A100 80GB": '"gpu&hbm80g"',
+        "A100 40GB": '"gpu"',
+    },
     # NCCL/networking settings for SFT training
     nccl_settings={
         "NCCL_DEBUG": "INFO",
