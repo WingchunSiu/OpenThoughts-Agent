@@ -159,7 +159,7 @@ def _flatten_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
     return items
 
 
-def _format_hydra_arg(key: str, value: Any, use_plus_prefix: bool = False) -> str:
+def _format_hydra_arg(key: str, value: Any, prefix: str = "") -> str:
     """Format a single Hydra CLI argument.
 
     Handles special formatting for different types:
@@ -170,12 +170,14 @@ def _format_hydra_arg(key: str, value: Any, use_plus_prefix: bool = False) -> st
     Args:
         key: Dotted key name (e.g., "trainer.epochs").
         value: Value to format.
-        use_plus_prefix: If True, prepend '+' for adding new keys to struct configs.
+        prefix: Hydra prefix to use:
+            - "" (empty): override existing key
+            - "+": add new key (fails if exists)
+            - "++": add or override (works either way)
 
     Returns:
-        Formatted Hydra argument string (e.g., "trainer.epochs=10" or "+key=val").
+        Formatted Hydra argument string (e.g., "trainer.epochs=10" or "++key=val").
     """
-    prefix = "+" if use_plus_prefix else ""
     if isinstance(value, bool):
         return f"{prefix}{key}={str(value).lower()}"
     elif isinstance(value, (list, tuple)):
@@ -285,17 +287,19 @@ def build_skyrl_hydra_args(
         trainer.setdefault("policy", {}).setdefault("model", {})["path"] = exp_args["model_path"]
 
     # Build args for each section
-    # Keys under engine_init_kwargs need + prefix since base config has empty struct
+    # Keys under engine_init_kwargs need ++ prefix (add or override) since some keys
+    # may already exist in SkyRL's base config while others are new
     for section, values in [("trainer", trainer), ("generator", generator), ("data", data)]:
         for key, val in _flatten_dict(values, section).items():
-            # engine_init_kwargs keys need + prefix to add to empty struct in base config
-            needs_plus = ".engine_init_kwargs." in key
-            args.append(_format_hydra_arg(key, val, use_plus_prefix=needs_plus))
+            # engine_init_kwargs keys need ++ prefix to add-or-override
+            # (+ would fail if key already exists in base config like enforce_eager)
+            prefix = "++" if ".engine_init_kwargs." in key else ""
+            args.append(_format_hydra_arg(key, val, prefix=prefix))
 
-    # Terminal bench with + prefix (these are Hydra overrides)
+    # Terminal bench with + prefix (these are new keys added by the config group)
     if parsed.terminal_bench:
         for key, val in _flatten_dict(parsed.terminal_bench).items():
-            args.append(_format_hydra_arg(f"+terminal_bench_config.{key}", val))
+            args.append(_format_hydra_arg(f"terminal_bench_config.{key}", val, prefix="+"))
 
     return args
 

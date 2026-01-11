@@ -707,10 +707,19 @@ class RLJobRunner:
         # vLLM settings
         os.environ["VLLM_USE_V1"] = "1"
 
+        # Ensure WandB directory is writable
+        from hpc.wandb_launch_utils import ensure_wandb_dir
+        wandb_dir = ensure_wandb_dir(
+            experiments_dir=self.config.experiments_dir,
+            verbose=True,
+        )
+        os.environ["WANDB_DIR"] = wandb_dir
+
         print(f"Environment configured:", flush=True)
         print(f"  TENSOR_PARALLEL_SIZE={os.environ['TENSOR_PARALLEL_SIZE']}", flush=True)
         print(f"  NUM_INFERENCE_ENGINES={os.environ['NUM_INFERENCE_ENGINES']}", flush=True)
         print(f"  POLICY_NUM_NODES={os.environ['POLICY_NUM_NODES']}", flush=True)
+        print(f"  WANDB_DIR={wandb_dir}", flush=True)
 
     def _run_with_ray(self) -> int:
         """Run SkyRL training with managed Ray cluster.
