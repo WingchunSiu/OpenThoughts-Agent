@@ -570,6 +570,13 @@ def build_sbatch_directives(
         directives.append(mem_directive)
     if hpc.node_exclusion_list:
         directives.append(f"#SBATCH --exclude={hpc.node_exclusion_list}")
+    # Add constraint directive based on GPU type (e.g., Perlmutter A100 variants)
+    gpu_type_constraints = getattr(hpc, "gpu_type_constraints", {})
+    if gpu_type_constraints:
+        constraint_key = gpu_type_resolved if gpu_type_resolved else "_default"
+        constraint = gpu_type_constraints.get(constraint_key)
+        if constraint:
+            directives.append(f"#SBATCH --constraint {constraint}")
     # Add any extra cluster-specific directives (e.g., licenses)
     for directive in getattr(hpc, "extra_sbatch_directives", []):
         directives.append(directive)
