@@ -41,6 +41,8 @@ terminal_bench:
   agent_name: terminus
   # Max episodes per task - generous for complex multi-step tasks
   max_episodes: 32
+  # trials_dir: Directory for Harbor trial artifacts (derived from experiments_dir if null)
+  trials_dir: null
   # Sandbox resources - adequate for most agentic tasks
   sandbox_cpu: 2
   override_cpus: 2

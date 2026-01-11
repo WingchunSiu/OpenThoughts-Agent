@@ -395,7 +395,14 @@ def build_skyrl_hydra_args(
 
     # Terminal bench with + prefix (these are new keys added by the config group)
     if parsed.terminal_bench:
-        for key, val in _flatten_dict(parsed.terminal_bench).items():
+        terminal_bench = dict(parsed.terminal_bench)
+
+        # Derive trials_dir from experiments_dir if not set
+        # This is where Harbor stores trial execution artifacts
+        if not terminal_bench.get("trials_dir") and experiments_dir and job_name:
+            terminal_bench["trials_dir"] = f"{experiments_dir}/{job_name}/trace_jobs"
+
+        for key, val in _flatten_dict(terminal_bench).items():
             args.append(_format_hydra_arg(f"terminal_bench_config.{key}", val, prefix="+"))
 
     return args
