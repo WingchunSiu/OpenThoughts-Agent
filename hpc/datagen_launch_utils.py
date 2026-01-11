@@ -120,9 +120,6 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
     # Auto-configure when tasks_input_path is provided
     # (user is providing pre-existing tasks, so task gen is unnecessary but trace gen is implied)
     if exp_args.get("tasks_input_path"):
-        if is_nullish(exp_args.get("enable_task_gen")):
-            exp_args["enable_task_gen"] = False
-            print("[datagen] Auto-disabled task generation (--tasks-input-path provided)")
         if is_nullish(exp_args.get("enable_trace_gen")):
             exp_args["enable_trace_gen"] = True
             print("[datagen] Auto-enabled trace generation (--tasks-input-path provided)")

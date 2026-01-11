@@ -449,7 +449,7 @@ class DataGenArgs:
 
     # Data generation specific
     enable_task_gen: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to run task generation stage"}
     )
     enable_trace_gen: bool = field(
