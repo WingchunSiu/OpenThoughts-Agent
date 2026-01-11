@@ -119,7 +119,7 @@ def resolve_dataset_path(
     """Resolve a dataset path, downloading from HuggingFace if needed.
 
     Handles both local filesystem paths and HuggingFace dataset identifiers.
-    Used by both eval and datagen launchers to resolve --trace_input_path.
+    Used by both eval and datagen launchers to resolve --tasks_input_path.
 
     Args:
         path_or_repo: Either a local path or HF dataset identifier (e.g., "org/repo")

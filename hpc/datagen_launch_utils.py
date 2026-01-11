@@ -117,15 +117,15 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
 
     print("\n=== DATA GENERATION MODE (Universal Launcher) ===")
 
-    # Auto-configure when trace_input_path is provided
+    # Auto-configure when tasks_input_path is provided
     # (user is providing pre-existing tasks, so task gen is unnecessary but trace gen is implied)
-    if exp_args.get("trace_input_path"):
+    if exp_args.get("tasks_input_path"):
         if is_nullish(exp_args.get("enable_task_gen")):
             exp_args["enable_task_gen"] = False
-            print("[datagen] Auto-disabled task generation (--trace-input-path provided)")
+            print("[datagen] Auto-disabled task generation (--tasks-input-path provided)")
         if is_nullish(exp_args.get("enable_trace_gen")):
             exp_args["enable_trace_gen"] = True
-            print("[datagen] Auto-enabled trace generation (--trace-input-path provided)")
+            print("[datagen] Auto-enabled trace generation (--tasks-input-path provided)")
 
     # Determine what to run
     task_enabled = str(exp_args.get("enable_task_gen", True)).lower() not in {"false", "0", "no", "none"}
@@ -261,7 +261,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             raise ValueError("--trace-harbor-config is required for trace generation")
         harbor_config_resolved = str(resolve_harbor_config_path(harbor_config))
 
-        tasks_input_path = exp_args.get("trace_input_path")
+        tasks_input_path = exp_args.get("tasks_input_path")
         if tasks_input_path:
             # Use shared utility to handle both HF repos and local paths
             tasks_input_path = resolve_dataset_path(tasks_input_path, verbose=True)

@@ -735,7 +735,7 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
 
     dataset_component = None
     dataset_slug = cli_args.get("harbor_dataset")
-    dataset_path = cli_args.get("trace_input_path") or cli_args.get("eval_dataset_path")
+    dataset_path = cli_args.get("tasks_input_path") or cli_args.get("eval_dataset_path")
     if dataset_slug:
         dataset_component = _sanitize_component(str(dataset_slug))
     elif dataset_path:

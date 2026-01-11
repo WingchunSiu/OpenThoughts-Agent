@@ -110,7 +110,7 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "disable_verification",
     "trace_script",
     "trace_target_repo",
-    "trace_input_path",
+    "tasks_input_path",
     "trace_use_gpu",
     "trace_engine",
     "trace_backend",

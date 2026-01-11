@@ -518,7 +518,7 @@ class DataGenArgs:
         default=None,
         metadata={"help": "Path to trace generation script"}
     )
-    trace_input_path: Optional[str] = field(
+    tasks_input_path: Optional[str] = field(
         default=None,
         metadata={"help": "Existing task dataset path for trace generation"}
     )

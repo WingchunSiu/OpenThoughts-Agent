@@ -440,10 +440,7 @@ def add_tasks_input_arg(
     *,
     required: bool = True,
 ) -> None:
-    """Add tasks input path argument with aliases.
-
-    Provides both --tasks_input_path and --trace_input_path for compatibility
-    with HPC launcher naming.
+    """Add tasks input path argument with alias.
 
     Args:
         parser: ArgumentParser or argument group to add arguments to.
@@ -454,19 +451,9 @@ def add_tasks_input_arg(
         required=required,
         help="Path to tasks directory (input for trace generation).",
     )
-    # Aliases for compatibility
+    # Hyphenated alias
     parser.add_argument(
         "--tasks-input-path",
-        dest="tasks_input_path",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--trace_input_path",
-        dest="tasks_input_path",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--trace-input-path",
         dest="tasks_input_path",
         help=argparse.SUPPRESS,
     )

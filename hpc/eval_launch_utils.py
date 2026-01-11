@@ -64,17 +64,17 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
     exp_args["_eval_harbor_config_resolved"] = str(resolved_cfg)
     exp_args["_eval_harbor_config"] = harbor_job
 
-    dataset_path = exp_args.get("trace_input_path")
+    dataset_path = exp_args.get("tasks_input_path")
     harbor_dataset = exp_args.get("harbor_dataset")
     if dataset_path and harbor_dataset:
         raise ValueError(
-            "Eval jobs accept either --trace-input-path or --harbor-dataset, but not both."
+            "Eval jobs accept either --tasks-input-path or --harbor-dataset, but not both."
         )
     if dataset_path:
         # Use shared utility to handle both HF repos and local paths
         resolved_dataset = resolve_dataset_path(dataset_path, verbose=True)
         exp_args["_eval_dataset_path_resolved"] = resolved_dataset
-        exp_args["trace_input_path"] = resolved_dataset
+        exp_args["tasks_input_path"] = resolved_dataset
     if harbor_dataset:
         slug = harbor_dataset.strip()
         if not slug:
@@ -84,7 +84,7 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
 
     if not (exp_args.get("harbor_dataset") or exp_args.get("_eval_dataset_path_resolved")):
         raise ValueError(
-            "Eval jobs require either --harbor-dataset or --trace-input-path to specify tasks."
+            "Eval jobs require either --harbor-dataset or --tasks-input-path to specify tasks."
         )
 
     # Derive eval_benchmark_repo using shared utility
@@ -97,7 +97,7 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
     if benchmark_repo == "unknown-benchmark":
         raise ValueError(
             "Unable to derive eval_benchmark_repo. Provide "
-            "--harbor-dataset or --trace-input-path."
+            "--harbor-dataset or --tasks-input-path."
         )
     exp_args["eval_benchmark_repo"] = benchmark_repo
     print(f"[eval] Using benchmark repo: {benchmark_repo}")

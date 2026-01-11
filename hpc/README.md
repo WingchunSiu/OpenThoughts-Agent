@@ -92,7 +92,7 @@ Optional trace generation:
 - `--enable_trace_gen` / `--trace_script` / `--trace_target_repo`: analogous settings for trace export.
 - `--trace_engine`, `--trace_backend`, `--trace_harbor_config`: configure the inference stack and Harbor job definition used during trace collection.
 - `--trace_model`, `--trace_agent_name`, `--trace_agent_kwargs`, `--trace_n_concurrent`, `--trace_env`: override fields from the Harbor YAML without editing the file.
-- `--trace_input_path`: reuse an existing tasks dataset instead of regenerating tasks.
+- `--tasks_input_path`: reuse an existing tasks dataset instead of regenerating tasks.
 - `--chunk_size`: optionally split trace generation into parallel chunks when the task count exceeds the given size; each chunk is launched as its own SLURM job with an incremented `--trace_target_repo`.
 
 Example (tasks + traces using a vLLM endpoint):
