@@ -652,7 +652,7 @@ perlmutter = HPC(
     name="perlmutter",
     hostname_pattern=r"login\d+\.perlmutter\.nersc\.gov",
     dotenv_filename="perlmutter.env",
-    account="m5091",
+    account="m5091_g",  # _g suffix required for GPU allocations
     partition="",
     gpus_per_node=4,
     cpus_per_node=64,
@@ -660,7 +660,7 @@ perlmutter = HPC(
     internet_node=True,
     gpus_type="A100 80GB",
     total_partition_nodes=256,
-    qos="regular",
+    qos="premium",
     gpu_directive_format="--gpus-per-node={n}",
     # NCCL/networking settings for SFT training
     nccl_settings={
