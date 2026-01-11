@@ -92,11 +92,18 @@ generator:
   append_eos_token_after_stop_str_in_multi_turn: true
   sampling_params:
     max_generate_length: 30720
-  # Note: engine_init_kwargs keys get ++ prefix automatically to add-or-override in the base config
-  # DO NOT set enforce_eager here - SkyRL handles it internally and will cause a duplicate error
+  # Engine initialization kwargs - passed directly to vLLM/SGLang engine
+  # Note: These keys get ++ prefix automatically to add-or-override in the base config
+  #
+  # DO NOT SET THESE - SkyRL handles them internally and will cause duplicate errors:
+  #   - trust_remote_code, enforce_eager, worker_extension_cls, data_parallel_backend
+  #   - distributed_executor_backend, max_logprobs, tensor_parallel_size
+  #   - enable_prefix_caching, dtype, gpu_memory_utilization, max_num_batched_tokens
+  #   - bundle_indices, num_gpus, noset_visible_devices (Ray internal)
+  #
+  # SAFE TO SET: custom_chat_template_*, kv_cache_dtype, quantization, cpu_offload_gb, etc.
   engine_init_kwargs:
     custom_chat_template_chat_completion_path: skyrl-train/examples/terminal_bench/qwen3_thinking_acc.jinja2
-    trust_remote_code: true
 
 # Data paths (set via CLI --train_data, --val_data)
 data:
