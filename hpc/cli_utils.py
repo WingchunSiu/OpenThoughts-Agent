@@ -1,10 +1,129 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 # Re-export from harbor_utils for backwards compatibility
 from hpc.harbor_utils import run_harbor_cli
+
+
+# =============================================================================
+# Path Resolution Utilities
+# =============================================================================
+
+
+def looks_like_file_path(value: str) -> bool:
+    """Check if a string looks like a file path (not an HF repo ID).
+
+    Uses is_hf_dataset_path() from hf_utils to detect HF repos, and adds
+    additional heuristics for file path detection.
+
+    Args:
+        value: String to check.
+
+    Returns:
+        True if value looks like a file path, False otherwise.
+    """
+    from hpc.hf_utils import is_hf_dataset_path
+
+    if not isinstance(value, str) or not value:
+        return False
+
+    # If it matches HF dataset pattern, it's not a file path
+    if is_hf_dataset_path(value):
+        return False
+
+    # Absolute paths or home-relative paths
+    if value.startswith("/") or value.startswith("~"):
+        return True
+
+    # Relative paths with ./ or ../
+    if value.startswith("./") or value.startswith("../"):
+        return True
+
+    # Has a file extension (common config/template/data files)
+    path_extensions = {
+        ".yaml", ".yml", ".json", ".jsonl", ".txt", ".md",
+        ".py", ".sh", ".jinja", ".jinja2", ".j2",
+        ".parquet", ".csv", ".tsv", ".arrow",
+        ".safetensors", ".bin", ".pt", ".pth", ".ckpt",
+        ".toml", ".ini", ".cfg", ".conf",
+    }
+    lower = value.lower()
+    if any(lower.endswith(ext) for ext in path_extensions):
+        return True
+
+    # Multiple slashes indicate nested path (more than org/repo)
+    if value.count("/") > 1:
+        return True
+
+    return False
+
+
+def resolve_paths_in_dict(
+    config: Dict[str, Any],
+    base_dir: Optional[Path] = None,
+    skip_keys: Optional[Set[str]] = None,
+    _prefix: str = "",
+) -> Dict[str, Any]:
+    """Recursively resolve file paths in a config dictionary.
+
+    Walks through the dict, identifies values that look like file paths
+    (not HF repo IDs), and resolves them to absolute paths using PROJECT_ROOT.
+
+    Args:
+        config: Configuration dictionary to process.
+        base_dir: Base directory for resolving relative paths. If None,
+            uses resolve_repo_path() which defaults to PROJECT_ROOT.
+        skip_keys: Set of dotted key names to skip (e.g., {"data.train_data"}).
+        _prefix: Internal - tracks current key path for skip_keys matching.
+
+    Returns:
+        New dictionary with paths resolved (original is not modified).
+    """
+    from hpc.launch_utils import resolve_repo_path
+
+    skip_keys = skip_keys or set()
+    result = {}
+
+    for key, value in config.items():
+        full_key = f"{_prefix}.{key}" if _prefix else key
+
+        # Skip explicitly excluded keys
+        if full_key in skip_keys:
+            result[key] = value
+            continue
+
+        if isinstance(value, dict):
+            # Recurse into nested dicts
+            result[key] = resolve_paths_in_dict(value, base_dir, skip_keys, full_key)
+        elif isinstance(value, list):
+            # Process list items
+            resolved_list = []
+            for item in value:
+                if isinstance(item, str) and looks_like_file_path(item):
+                    if base_dir:
+                        resolved = (base_dir / item).resolve() if not Path(item).is_absolute() else Path(item).resolve()
+                        resolved_list.append(str(resolved))
+                    else:
+                        resolved_list.append(str(resolve_repo_path(item)))
+                elif isinstance(item, dict):
+                    resolved_list.append(resolve_paths_in_dict(item, base_dir, skip_keys, full_key))
+                else:
+                    resolved_list.append(item)
+            result[key] = resolved_list
+        elif isinstance(value, str) and looks_like_file_path(value):
+            # Resolve path-like strings
+            if base_dir:
+                resolved = (base_dir / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+                result[key] = str(resolved)
+            else:
+                result[key] = str(resolve_repo_path(value))
+        else:
+            result[key] = value
+
+    return result
 
 
 def parse_comma_separated(value: str) -> List[str]:
@@ -118,6 +237,8 @@ def normalize_job_type(exp_args: dict) -> str | None:
 
 
 __all__ = [
+    "looks_like_file_path",
+    "resolve_paths_in_dict",
     "parse_comma_separated",
     "normalize_cli_args",
     "normalize_job_type",

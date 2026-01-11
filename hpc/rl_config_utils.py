@@ -204,6 +204,14 @@ def parse_rl_config(
     engine_init_kwargs = generator.get("engine_init_kwargs", {})
     validate_engine_init_kwargs(engine_init_kwargs, config_path=path)
 
+    # Resolve relative paths in config sections to absolute paths
+    # This ensures paths work regardless of working directory at runtime
+    # Skip data.train_data and data.val_data as they may be HF repo IDs
+    from hpc.cli_utils import resolve_paths_in_dict
+    trainer = resolve_paths_in_dict(trainer, skip_keys={"policy.model.path"})
+    generator = resolve_paths_in_dict(generator)
+    # Don't resolve data paths - they're often HF repo IDs handled separately
+
     # Apply model override if provided
     if model_override:
         trainer.setdefault("policy", {}).setdefault("model", {})["path"] = model_override

@@ -97,7 +97,7 @@ generator:
   # The launcher validates this at parse time and will error with a full list if you set forbidden keys.
   # SAFE TO SET: custom_chat_template_*, kv_cache_dtype, quantization, cpu_offload_gb, etc.
   engine_init_kwargs:
-    custom_chat_template_chat_completion_path: skyrl-train/examples/terminal_bench/qwen3_thinking_acc.jinja2
+    custom_chat_template_chat_completion_path: chat_templates/qwen3_thinking_acc.jinja2
 
 # Data paths (set via CLI --train_data, --val_data)
 data:
