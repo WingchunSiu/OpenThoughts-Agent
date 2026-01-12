@@ -105,6 +105,19 @@ terminal_bench:
     # ==========================================================================
     n_concurrent_trials: 16        # Number of parallel trial workers
 
+    # ==========================================================================
+    # Logging settings
+    # ==========================================================================
+    log_level: WARNING             # Harbor logging level (DEBUG, INFO, WARNING, ERROR)
+
+    # ==========================================================================
+    # Reward shaping settings (partial credit for test pass ratios)
+    # ==========================================================================
+    enable_reward_shaping: true    # Enable reward shaping based on test output
+    reward_parser: null            # Auto-detect (pytest, unittest, generic)
+    reward_shaper: pass_ratio      # Simple mean: passed_tests / total_tests
+    reward_shaping_fallback: true  # Fall back to original reward if parsing fails
+
   # Model info for Harbor's hosted_vllm validation (token limits and costs)
   model_info:
     # Context budget: 32k total = 24k prompt + 8k generation
