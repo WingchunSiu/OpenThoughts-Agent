@@ -722,12 +722,24 @@ def submit_script(
     return launch_sbatch(script_path, dependency=dependency, array=array)
 
 
-def sanitize_repo_for_job(repo_id: str) -> str:
-    """Return a filesystem-safe representation of a repo identifier."""
+def sanitize_repo_for_job(repo_id: str, keep_periods: bool = True) -> str:
+    """Return a filesystem-safe representation of a repo identifier.
 
-    safe = re.sub(r"[^A-Za-z0-9._\-]+", "-", repo_id.strip())
+    Args:
+        repo_id: The identifier to sanitize.
+        keep_periods: If True, periods are kept. If False, periods are replaced
+                      with hyphens (useful for job names where .yaml etc. is unwanted).
+
+    Returns:
+        Sanitized string safe for filesystem and job names.
+    """
+    if keep_periods:
+        safe = re.sub(r"[^A-Za-z0-9._\-]+", "-", repo_id.strip())
+    else:
+        safe = re.sub(r"[^A-Za-z0-9_\-]+", "-", repo_id.strip())
+    safe = re.sub(r"-+", "-", safe)  # collapse multiple hyphens
     safe = safe.strip("-_")
-    return safe or "consolidate"
+    return safe or "job"
 
 
 def sanitize_repo_component(value: Optional[str]) -> Optional[str]:
@@ -832,16 +844,7 @@ def derive_default_job_name(cli_args: Mapping[str, Any]) -> str:
             job_name_components.append(value_str.split("/")[-1])
 
     job_name = "_".join(job_name_components)
-    job_name = (
-        job_name.replace("/", "_")
-        .replace("?", "")
-        .replace("*", "")
-        .replace("{", "")
-        .replace("}", "")
-        .replace(":", "")
-        .replace('"', "")
-        .replace(" ", "_")
-    )
+    job_name = sanitize_repo_for_job(job_name, keep_periods=False)
     if job_name_suffix:
         job_name += job_name_suffix
 
