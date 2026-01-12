@@ -168,6 +168,7 @@ trainer:
 
   # Logging
   project_name: ot-agent
+  log_level: INFO  # SkyRL logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
   # Paths derived from experiments_dir/job_name if null
   run_name: null

@@ -53,7 +53,7 @@ terminal_bench:
     # Agent settings (maps to Harbor AgentConfig)
     # ==========================================================================
     # Max agent-environment turns before Harbor forces termination
-    max_episodes: 16
+    max_episodes: 64
     # Disable summarization, consistent with prior RL work
     enable_summarize: false
     # Store full message history for trajectory reconstruction
@@ -165,13 +165,14 @@ trainer:
   max_prompt_length: 24576  # 24k - matches model_info.max_input_tokens
 
   # Evaluation and checkpointing
-  eval_interval: 10
+  eval_interval: 20
   eval_before_train: false
-  ckpt_interval: 5
+  ckpt_interval: 10
   resume_mode: latest
 
   # Logging
   project_name: ot-agent
+  log_level: INFO  # SkyRL logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
   # Paths derived from experiments_dir/job_name if null
   run_name: null
@@ -243,7 +244,7 @@ generator:
 
   # Multi-turn agentic conversation handling
   append_eos_token_after_stop_str_in_multi_turn: true
-  max_turns: 32  # Match max_episodes
+  max_turns: 64  # Match max_episodes
 
   # Sampling parameters for generation
   sampling_params:

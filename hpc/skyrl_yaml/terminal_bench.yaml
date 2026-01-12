@@ -111,6 +111,7 @@ trainer:
   max_prompt_length: 2048
   resume_mode: latest
   project_name: dc-agent
+  log_level: INFO  # SkyRL logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   # Paths derived from experiments_dir/job_name if null
   run_name: null
   ckpt_path: null
