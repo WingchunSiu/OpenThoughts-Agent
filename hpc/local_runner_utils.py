@@ -227,6 +227,8 @@ def start_ray(
     num_gpus: int,
     num_cpus: int,
     log_path: Optional[Path] = None,
+    memory: Optional[int] = None,
+    object_store_memory: Optional[int] = None,
 ) -> ManagedProcess:
     """Start a single-node Ray cluster head.
 
@@ -236,10 +238,16 @@ def start_ray(
         num_gpus: Number of GPUs to expose
         num_cpus: Number of CPUs to expose
         log_path: Optional path for Ray logs (line-buffered)
+        memory: Total memory Ray can use (bytes). If None, Ray auto-detects.
+        object_store_memory: Ray object store (plasma) size (bytes). Default: 40GB.
 
     Returns:
         ManagedProcess wrapping the Ray head process
     """
+    # Default object store memory to 40GB if not specified
+    if object_store_memory is None:
+        object_store_memory = 40 * 1024 * 1024 * 1024  # 40GB
+
     cmd = [
         "ray",
         "start",
@@ -251,6 +259,12 @@ def start_ray(
         "--dashboard-host=0.0.0.0",
         "--block",
     ]
+
+    # Add memory limits to prevent Ray from detecting more memory than available
+    if memory is not None:
+        cmd.append(f"--memory={memory}")
+    if object_store_memory is not None:
+        cmd.append(f"--object-store-memory={object_store_memory}")
 
     env = os.environ.copy()
     stdout, stderr, log_file = _open_log_file(log_path)
@@ -764,12 +778,20 @@ class LocalHarborRunner:
         if needs_local_vllm:
             controller_script = self.repo_root / "scripts" / "vllm" / "start_vllm_ray_controller.py"
 
+            # Convert memory from GB to bytes if provided
+            ray_memory = None
+            if getattr(args, "ray_memory_gb", None) is not None:
+                ray_memory = int(args.ray_memory_gb * 1024 * 1024 * 1024)
+            ray_object_store = int(getattr(args, "ray_object_store_gb", 40.0) * 1024 * 1024 * 1024)
+
             ray_proc = start_ray(
                 host=args.host,
                 ray_port=args.ray_port,
                 num_gpus=args.gpus,
                 num_cpus=args.cpus,
                 log_path=ray_log,
+                memory=ray_memory,
+                object_store_memory=ray_object_store,
             )
             self.processes.append(ray_proc)
 

@@ -302,6 +302,23 @@ def add_ray_vllm_args(parser: ArgTarget) -> None:
         default=30,
         help="Seconds between health checks.",
     )
+    # Memory configuration for Ray (prevents OOM from over-detection)
+    _add_arg_with_alias(
+        parser,
+        "--ray_memory_gb",
+        "--ray-memory-gb",
+        type=float,
+        default=None,
+        help="Total memory (GB) for Ray. Auto-detected if not set.",
+    )
+    _add_arg_with_alias(
+        parser,
+        "--ray_object_store_gb",
+        "--ray-object-store-gb",
+        type=float,
+        default=40.0,
+        help="Ray object store (plasma) size in GB (default: 40).",
+    )
 
 
 def add_log_path_args(parser: ArgTarget) -> None:

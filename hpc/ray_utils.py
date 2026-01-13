@@ -31,6 +31,42 @@ if TYPE_CHECKING:
     from hpc.hpc import HPC
 
 
+# Memory configuration constants
+DEFAULT_MEMORY_HEADROOM_MB = 8192  # 8GB headroom for system/SLURM overhead
+DEFAULT_OBJECT_STORE_MEMORY_BYTES = 40 * 1024 * 1024 * 1024  # 40GB for Ray plasma store
+
+
+def compute_ray_memory_from_slurm(headroom_mb: int = DEFAULT_MEMORY_HEADROOM_MB) -> Optional[int]:
+    """Compute Ray memory limit from SLURM allocation.
+
+    Reads SLURM_MEM_PER_NODE environment variable and subtracts headroom
+    to leave space for system overhead and SLURM processes.
+
+    Args:
+        headroom_mb: Amount of memory (MB) to reserve for overhead (default: 8GB)
+
+    Returns:
+        Memory in bytes for Ray's --memory flag, or None if SLURM_MEM_PER_NODE not set
+    """
+    slurm_mem_str = os.environ.get("SLURM_MEM_PER_NODE")
+    if not slurm_mem_str:
+        return None
+
+    # SLURM_MEM_PER_NODE is in MB (e.g., "1536000" for 1.5TB)
+    try:
+        slurm_mem_mb = int(slurm_mem_str)
+    except ValueError:
+        print(f"Warning: Could not parse SLURM_MEM_PER_NODE={slurm_mem_str}", file=sys.stderr)
+        return None
+
+    usable_mem_mb = slurm_mem_mb - headroom_mb
+    if usable_mem_mb <= 0:
+        print(f"Warning: SLURM_MEM_PER_NODE ({slurm_mem_mb}MB) <= headroom ({headroom_mb}MB)", file=sys.stderr)
+        return None
+
+    return usable_mem_mb * 1024 * 1024  # Convert MB to bytes
+
+
 @dataclass
 class RayClusterConfig:
     """Configuration for a Ray cluster on SLURM."""
@@ -44,6 +80,10 @@ class RayClusterConfig:
     wait_for_cluster_script: str = "scripts/ray/wait_for_cluster.py"
     poll_interval: int = 10
     startup_timeout: int = 600
+    # Memory configuration (bytes). If None, Ray auto-detects (which can cause OOM).
+    # Set explicitly to limit Ray to the SLURM allocation minus headroom.
+    memory_per_node: Optional[int] = None  # Total memory Ray can use per node
+    object_store_memory: Optional[int] = None  # Ray object store (plasma) size
 
 
 @dataclass
@@ -81,12 +121,17 @@ class RayCluster:
 
         Convenience method that extracts Ray-relevant settings from HPC.
         """
+        # Compute Ray memory limit from SLURM allocation (prevents OOM from over-detection)
+        ray_memory = compute_ray_memory_from_slurm()
+
         ray_config = RayClusterConfig(
             num_nodes=num_nodes,
             gpus_per_node=hpc.gpus_per_node,
             cpus_per_node=hpc.cpus_per_node,
             srun_export_env=hpc.get_srun_export_env(),
             ray_env_vars=hpc.get_ray_env_vars(),
+            memory_per_node=ray_memory,
+            object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
         )
         return cls.from_slurm(ray_config)
 
@@ -283,6 +328,12 @@ class RayCluster:
                 "--block",
             ]
 
+        # Add memory limits to prevent Ray from detecting more memory than SLURM allocated
+        if self.config.memory_per_node is not None:
+            cmd.append(f"--memory={self.config.memory_per_node}")
+        if self.config.object_store_memory is not None:
+            cmd.append(f"--object-store-memory={self.config.object_store_memory}")
+
         # Build the bash command with environment variables
         if self.config.ray_env_vars:
             bash_cmd = f"env {self.config.ray_env_vars} {' '.join(cmd)}"
@@ -430,6 +481,8 @@ def create_ray_cluster_from_slurm(
     ray_port: int = 6379,
     srun_export_env: str = "ALL",
     ray_env_vars: str = "",
+    memory_per_node: Optional[int] = None,
+    object_store_memory: Optional[int] = None,
 ) -> RayCluster:
     """Convenience function to create a Ray cluster from SLURM environment.
 
@@ -441,11 +494,19 @@ def create_ray_cluster_from_slurm(
         ray_port: Port for Ray head node (default: 6379)
         srun_export_env: Environment export string for srun
         ray_env_vars: Space-separated KEY=value pairs for Ray workers
+        memory_per_node: Memory limit per node in bytes (auto-detected from SLURM if None)
+        object_store_memory: Ray object store size in bytes (default: 40GB)
 
     Returns:
         A RayCluster configured from SLURM environment
     """
     num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", "1"))
+
+    # Auto-detect memory from SLURM if not provided
+    if memory_per_node is None:
+        memory_per_node = compute_ray_memory_from_slurm()
+    if object_store_memory is None:
+        object_store_memory = DEFAULT_OBJECT_STORE_MEMORY_BYTES
 
     config = RayClusterConfig(
         num_nodes=num_nodes,
@@ -454,6 +515,8 @@ def create_ray_cluster_from_slurm(
         ray_port=ray_port,
         srun_export_env=srun_export_env,
         ray_env_vars=ray_env_vars,
+        memory_per_node=memory_per_node,
+        object_store_memory=object_store_memory,
     )
 
     return RayCluster.from_slurm(config)
