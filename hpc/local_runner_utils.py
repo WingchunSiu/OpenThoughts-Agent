@@ -51,6 +51,9 @@ from hpc.harbor_utils import (
     load_endpoint_metadata,
 )
 
+# Structured harbor config parsing (same as HPC eval launcher)
+from scripts.harbor.job_config_utils import load_job_config
+
 # Re-export docker runtime utilities for backward compatibility
 from hpc.docker_runtime import setup_docker_runtime_if_needed
 
@@ -659,11 +662,30 @@ class LocalHarborRunner:
         # Resolve paths
         args.harbor_config = str(Path(args.harbor_config).expanduser().resolve())
 
-        # Load Harbor config
+        # Load Harbor config (raw dict for backward compat)
         harbor_config_data = load_harbor_config(args.harbor_config)
         jobs_dir_value = harbor_config_data.get("jobs_dir") if isinstance(harbor_config_data, dict) else None
         args._jobs_dir_path = resolve_jobs_dir_path(jobs_dir_value, self.repo_root)
         args._harbor_config_data = harbor_config_data
+
+        # Load structured JobConfig to extract defaults (same as HPC eval launcher)
+        harbor_job = load_job_config(args.harbor_config)
+        args._harbor_job_config = harbor_job
+
+        # Apply n_concurrent from harbor config if CLI didn't override
+        # (CLI default is set in add_model_compute_args, check if it's still at that default)
+        config_n_concurrent = harbor_job.orchestrator.n_concurrent_trials if harbor_job.orchestrator else None
+        if config_n_concurrent is not None and config_n_concurrent > 0:
+            # Only override if args.n_concurrent is at the class default
+            if getattr(args, "n_concurrent", None) == self.DEFAULT_N_CONCURRENT:
+                args.n_concurrent = int(config_n_concurrent)
+
+        # Apply n_attempts from harbor config if CLI didn't override
+        config_n_attempts = harbor_job.n_attempts
+        if config_n_attempts is not None and config_n_attempts > 0:
+            # Only override if args.n_attempts is at the default of 1
+            if getattr(args, "n_attempts", 1) == 1:
+                args.n_attempts = int(config_n_attempts)
 
         # Subclass-specific validation
         self.validate_args()
@@ -845,6 +867,7 @@ __all__ = [
     "apply_datagen_defaults",
     "setup_docker_runtime_if_needed",
     "load_harbor_config",
+    "load_job_config",
     "get_harbor_env_from_config",
     "resolve_jobs_dir_path",
     # Endpoint utilities
