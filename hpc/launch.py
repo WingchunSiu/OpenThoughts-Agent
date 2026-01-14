@@ -409,6 +409,16 @@ def main():
     load_supabase_keys()
     # this is where defaults are stored for experiments_dir and deepspeed
     cli_args = parse_args()
+
+    # For eval jobs, allow --dataset to be used as alias for --harbor_dataset
+    # (--dataset is also used by LlamaFactory for SFT, so we overload by job_type)
+    job_type_raw = cli_args.get("job_type", "").lower()
+    if job_type_raw == "eval":
+        if cli_args.get("dataset") and not cli_args.get("harbor_dataset"):
+            cli_args["harbor_dataset"] = cli_args["dataset"]
+            # Don't pass dataset to SFT code path
+            cli_args.pop("dataset", None)
+
     # Storing all the arguments in a dictionary that we add to in order of precedence
     exp_args = dict()
 
