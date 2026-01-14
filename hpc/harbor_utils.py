@@ -20,7 +20,6 @@ import os
 import pty
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -605,17 +604,19 @@ def build_harbor_command(
         existing_kwargs.update(agent_kwargs)
         agent["kwargs"] = existing_kwargs
 
-    # Write the modified config to a temp file that persists until process exit
-    # Use delete=False so the file remains available for Harbor to read
-    temp_config = tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".yaml",
-        prefix="harbor_config_",
-        delete=False,
-    )
-    yaml.safe_dump(modified_config, temp_config)
-    temp_config.close()
-    temp_config_path = temp_config.name
+    # Write the modified config to the experiment directory (jobs_dir).
+    # This keeps the merged config alongside the experiment outputs for reproducibility.
+    if jobs_dir:
+        config_dir = Path(jobs_dir) / job_name
+        config_dir.mkdir(parents=True, exist_ok=True)
+        merged_config_path = config_dir / "merged_harbor_config.yaml"
+    else:
+        # Fallback to current directory if no jobs_dir specified
+        merged_config_path = Path(f"merged_harbor_config_{job_name}.yaml")
+
+    with open(merged_config_path, "w") as f:
+        yaml.safe_dump(modified_config, f)
+    temp_config_path = str(merged_config_path)
 
     # Build base command using the temp config (no --model or --agent needed)
     cmd = [
