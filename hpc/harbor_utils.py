@@ -326,21 +326,6 @@ def load_endpoint_metadata(endpoint_json: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def get_agent_name_from_config(harbor_config: dict) -> Optional[str]:
-    """Get the first agent name from harbor config.
-
-    Args:
-        harbor_config: Parsed harbor config dict (from YAML)
-
-    Returns:
-        Agent name from config, or None if no agents defined
-    """
-    agents = harbor_config.get("agents", [])
-    if agents and isinstance(agents[0], dict):
-        return agents[0].get("name")
-    return None
-
-
 def extract_agent_kwargs_from_config(harbor_config: dict, agent_name: Optional[str]) -> dict:
     """Extract kwargs for the specified agent from harbor config.
 
@@ -765,7 +750,6 @@ __all__ = [
     "build_dataset_slug_set",
     "validate_harbor_dataset_slug",
     # Agent kwargs
-    "get_agent_name_from_config",
     "extract_agent_kwargs_from_config",
     "apply_nested_key",
     "parse_agent_kwarg_strings",
