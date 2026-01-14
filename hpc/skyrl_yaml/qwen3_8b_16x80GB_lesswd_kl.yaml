@@ -131,19 +131,15 @@ terminal_bench:
 # Trainer configuration
 trainer:
   strategy: fsdp2
-
   algorithm:
     advantage_estimator: grpo
-    # KEY DIFFERENCE: No KL loss - allows larger policy updates
-    use_kl_loss: false
-    kl_loss_coef: 0.0
+    use_kl_loss: true
     # GRPO-specific settings
+    kl_loss_coef: 1e-5
     grpo_norm_by_std: true
-    # Dual clip policy loss (OpenHands uses this)
-    policy_loss_type: dual_clip
-    # Asymmetric clipping - OpenHands uses eps_clip_high=0.28
+    # Clip range for policy updates
     eps_clip_low: 0.2
-    eps_clip_high: 0.28
+    eps_clip_high: 0.2
     # Token-level loss for better gradient signal on long sequences
     loss_reduction: token_mean
 
@@ -187,10 +183,10 @@ trainer:
   policy:
     optimizer_config:
       lr: 5.0e-7
-      weight_decay: 0.01
+      weight_decay: 1e-4
       adam_betas: [0.9, 0.999]
       # Gradient clipping important for long sequences
-      max_grad_norm: 1.0
+      max_grad_norm: 1e-4
 
   # Reference model - CPU offload to save GPU memory
   ref:

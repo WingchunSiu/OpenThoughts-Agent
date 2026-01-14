@@ -107,7 +107,8 @@ def write_run_summary(exp_args, train_config):
         "training_start": training_start,
         "training_end": training_end,
         "created_by": exp_args.get("job_creator", "DCAgent"),
-        "base_model_name": train_config.get("model_name_or_path") or exp_args.get("model_name_or_path"),
+        # Use original model name (e.g., "qwen/qwen3-8B") not resolved HF snapshot path
+        "base_model_name": exp_args.get("_original_model_name_or_path") or train_config.get("model_name_or_path") or exp_args.get("model_name_or_path"),
         "dataset_name": dataset_name,
         "training_type": training_type,
         "training_parameters": training_parameters_link,
@@ -330,6 +331,11 @@ def construct_config_yaml(exp_args):
         base_config["dataset_dir"] = "ONLINE"
 
     dataset_entries = _extract_dataset_entries(base_config.get("dataset"))
+
+    # Preserve original model name before HF resolution (for database registration)
+    original_model_name = base_config.get("model_name_or_path")
+    exp_args["_original_model_name_or_path"] = original_model_name
+
     artifacts = _materialize_dataset_and_model(base_config, exp_args, dataset_entries, datasets_dir)
 
     hub_model_id = base_config.get("hub_model_id")

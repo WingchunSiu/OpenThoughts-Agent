@@ -186,7 +186,7 @@ trainer:
   # Policy optimizer - conservative LR for base model fine-tuning
   policy:
     optimizer_config:
-      lr: 5.0e-7
+      lr: 5.0e-5
       weight_decay: 0.01
       adam_betas: [0.9, 0.999]
       # Gradient clipping important for long sequences

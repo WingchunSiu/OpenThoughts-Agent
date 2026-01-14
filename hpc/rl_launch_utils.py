@@ -783,7 +783,12 @@ class RLJobRunner:
         Uses RayCluster.from_slurm() to properly start Ray across all SLURM nodes
         using srun, ensuring all nodes join the cluster before training begins.
         """
-        from hpc.ray_utils import RayCluster, RayClusterConfig
+        from hpc.ray_utils import (
+            RayCluster,
+            RayClusterConfig,
+            compute_ray_memory_from_slurm,
+            DEFAULT_OBJECT_STORE_MEMORY_BYTES,
+        )
 
         hpc = self._get_hpc()
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
@@ -792,6 +797,11 @@ class RLJobRunner:
         gpus_per_node = self.config.gpus_per_node or hpc.gpus_per_node
         cpus_per_node = self.config.cpus_per_node or hpc.cpus_per_node
 
+        # Compute Ray memory limit from SLURM allocation (prevents OOM from over-detection)
+        ray_memory = compute_ray_memory_from_slurm()
+        if ray_memory:
+            print(f"[RLJobRunner] Ray memory limit: {ray_memory / (1024**3):.1f} GB", flush=True)
+
         ray_cfg = RayClusterConfig(
             num_nodes=num_nodes,
             gpus_per_node=gpus_per_node,
@@ -799,6 +809,8 @@ class RLJobRunner:
             ray_port=self.config.ray_port,
             srun_export_env=hpc.get_srun_export_env(),
             ray_env_vars=hpc.get_ray_env_vars(),
+            memory_per_node=ray_memory,
+            object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
         )
 
         print(f"Starting Ray cluster with {num_nodes} nodes, {gpus_per_node} GPUs/node", flush=True)

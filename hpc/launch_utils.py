@@ -1252,6 +1252,74 @@ def derive_benchmark_repo(
     return sanitize_repo_for_job(raw)
 
 
+def derive_benchmark_from_job_dir(job_dir: PathInput) -> str:
+    """Derive benchmark name from a completed job's config.json.
+
+    This is the single source of truth for reconstructing benchmark info
+    from a job directory. Used by manual upload scripts and unified_db upload.
+
+    Priority:
+    1. Harbor registry config (datasets[0].name + version)
+    2. HF cache path parsing (datasets[0].path)
+    3. Job directory name parsing (fallback)
+
+    Args:
+        job_dir: Path to the completed Harbor job directory.
+
+    Returns:
+        Benchmark name string (e.g., "terminal-bench@2.0").
+    """
+    import json
+    job_path = Path(job_dir)
+
+    # Method 1: Try to read from config.json
+    config_path = job_path / "config.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+            datasets = config.get("datasets", [])
+            if datasets:
+                first_dataset = datasets[0] if isinstance(datasets, list) else {}
+
+                # Harbor registry style: {"name": "terminal-bench", "version": "2.0"}
+                registry_name = first_dataset.get("name")
+                registry_version = first_dataset.get("version")
+                if registry_name:
+                    if registry_version:
+                        return f"{registry_name}@{registry_version}"
+                    return registry_name
+
+                # HF cache path style: {"path": "/cache/datasets--org--name/..."}
+                dataset_path = first_dataset.get("path", "")
+                if dataset_path:
+                    path_parts = dataset_path.split("/")
+                    for part in path_parts:
+                        if "datasets--" in part:
+                            return part.split("--")[-1]
+        except (json.JSONDecodeError, OSError):
+            pass  # Fall through to directory name parsing
+
+    # Method 2: Parse from job directory name
+    # e.g., eval-terminal-bench@2.0-gpt-5-nano-20260113_145348
+    name = job_path.name
+
+    if name.startswith("eval-"):
+        name = name[5:]
+
+    # Split by common model name patterns
+    for sep in ["-gpt-", "-claude-", "-qwen", "-llama", "-gemini", "-o1-", "-o3-"]:
+        if sep in name.lower():
+            idx = name.lower().index(sep)
+            return name[:idx]
+
+    # Remove timestamp suffix
+    parts = name.rsplit("-", 1)
+    if len(parts) == 2 and parts[1].replace("_", "").isdigit():
+        return parts[0]
+
+    return name
+
+
 # =============================================================================
 # Upload Utilities
 # =============================================================================
@@ -1276,6 +1344,7 @@ def upload_traces_to_hf(
     hf_episodes: str = "last",
     hf_success_filter: Optional[str] = None,
     hf_verbose: bool = False,
+    hf_include_verifier_output: bool = True,
     dry_run: bool = False,
 ) -> Optional[str]:
     """Upload Harbor job traces to HuggingFace.
@@ -1291,6 +1360,7 @@ def upload_traces_to_hf(
         hf_episodes: Which episodes to export: "all" or "last".
         hf_success_filter: Filter by success status: "success", "failure", or None.
         hf_verbose: Enable verbose logging for HF upload.
+        hf_include_verifier_output: Include verifier stdout/stderr in traces (default: True).
         dry_run: If True, skip actual upload and return None.
 
     Returns:
@@ -1336,6 +1406,7 @@ def upload_traces_to_hf(
             episodes=hf_episodes,
             success_filter=hf_success_filter,
             verbose=hf_verbose,
+            include_verifier_output=hf_include_verifier_output,
         )
         print(f"[upload] HuggingFace upload complete: {hf_url}")
         return hf_url
@@ -1530,6 +1601,7 @@ __all__ = [
     "substitute_template",
     # Benchmark derivation
     "derive_benchmark_repo",
+    "derive_benchmark_from_job_dir",
     # Upload utilities
     "upload_traces_to_hf",
     "sync_eval_to_database",

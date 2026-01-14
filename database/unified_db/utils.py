@@ -2891,7 +2891,8 @@ def _extract_model_usage(
         logger.debug(f"No agent_result for trial {trial_id}, skipping model usage")
         return None
 
-    model_provider = result.get("agent_info", {}).get("model_info", {}).get("provider", "unknown")
+    # Use `or {}` pattern because `.get()` returns None (not the default) when key exists with None value
+    model_provider = ((result.get("agent_info") or {}).get("model_info") or {}).get("provider", "unknown")
 
     usage_metadata = {
         "trial_id": str(trial_id),
@@ -3524,35 +3525,61 @@ def upload_job_and_trial_records(
             raise ValueError("model_name not provided and could not be auto-detected from trial config")
         logger.info(f"Auto-detected model_name: {model_name}")
 
-    # Auto-detect benchmark name and version from dataset path
-    if not benchmark_name or not benchmark_version_hash:
-        dataset_path = job_config.get("datasets", [{}])[0].get("path", "")
-        if dataset_path:
-            # Extract benchmark name from path
-            path_parts = dataset_path.split("/")
-            for part in path_parts:
-                if "datasets--" in part:
-                    benchmark_name = part.split("--")[-1]
-                    logger.info(f"Auto-detected benchmark_name: {benchmark_name}")
-                    break
+    # Auto-detect benchmark name using shared utility
+    if not benchmark_name:
+        try:
+            # Import shared utility from hpc.launch_utils
+            import sys
+            from pathlib import Path as _Path
+            _hpc_path = _Path(__file__).resolve().parents[2] / "hpc"
+            if str(_hpc_path.parent) not in sys.path:
+                sys.path.insert(0, str(_hpc_path.parent))
+            from hpc.launch_utils import derive_benchmark_from_job_dir
+            benchmark_name = derive_benchmark_from_job_dir(job_dir)
+            logger.info(f"Auto-detected benchmark_name: {benchmark_name}")
+        except ImportError:
+            # Fallback: inline detection if hpc module not available
+            datasets_cfg = job_config.get("datasets", [{}])
+            first_dataset = datasets_cfg[0] if datasets_cfg else {}
+            registry_name = first_dataset.get("name")
+            registry_version = first_dataset.get("version")
+            if registry_name:
+                benchmark_name = f"{registry_name}@{registry_version}" if registry_version else registry_name
+            if not benchmark_name:
+                raise ValueError("benchmark_name not provided and could not be auto-detected from job config")
+            logger.info(f"Auto-detected benchmark_name (fallback): {benchmark_name}")
 
-            # Extract version hash from snapshots path
-            if "snapshots/" in dataset_path:
+    # Auto-detect benchmark version hash from config
+    if not benchmark_version_hash:
+        import hashlib
+        datasets_cfg = job_config.get("datasets", [{}])
+        first_dataset = datasets_cfg[0] if datasets_cfg else {}
+
+        # Method 1: Harbor registry style - generate hash from name+version
+        registry_name = first_dataset.get("name")
+        registry_version = first_dataset.get("version")
+        if registry_name:
+            version_str = f"{registry_name}:{registry_version}" if registry_version else registry_name
+            benchmark_version_hash = hashlib.sha256(version_str.encode()).hexdigest()
+            logger.info(f"Generated benchmark_version_hash from registry info: {benchmark_version_hash[:16]}...")
+
+        # Method 2: HF cache path style - extract from snapshots path
+        if not benchmark_version_hash:
+            dataset_path = first_dataset.get("path", "")
+            if dataset_path and "snapshots/" in dataset_path:
                 snapshot_part = dataset_path.split("snapshots/")[1]
                 raw_hash = snapshot_part.strip("/").split("/")[0]
-                # If it's a 40-char git hash, convert to SHA-256 for consistency
                 if len(raw_hash) == 40:
-                    import hashlib
                     benchmark_version_hash = hashlib.sha256(raw_hash.encode()).hexdigest()
                     logger.info(f"Auto-detected git hash {raw_hash}, converted to SHA-256: {benchmark_version_hash}")
                 else:
                     benchmark_version_hash = raw_hash
-                    logger.info(f"Auto-detected benchmark_version_hash: {benchmark_version_hash}")
+                    logger.info(f"Auto-detected benchmark_version_hash from path: {benchmark_version_hash}")
 
-        if not benchmark_name:
-            raise ValueError("benchmark_name not provided and could not be auto-detected from dataset path")
+        # Method 3: Fallback - generate hash from benchmark_name
         if not benchmark_version_hash:
-            raise ValueError("benchmark_version_hash not provided and could not be auto-detected from dataset path")
+            benchmark_version_hash = hashlib.sha256(benchmark_name.encode()).hexdigest()
+            logger.info(f"Generated benchmark_version_hash from name: {benchmark_version_hash[:16]}...")
 
     # Lookup foreign keys in database
     logger.info("Looking up agent in database...")
@@ -3879,6 +3906,7 @@ def upload_traces_to_hf(
     episodes: str = "last",
     success_filter: Optional[str] = None,
     verbose: bool = False,
+    include_verifier_output: bool = True,
 ) -> str:
     """
     Upload job trial execution traces to HuggingFace Hub as a conversation dataset.
@@ -3906,6 +3934,7 @@ def upload_traces_to_hf(
         episodes: "all" or "last" - which episodes to export per trial (default: "all")
         success_filter: Filter trials by success ("success", "failure", or None)
         verbose: Enable verbose logging (default: False)
+        include_verifier_output: Include verifier stdout/stderr in traces (default: True)
 
     Returns:
         str: HuggingFace dataset URL (e.g., 'https://huggingface.co/datasets/username/dataset-name')
@@ -3982,6 +4011,7 @@ def upload_traces_to_hf(
             push=False,
             verbose=verbose,
             success_filter=success_filter,
+            include_verifier_output=include_verifier_output,
         )
         logger.info(f"Extracted {len(dataset)} conversation rows from trials")
     except Exception as e:

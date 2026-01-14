@@ -51,6 +51,9 @@ from hpc.harbor_utils import (
     load_endpoint_metadata,
 )
 
+# Structured harbor config parsing (same as HPC eval launcher)
+from scripts.harbor.job_config_utils import load_job_config
+
 # Re-export docker runtime utilities for backward compatibility
 from hpc.docker_runtime import setup_docker_runtime_if_needed
 
@@ -224,6 +227,8 @@ def start_ray(
     num_gpus: int,
     num_cpus: int,
     log_path: Optional[Path] = None,
+    memory: Optional[int] = None,
+    object_store_memory: Optional[int] = None,
 ) -> ManagedProcess:
     """Start a single-node Ray cluster head.
 
@@ -233,10 +238,16 @@ def start_ray(
         num_gpus: Number of GPUs to expose
         num_cpus: Number of CPUs to expose
         log_path: Optional path for Ray logs (line-buffered)
+        memory: Total memory Ray can use (bytes). If None, Ray auto-detects.
+        object_store_memory: Ray object store (plasma) size (bytes). Default: 40GB.
 
     Returns:
         ManagedProcess wrapping the Ray head process
     """
+    # Default object store memory to 40GB if not specified
+    if object_store_memory is None:
+        object_store_memory = 40 * 1024 * 1024 * 1024  # 40GB
+
     cmd = [
         "ray",
         "start",
@@ -248,6 +259,12 @@ def start_ray(
         "--dashboard-host=0.0.0.0",
         "--block",
     ]
+
+    # Add memory limits to prevent Ray from detecting more memory than available
+    if memory is not None:
+        cmd.append(f"--memory={memory}")
+    if object_store_memory is not None:
+        cmd.append(f"--object-store-memory={object_store_memory}")
 
     env = os.environ.copy()
     stdout, stderr, log_file = _open_log_file(log_path)
@@ -659,11 +676,30 @@ class LocalHarborRunner:
         # Resolve paths
         args.harbor_config = str(Path(args.harbor_config).expanduser().resolve())
 
-        # Load Harbor config
+        # Load Harbor config (raw dict for backward compat)
         harbor_config_data = load_harbor_config(args.harbor_config)
         jobs_dir_value = harbor_config_data.get("jobs_dir") if isinstance(harbor_config_data, dict) else None
         args._jobs_dir_path = resolve_jobs_dir_path(jobs_dir_value, self.repo_root)
         args._harbor_config_data = harbor_config_data
+
+        # Load structured JobConfig to extract defaults (same as HPC eval launcher)
+        harbor_job = load_job_config(args.harbor_config)
+        args._harbor_job_config = harbor_job
+
+        # Apply n_concurrent from harbor config if CLI didn't override
+        # (CLI default is set in add_model_compute_args, check if it's still at that default)
+        config_n_concurrent = harbor_job.orchestrator.n_concurrent_trials if harbor_job.orchestrator else None
+        if config_n_concurrent is not None and config_n_concurrent > 0:
+            # Only override if args.n_concurrent is at the class default
+            if getattr(args, "n_concurrent", None) == self.DEFAULT_N_CONCURRENT:
+                args.n_concurrent = int(config_n_concurrent)
+
+        # Apply n_attempts from harbor config if CLI didn't override
+        config_n_attempts = harbor_job.n_attempts
+        if config_n_attempts is not None and config_n_attempts > 0:
+            # Only override if args.n_attempts is at the default of 1
+            if getattr(args, "n_attempts", 1) == 1:
+                args.n_attempts = int(config_n_attempts)
 
         # Subclass-specific validation
         self.validate_args()
@@ -742,12 +778,20 @@ class LocalHarborRunner:
         if needs_local_vllm:
             controller_script = self.repo_root / "scripts" / "vllm" / "start_vllm_ray_controller.py"
 
+            # Convert memory from GB to bytes if provided
+            ray_memory = None
+            if getattr(args, "ray_memory_gb", None) is not None:
+                ray_memory = int(args.ray_memory_gb * 1024 * 1024 * 1024)
+            ray_object_store = int(getattr(args, "ray_object_store_gb", 40.0) * 1024 * 1024 * 1024)
+
             ray_proc = start_ray(
                 host=args.host,
                 ray_port=args.ray_port,
                 num_gpus=args.gpus,
                 num_cpus=args.cpus,
                 log_path=ray_log,
+                memory=ray_memory,
+                object_store_memory=ray_object_store,
             )
             self.processes.append(ray_proc)
 
@@ -845,6 +889,7 @@ __all__ = [
     "apply_datagen_defaults",
     "setup_docker_runtime_if_needed",
     "load_harbor_config",
+    "load_job_config",
     "get_harbor_env_from_config",
     "resolve_jobs_dir_path",
     # Endpoint utilities

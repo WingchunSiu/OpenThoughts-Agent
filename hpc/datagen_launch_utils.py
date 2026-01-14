@@ -481,7 +481,12 @@ class TaskgenJobRunner:
 
     def _run_with_vllm(self) -> int:
         """Run task generation with managed Ray cluster and vLLM server."""
-        from hpc.ray_utils import RayCluster, RayClusterConfig
+        from hpc.ray_utils import (
+            RayCluster,
+            RayClusterConfig,
+            compute_ray_memory_from_slurm,
+            DEFAULT_OBJECT_STORE_MEMORY_BYTES,
+        )
         from hpc.vllm_utils import VLLMServer, VLLMConfig
         from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
@@ -492,6 +497,11 @@ class TaskgenJobRunner:
         gpus_per_node = self.config.gpus_per_node or hpc.gpus_per_node
         cpus_per_node = self.config.cpus_per_node or hpc.cpus_per_node
 
+        # Compute Ray memory limit from SLURM allocation (prevents OOM from over-detection)
+        ray_memory = compute_ray_memory_from_slurm()
+        if ray_memory:
+            print(f"[TaskgenJobRunner] Ray memory limit: {ray_memory / (1024**3):.1f} GB", flush=True)
+
         ray_cfg = RayClusterConfig(
             num_nodes=num_nodes,
             gpus_per_node=gpus_per_node,
@@ -499,6 +509,8 @@ class TaskgenJobRunner:
             ray_port=self.config.ray_port,
             srun_export_env=hpc.get_srun_export_env(),
             ray_env_vars=hpc.get_ray_env_vars(),
+            memory_per_node=ray_memory,
+            object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
         )
 
         model_path = self.config.vllm_model_path or ""
@@ -718,7 +730,12 @@ class TracegenJobRunner:
 
     def _run_with_vllm(self) -> int:
         """Run trace generation with managed Ray cluster and vLLM server."""
-        from hpc.ray_utils import RayCluster, RayClusterConfig
+        from hpc.ray_utils import (
+            RayCluster,
+            RayClusterConfig,
+            compute_ray_memory_from_slurm,
+            DEFAULT_OBJECT_STORE_MEMORY_BYTES,
+        )
         from hpc.vllm_utils import VLLMServer, VLLMConfig
         from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
@@ -729,6 +746,11 @@ class TracegenJobRunner:
         gpus_per_node = self.config.gpus_per_node or hpc.gpus_per_node
         cpus_per_node = self.config.cpus_per_node or hpc.cpus_per_node
 
+        # Compute Ray memory limit from SLURM allocation (prevents OOM from over-detection)
+        ray_memory = compute_ray_memory_from_slurm()
+        if ray_memory:
+            print(f"[TracegenJobRunner] Ray memory limit: {ray_memory / (1024**3):.1f} GB", flush=True)
+
         ray_cfg = RayClusterConfig(
             num_nodes=num_nodes,
             gpus_per_node=gpus_per_node,
@@ -736,6 +758,8 @@ class TracegenJobRunner:
             ray_port=self.config.ray_port,
             srun_export_env=hpc.get_srun_export_env(),
             ray_env_vars=hpc.get_ray_env_vars(),
+            memory_per_node=ray_memory,
+            object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
         )
 
         raw_model_path = self.config.vllm_model_path or self.config.model
