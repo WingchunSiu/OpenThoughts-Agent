@@ -94,9 +94,10 @@ class EvalRunner(LocalHarborRunner):
         if not self.args.dataset and not self.args.dataset_path:
             raise ValueError("Must provide --dataset or --dataset-path.")
 
-        # Resolve dataset path if provided
+        # Resolve dataset path if provided (handles both local paths and HF repo IDs)
         if self.args.dataset_path:
-            self.args.dataset_path = str(Path(self.args.dataset_path).expanduser().resolve())
+            from hpc.hf_utils import resolve_dataset_path
+            self.args.dataset_path = resolve_dataset_path(self.args.dataset_path, verbose=True)
 
     def print_banner(self) -> None:
         """Print startup banner for eval."""
