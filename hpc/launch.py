@@ -44,6 +44,7 @@ from hpc.consolidate_launch_utils import (
 from hpc.eval_launch_utils import (
     launch_eval_job_v2,
     prepare_eval_configuration,
+    remap_eval_cli_args,
 )
 from scripts.harbor.tasks_parquet_converter import from_parquet
 from database.unified_db.utils import load_supabase_keys
@@ -410,14 +411,10 @@ def main():
     # this is where defaults are stored for experiments_dir and deepspeed
     cli_args = parse_args()
 
-    # For eval jobs, allow --dataset to be used as alias for --harbor_dataset
-    # (--dataset is also used by LlamaFactory for SFT, so we overload by job_type)
+    # Apply job-type-specific argument remapping
     job_type_raw = cli_args.get("job_type", "").lower()
     if job_type_raw == "eval":
-        if cli_args.get("dataset") and not cli_args.get("harbor_dataset"):
-            cli_args["harbor_dataset"] = cli_args["dataset"]
-            # Don't pass dataset to SFT code path
-            cli_args.pop("dataset", None)
+        cli_args = remap_eval_cli_args(cli_args)
 
     # Storing all the arguments in a dictionary that we add to in order of precedence
     exp_args = dict()

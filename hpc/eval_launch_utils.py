@@ -43,6 +43,29 @@ from hpc.harbor_utils import (
 from scripts.harbor.job_config_utils import load_job_config
 
 
+def remap_eval_cli_args(cli_args: dict) -> dict:
+    """Remap CLI arguments for eval job type.
+
+    Handles argument aliasing where eval jobs use different argument names
+    than SFT jobs for the same concepts:
+    - --dataset -> --harbor_dataset (for eval, --dataset is the benchmark slug)
+
+    Args:
+        cli_args: Parsed CLI arguments dict
+
+    Returns:
+        Modified cli_args dict with eval-specific remapping applied
+    """
+    # Allow --dataset to be used as alias for --harbor_dataset in eval jobs
+    # (--dataset is also used by LlamaFactory for SFT training datasets)
+    if cli_args.get("dataset") and not cli_args.get("harbor_dataset"):
+        cli_args["harbor_dataset"] = cli_args["dataset"]
+        # Remove from cli_args so it doesn't get passed to SFT code paths
+        cli_args.pop("dataset", None)
+
+    return cli_args
+
+
 def prepare_eval_configuration(exp_args: dict) -> dict:
     """Normalize eval config inputs prior to sbatch generation."""
 

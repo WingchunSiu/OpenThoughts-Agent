@@ -760,6 +760,18 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
             value = value.split("/")[-1]
         return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-_") or "repo"
 
+    def _extract_harbor_config_label(config_path: str) -> str:
+        """Extract a short label from harbor config path (e.g., '16concurrency_eval')."""
+        filename = Path(config_path).stem  # Remove .yaml extension
+        # Remove common prefixes like 'trace_'
+        for prefix in ("trace_", "harbor_"):
+            if filename.startswith(prefix):
+                filename = filename[len(prefix):]
+        # Truncate if too long (keep first 30 chars)
+        if len(filename) > 30:
+            filename = filename[:30].rstrip("-_")
+        return filename
+
     job_type_hint = str(cli_args.get("job_type") or "").lower()
     prefix = "eval" if job_type_hint == JobType.EVAL.value else "datagen"
     parts: list[str] = [prefix]
@@ -770,6 +782,13 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
         parts.append(_sanitize_component(str(model_candidate)))
     elif repo_candidate:
         parts.append(_sanitize_component(str(repo_candidate)))
+
+    # Include harbor config label for better job identification
+    harbor_config = cli_args.get("trace_harbor_config")
+    if harbor_config:
+        config_label = _extract_harbor_config_label(str(harbor_config))
+        if config_label:
+            parts.append(config_label)
 
     dataset_component = None
     dataset_slug = cli_args.get("harbor_dataset")
