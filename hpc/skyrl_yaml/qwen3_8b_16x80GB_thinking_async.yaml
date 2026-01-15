@@ -225,8 +225,9 @@ trainer:
   # Enable async RL training loop
   fully_async:
     # Number of parallel generation workers
-    # Set to match num_inference_engines for optimal throughput
-    num_parallel_generation_workers: 8
+    # Constraint: mini_batch_size <= num_parallel_generation_workers <= mini_batch_size * (max_staleness_steps + 1)
+    # With mini_batch_size=16 and max_staleness_steps=4: 16 <= workers <= 80
+    num_parallel_generation_workers: 16
 
 # Generator (vLLM inference) configuration
 generator:
