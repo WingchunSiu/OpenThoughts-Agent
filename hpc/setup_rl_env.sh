@@ -141,6 +141,22 @@ else
 fi
 
 echo "SkyRL repo ready at: $SKYRL_DIR"
+
+# =============================================================================
+# Install SkyRL packages (skyrl-train and skyrl-gym)
+# =============================================================================
+# skyrl-train: Core RL training framework
+# skyrl-gym: Environment implementations (GSM8K, AIME, etc.) - required by skyrl-train
+
+echo ""
+echo "=== Installing SkyRL Packages ==="
+
+echo "Installing skyrl-gym (environment implementations)..."
+uv pip install -e "$SKYRL_DIR/skyrl-gym"
+
+echo "Installing skyrl-train (RL training framework)..."
+uv pip install -e "$SKYRL_DIR/skyrl-train"
+
 echo ""
 echo "IMPORTANT: Add this to your shell or source your cluster's dotenv file:"
 echo "  export SKYRL_HOME=\"$SKYRL_DIR\""
@@ -153,6 +169,8 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}')"
 python -c "import vllm; print(f'vLLM: {vllm.__version__}')" || echo "Warning: vLLM not installed (may be CPU-only system)"
 python -c "import ray; print(f'Ray: {ray.__version__}')"
 python -c "import transformers; print(f'Transformers: {transformers.__version__}')"
+python -c "import skyrl_gym; print(f'skyrl-gym: installed')"
+python -c "import skyrl_train; print(f'skyrl-train: installed')"
 
 echo ""
 echo "=== RL Environment Setup Complete ==="
