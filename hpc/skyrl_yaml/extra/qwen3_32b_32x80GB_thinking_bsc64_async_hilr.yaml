@@ -69,7 +69,7 @@ terminal_bench:
     enable_episode_logging: false
 
     # Agent timeout overrides
-    override_timeout_sec: 480
+    override_timeout_sec: 720
 
     # ==========================================================================
     # Environment settings (maps to Harbor EnvironmentConfig)

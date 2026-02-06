@@ -93,7 +93,7 @@ terminal_bench:
         enable_thinking: true
 
     # Agent timeout overrides
-    override_timeout_sec: 480        # Agent execution timeout (seconds)
+    override_timeout_sec: 720        # Agent execution timeout (seconds)
     # override_setup_timeout_sec: 120  # Agent setup timeout
     # max_timeout_sec: 1800          # Cap timeout (useful for runaway tasks)
 
