@@ -54,7 +54,7 @@ terminal_bench:
         enable_thinking: true
 
     # Timeout settings
-    override_timeout_sec: 240
+    override_timeout_sec: 480
 
     # Environment settings
     override_cpus: 1

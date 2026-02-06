@@ -47,7 +47,7 @@ terminal_bench:
     store_all_messages: true
     # Disable episode-* folder creation to reduce disk I/O (SkyRL uses TrialResult directly)
     enable_episode_logging: false
-    override_timeout_sec: 240
+    override_timeout_sec: 480
     override_cpus: 1
     override_memory_mb: 2048
     override_storage_mb: 2048

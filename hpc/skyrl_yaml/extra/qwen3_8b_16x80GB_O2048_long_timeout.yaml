@@ -82,7 +82,7 @@ terminal_bench:
     # Verifier settings (maps to Harbor VerifierConfig)
     # ==========================================================================
     # verifier_disable: false       # Disable verification (for debugging)
-    verifier_override_timeout_sec: 240  # Override verifier timeout
+    verifier_override_timeout_sec: 480  # Override verifier timeout
 
     # ==========================================================================
     # Retry settings (maps to Harbor RetryConfig for QueueOrchestrator)
