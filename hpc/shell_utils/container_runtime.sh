@@ -7,6 +7,7 @@
 #   - Docker daemon setup via setup_docker_runtime.sh
 #   - podman-hpc shim creation for Docker API compatibility
 #   - Container runtime verification
+#   - Pre-downloading tmux for containers (needed by terminus-2 agent)
 #
 # Usage:
 #   source /path/to/hpc/shell_utils/container_runtime.sh
@@ -16,6 +17,71 @@
 #   0 - Success
 #   4 - EXIT_CONNECTIVITY_FAILED (Docker daemon not responding)
 # ==============================================================================
+
+# URL for pre-built static tmux binary (musl-based, works in any Linux container)
+# From official tmux-builds: https://github.com/tmux/tmux-builds/releases
+TMUX_STATIC_URL="https://github.com/tmux/tmux-builds/releases/download/v3.6a/tmux-3.6a-linux-x86_64.tar.gz"
+
+# Pre-download and extract tmux for use in containers
+# This is needed because podman-hpc containers may not have internet access
+# and terminus-2 agent requires tmux for terminal session management.
+setup_tmux_for_containers() {
+    local workdir="${1:-$WORKDIR}"
+    local tools_dir="$workdir/.harbor_tools"
+    local tmux_path="$tools_dir/tmux"
+
+    # Export for Harbor to pick up
+    export HARBOR_TMUX_HOST_PATH="$tmux_path"
+
+    # Check if tmux already exists and works
+    if [ -x "$tmux_path" ] && "$tmux_path" -V &>/dev/null; then
+        echo "[container_runtime] tmux already available at $tmux_path"
+        return 0
+    fi
+
+    echo "[container_runtime] Pre-downloading tmux for containers..."
+    mkdir -p "$tools_dir"
+
+    # Download tarball
+    local tarball_path="$tools_dir/tmux.tar.gz"
+    if command -v curl &>/dev/null; then
+        curl -fsSL --connect-timeout 10 --max-time 120 "$TMUX_STATIC_URL" -o "$tarball_path"
+    elif command -v wget &>/dev/null; then
+        wget -q --timeout=120 "$TMUX_STATIC_URL" -O "$tarball_path"
+    else
+        echo "[container_runtime] WARNING: Neither curl nor wget available, cannot download tmux"
+        return 1
+    fi
+
+    if [ ! -f "$tarball_path" ]; then
+        echo "[container_runtime] WARNING: Failed to download tmux tarball"
+        return 1
+    fi
+
+    # Extract tarball - tmux binary is at tmux-*/bin/tmux
+    cd "$tools_dir" || return 1
+    tar -xzf "$tarball_path"
+
+    # Find and move the tmux binary
+    local extracted_tmux
+    extracted_tmux=$(find . -name "tmux" -type f -executable 2>/dev/null | head -1)
+
+    if [ -n "$extracted_tmux" ] && [ -f "$extracted_tmux" ]; then
+        mv "$extracted_tmux" "$tmux_path"
+        chmod +x "$tmux_path"
+        # Cleanup extracted directory and tarball
+        rm -rf tmux-* "$tarball_path" 2>/dev/null
+
+        if "$tmux_path" -V &>/dev/null; then
+            echo "[container_runtime] tmux installed successfully: $("$tmux_path" -V)"
+            return 0
+        fi
+    fi
+
+    echo "[container_runtime] WARNING: Failed to setup tmux binary"
+    rm -rf tmux-* "$tarball_path" 2>/dev/null
+    return 1
+}
 
 # Create a docker shim that wraps podman-hpc
 # This allows Harbor's Docker backend to work with podman-hpc
@@ -101,8 +167,9 @@ setup_container_runtime() {
             ;;
 
         podman_hpc)
-            # podman-hpc is native on HPC clusters - no special setup needed
-            echo "[container_runtime] Using native podman-hpc (no Docker setup needed)"
+            # podman-hpc is native on HPC clusters - set up tmux for terminus-2 agent
+            echo "[container_runtime] Using native podman-hpc"
+            setup_tmux_for_containers "$workdir"
             ;;
 
         daytona|modal|beam)
