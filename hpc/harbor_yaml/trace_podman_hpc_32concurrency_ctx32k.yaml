@@ -40,21 +40,28 @@ orchestrator:
     - RewardFileNotFoundError
     - RewardFileEmptyError
     - VerifierOutputParseError
+    - SandboxBuildFailedError
     wait_multiplier: 2.0
     min_wait_sec: 1.0
     max_wait_sec: 60.0
   kwargs: {}
 
 environment:
-  # Docker backend works with podman-hpc via DOCKER_HOST socket
-  type: docker
-  force_build: true
+  # Use native podman-hpc backend (no docker-compose required)
+  type: podman_hpc
+  force_build: false
   delete: true
   # Conservative resource limits for HPC shared nodes
   override_cpus: 1
   override_memory_mb: 2048
   override_storage_mb: 2048
-  kwargs: {}
+  # Environment build timeout (internal podman timeouts are 90% of this)
+  override_build_timeout_sec: 600
+  kwargs:
+    image_cache_dir: trace_images
+    # Note: image_manifest_path defaults to ~/.harbor/images_manifest.jsonl
+    # This ensures the manifest is shared across all Harbor jobs
+    build_concurrency: 4
 
 verifier:
   override_timeout_sec:

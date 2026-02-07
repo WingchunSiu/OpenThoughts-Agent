@@ -232,6 +232,13 @@ def parse_rl_config(
     )
 
 
+# Explicit mapping from custom environment import_paths to their base environment types.
+# Used to determine tunnel requirements for custom environments.
+IMPORT_PATH_TO_ENV_TYPE = {
+    "harbor.environments.pooled.daytona_dind:PooledDaytonaDinDEnvironment": "daytona",
+}
+
+
 def extract_terminal_bench_agent_env(parsed: ParsedRLConfig) -> tuple:
     """Extract agent name and environment type from terminal_bench config.
 
@@ -245,6 +252,9 @@ def extract_terminal_bench_agent_env(parsed: ParsedRLConfig) -> tuple:
         Tuple of (agent_name, harbor_env) where:
         - agent_name: Harbor agent name (e.g., "terminus-2", "openhands")
         - harbor_env: Harbor environment type (e.g., "daytona", "docker", "modal")
+
+    Raises:
+        ValueError: If import_path is specified but not in IMPORT_PATH_TO_ENV_TYPE.
     """
     tb = parsed.terminal_bench or {}
     harbor = tb.get("harbor", {})
@@ -252,9 +262,19 @@ def extract_terminal_bench_agent_env(parsed: ParsedRLConfig) -> tuple:
     # Agent name from harbor.name (default: terminus-2)
     agent_name = harbor.get("name", "terminus-2")
 
-    # Environment type - can be explicit in terminal_bench config or default to daytona
-    # Most cloud backends (Daytona, Modal) need Pinggy for installed agents
-    harbor_env = tb.get("harbor_env", "daytona")
+    # Check for custom environment via import_path
+    import_path = harbor.get("import_path")
+    if import_path:
+        if import_path not in IMPORT_PATH_TO_ENV_TYPE:
+            raise ValueError(
+                f"Unknown environment import_path: {import_path}\n"
+                f"Add it to IMPORT_PATH_TO_ENV_TYPE in rl_config_utils.py.\n"
+                f"Known import paths: {list(IMPORT_PATH_TO_ENV_TYPE.keys())}"
+            )
+        harbor_env = IMPORT_PATH_TO_ENV_TYPE[import_path]
+    else:
+        # Standard environment type (default: daytona)
+        harbor_env = harbor.get("environment_type", "daytona")
 
     return agent_name, harbor_env
 
@@ -358,8 +378,10 @@ def build_skyrl_hydra_args(
         trainer["run_name"] = job_name
     if not trainer.get("export_path") and experiments_dir and job_name:
         trainer["export_path"] = f"{experiments_dir}/{job_name}/exports"
+        print(f"Auto-set trainer.export_path: {trainer['export_path']}")
     if not trainer.get("ckpt_path") and experiments_dir and job_name:
-        trainer["ckpt_path"] = f"{experiments_dir}/{job_name}/exports"
+        trainer["ckpt_path"] = f"{experiments_dir}/{job_name}/checkpoints"
+        print(f"Auto-set trainer.ckpt_path: {trainer['ckpt_path']}")
 
     # Derive placement from num_nodes
     num_nodes = int(exp_args.get("num_nodes", 1))
@@ -477,9 +499,11 @@ __all__ = [
     "ParsedRLConfig",
     "SKYRL_CONFIG_DIR",
     "SKYRL_INTERNAL_ENGINE_KWARGS",
+    "IMPORT_PATH_TO_ENV_TYPE",
     "validate_engine_init_kwargs",
     "resolve_rl_config_path",
     "parse_rl_config",
+    "extract_terminal_bench_agent_env",
     "build_skyrl_hydra_args",
     "get_skyrl_command_preview",
 ]

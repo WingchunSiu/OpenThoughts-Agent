@@ -57,8 +57,24 @@ def resolve_rl_train_data(
         return []
 
     # Determine scratch directory for extracted tasks
+    # IMPORTANT: Must use a shared filesystem visible to all compute nodes.
+    # /tmp is local to each node and will NOT work for multi-node jobs.
     if scratch_dir is None:
-        scratch_dir = os.environ.get("SCRATCH", "/tmp")
+        # Try multiple fallbacks in order of preference:
+        # 1. $SCRATCH - standard HPC scratch directory
+        # 2. $DCFT - project directory (set in dotenv files)
+        # 3. $DCFT_PRIVATE - private project directory variant
+        # 4. $HOME - user's home directory (usually shared on HPC)
+        # 5. /tmp - LAST RESORT (local to each node, will fail on multi-node!)
+        for env_var in ["SCRATCH", "DCFT", "DCFT_PRIVATE", "HOME"]:
+            if os.environ.get(env_var):
+                scratch_dir = os.environ[env_var]
+                break
+        else:
+            scratch_dir = "/tmp"
+            print(f"[rl_launch_utils] WARNING: Using /tmp for task extraction. "
+                  f"This is local to each node and may fail on multi-node jobs. "
+                  f"Set $SCRATCH, $DCFT, or $DCFT_PRIVATE to a shared filesystem path.")
     tasks_base = Path(scratch_dir) / "tasks"
 
     resolved_paths = []
@@ -277,11 +293,11 @@ def build_rl_env_vars(
     if experiments_dir and run_name:
         env_vars["SKYRL_EXPORT_PATH"] = derive_skyrl_export_path(experiments_dir, run_name)
 
-    # WANDB mode (inherit from HPC if available)
+    # Inherit all HPC-specific environment variables (WANDB_MODE, GLOO_USE_IPV6, etc.)
     if hpc is not None and hasattr(hpc, "env_vars"):
         hpc_env = hpc.env_vars or {}
-        if "WANDB_MODE" in hpc_env:
-            env_vars["WANDB_MODE"] = hpc_env["WANDB_MODE"]
+        for key, value in hpc_env.items():
+            env_vars[key] = value
 
     return env_vars
 
@@ -352,6 +368,23 @@ conda activate {conda_env}
 set -u'''
     else:
         return '''# Using venv for RL (created by ./hpc/setup_rl_env.sh)
+# IMPORTANT: Deactivate conda environment to prevent import conflicts,
+# but KEEP conda paths in PATH because the venv's python symlink may point
+# to the conda Python that was used when the venv was created.
+set +u  # conda deactivate may reference unset variables
+if [[ -n "${CONDA_PREFIX:-}" ]]; then
+  echo "Deactivating conda environment: $CONDA_PREFIX"
+  # Deactivate all stacked conda environments
+  while [[ -n "${CONDA_PREFIX:-}" ]]; do
+    conda deactivate 2>/dev/null || break
+  done
+  # Unset the environment name variable so imports don't get confused
+  unset CONDA_DEFAULT_ENV
+  # NOTE: We keep CONDA_PREFIX and conda paths in PATH because the venv's
+  # python binary is often a symlink to the conda Python.
+fi
+set -u
+
 RL_ENV_DIR="${RL_ENV_DIR:-$WORKDIR/envs/rl}"
 if [[ -d "$RL_ENV_DIR" ]]; then
   echo "Activating RL environment: $RL_ENV_DIR"
@@ -362,7 +395,11 @@ elif [[ -n "${DCFT_RL_ENV:-}" ]] && [[ -d "$DCFT_RL_ENV" ]]; then
 else
   echo "Warning: RL environment not found at $RL_ENV_DIR"
   echo "Run ./hpc/setup_rl_env.sh to create it, or set DCFT_RL_ENV"
-fi'''
+fi
+
+# Verify we're using the correct Python
+echo "Python executable: $(which python)"
+echo "Python path check: $(python -c 'import sys; print(sys.executable)')"'''
 
 
 # =============================================================================
@@ -622,8 +659,10 @@ fi"""
         "cuda_setup": cuda_setup,
         "nccl_exports": hpc.get_nccl_exports(),
         "rl_env_exports": rl_env_exports,
+        "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
         "rl_env_activation": rl_env_activation,
         "ssh_tunnel_setup": hpc.get_ssh_tunnel_setup(),
+        "proxy_setup": hpc.get_proxy_setup(),
         "ray_port": str(job_config.ray_port),
         "master_port": str(job_config.master_port),
         "gpus_per_node": str(gpus_per_node),

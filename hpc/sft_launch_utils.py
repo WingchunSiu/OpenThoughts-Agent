@@ -417,12 +417,22 @@ class SFTJobRunner:
         gpus_per_node = int(os.environ.get("NUM_GPUS_PER_NODE", self.config.gpus_per_node))
         master_addr = os.environ.get("MASTER_ADDR", "localhost")
         master_port = os.environ.get("MASTER_PORT", str(self.config.master_port))
-        slurm_procid = os.environ.get("SLURM_PROCID", "0")
+        # Use SLURM_NODEID for machine rank (node index within the allocation)
+        # SLURM_PROCID is the global task ID which may not match node index
+        slurm_nodeid = os.environ.get("SLURM_NODEID", os.environ.get("SLURM_PROCID", "0"))
 
         # Build accelerate config if not provided
         accelerate_config = self.config.accelerate_config_path
         if not accelerate_config:
             accelerate_config = self._generate_accelerate_config(num_nodes, gpus_per_node)
+
+        # Debug: print multi-node configuration
+        print(f"Multi-node config: num_nodes={num_nodes}, gpus_per_node={gpus_per_node}, "
+              f"machine_rank={slurm_nodeid}, master_addr={master_addr}:{master_port}")
+        print(f"SLURM env: SLURM_NODEID={os.environ.get('SLURM_NODEID')}, "
+              f"SLURM_PROCID={os.environ.get('SLURM_PROCID')}, "
+              f"SLURM_JOB_NUM_NODES={os.environ.get('SLURM_JOB_NUM_NODES')}")
+        sys.stdout.flush()
 
         cmd = [
             "python", "-u", "-m", "accelerate.commands.launch",
@@ -430,7 +440,9 @@ class SFTJobRunner:
             f"--config_file={accelerate_config}",
             f"--main_process_ip={master_addr}",
             f"--main_process_port={master_port}",
-            f"--machine_rank={slurm_procid}",
+            f"--machine_rank={slurm_nodeid}",
+            f"--num_machines={num_nodes}",
+            f"--num_processes={num_nodes * gpus_per_node}",
             "--tee=3",
             "sft/llamafactory/src/train.py",
             self.config.train_config_path,
@@ -456,7 +468,6 @@ class SFTJobRunner:
             "enable_cpu_affinity": False,
             "machine_rank": 0,
             "main_training_function": "main",
-            # "mixed_precision": "bf16",
             "num_machines": num_nodes,
             "num_processes": num_nodes * gpus_per_node,
             "rdzv_backend": "c10d",
@@ -468,13 +479,22 @@ class SFTJobRunner:
         }
 
         if self.config.deepspeed_config:
+            # When using deepspeed_config_file, do NOT set mixed_precision in accelerate config
+            # All these settings must be in the DeepSpeed config file instead:
+            # gradient_accumulation_steps, gradient_clipping, zero_stage, mixed_precision,
+            # offload_optimizer_device, offload_param_device, zero3_save_16bit_model
+            #
+            # CRITICAL for multi-node: Use "standard" launcher (torch.distributed.run) instead of
+            # DeepSpeed's launcher. DeepSpeed's launcher ignores accelerate's multi-node settings
+            # and uses its own world discovery (which defaults to localhost only).
             config["deepspeed_config"] = {
                 "deepspeed_config_file": self.config.deepspeed_config,
                 "zero3_init_flag": True,
-                "deepspeed_multinode_launcher": "standard"
+                "deepspeed_multinode_launcher": "standard",
             }
         else:
-            # FSDP config
+            # FSDP config - mixed_precision is set here (not in deepspeed case)
+            config["mixed_precision"] = "bf16"
             config["fsdp_config"] = {
                 "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
                 "fsdp_backward_prefetch": "BACKWARD_PRE",
@@ -566,6 +586,9 @@ def construct_sft_sbatch_script(exp_args: dict, hpc) -> str:
 
     srun_prefix = f"srun --nodes={num_nodes}"
     # Generate srun command based on launcher
+    # Use --nodes and --ntasks-per-node=1 to ensure one process per node for multi-node training
+    # Each node then launches its own accelerate processes for local GPUs
+    srun_base = "srun --nodes=$SLURM_JOB_NUM_NODES --ntasks-per-node=1"
     if hpc.needs_ssh_tunnel:
         # JSC clusters use proxychains4 for internet access
         srun_prefix += " $PROXY_CMD"
@@ -587,8 +610,11 @@ def construct_sft_sbatch_script(exp_args: dict, hpc) -> str:
         "cluster_env_file": hpc.dotenv_filename,
         "cuda_setup": cuda_setup,
         "nccl_exports": hpc.get_nccl_exports(),
+        "env_exports": hpc.get_env_exports(),
+        "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
         "ssh_tunnel_setup": hpc.get_ssh_tunnel_setup(),
         "master_port": str(job_config.master_port),
+        "master_addr_suffix": hpc.master_addr_suffix or "",
         "gpus_per_node": str(gpus_per_node),
         "config_path": str(config_path),
         "srun_command": srun_command,

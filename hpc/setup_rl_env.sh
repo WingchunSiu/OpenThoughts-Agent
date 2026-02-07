@@ -25,6 +25,36 @@ RL_ENV_NAME="rl"
 PYTHON_VERSION="3.12"
 USE_ROCM=false
 
+# Detect architecture (aarch64 for ARM-based systems like GH200)
+ARCH=$(uname -m)
+IS_AARCH64=false
+if [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
+    IS_AARCH64=true
+fi
+
+# Auto-detect CUDA_HOME on JSC systems (Jupiter/Jureca/Juwels)
+# Required for building CUDA extensions like flash-attn
+if [[ -z "${CUDA_HOME:-}" ]]; then
+    # Check for NVHPC_CUDA_HOME (set by nvidia-compilers module)
+    if [[ -n "${NVHPC_CUDA_HOME:-}" ]]; then
+        export CUDA_HOME="$NVHPC_CUDA_HOME"
+        echo "Auto-detected CUDA_HOME from NVHPC_CUDA_HOME: $CUDA_HOME"
+    # Check common JSC CUDA locations
+    elif [[ -d "/e/software/default/stages/2026/software/CUDA/13" ]]; then
+        export CUDA_HOME="/e/software/default/stages/2026/software/CUDA/13"
+        echo "Auto-detected CUDA_HOME for Jupiter: $CUDA_HOME"
+    elif [[ -d "/p/software/jureca/stages/2024/software/CUDA/12.3" ]]; then
+        export CUDA_HOME="/p/software/jureca/stages/2024/software/CUDA/12.3"
+        echo "Auto-detected CUDA_HOME for Jureca: $CUDA_HOME"
+    fi
+fi
+
+# Ensure nvcc is in PATH if CUDA_HOME is set
+if [[ -n "${CUDA_HOME:-}" ]] && [[ -d "$CUDA_HOME/bin" ]]; then
+    export PATH="$CUDA_HOME/bin:$PATH"
+    echo "Added $CUDA_HOME/bin to PATH"
+fi
+
 # ROCm configuration (for OLCF Frontier with AMD MI250X GPUs)
 # See: https://docs.olcf.ornl.gov/software/analytics/pytorch_frontier.html
 # Note: vLLM wheels are available for ROCm 7.0.0 - try that first, fallback to 6.4.1
@@ -84,10 +114,13 @@ echo "=== RL Environment Setup ==="
 echo "Base directory: $BASE_DIR"
 echo "Environment directory: $RL_ENV_DIR"
 echo "Python version: $PYTHON_VERSION"
+echo "Architecture: $ARCH"
 if [[ "$USE_ROCM" == "true" ]]; then
     echo "GPU Backend: ROCm $ROCM_VERSION (AMD)"
+elif [[ "$IS_AARCH64" == "true" ]]; then
+    echo "GPU Backend: CUDA (NVIDIA) - aarch64/ARM"
 else
-    echo "GPU Backend: CUDA (NVIDIA)"
+    echo "GPU Backend: CUDA (NVIDIA) - x86_64"
 fi
 echo ""
 
@@ -201,7 +234,12 @@ fi
 mkdir -p "$(dirname "$RL_ENV_DIR")"
 
 echo "Creating Python $PYTHON_VERSION virtual environment..."
-uv venv "$RL_ENV_DIR" --python "$PYTHON_VERSION"
+# Use --python-preference managed to ensure uv uses its own managed Python,
+# not any system/conda Python. This prevents broken symlinks if conda is
+# deactivated later when using the venv.
+# Use --link-mode copy to copy files instead of symlinking, which is more
+# reliable on HPC systems with shared filesystems across different nodes.
+uv venv "$RL_ENV_DIR" --python "$PYTHON_VERSION" --python-preference managed --link-mode copy
 
 echo "Activating environment..."
 source "$RL_ENV_DIR/bin/activate"
@@ -221,8 +259,47 @@ if [[ "$USE_ROCM" == "true" ]]; then
     echo "Installing PyTorch with ROCm $ROCM_VERSION support..."
     uv pip install "torch==2.8.0" "torchvision==0.23.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/rocm6.4
+elif [[ "$IS_AARCH64" == "true" ]]; then
+    # aarch64/ARM (e.g., GH200 Grace-Hopper on Jupiter)
+    # Standard PyPI wheels are CPU-only for aarch64.
+    # Try CUDA 13.0 first (matches Jupiter's system CUDA), then 12.8
+    echo "Installing PyTorch for aarch64..."
+    TORCH_INSTALLED=false
+
+    # Try stable releases first with different CUDA versions
+    for CUDA_VER in "cu130" "cu128"; do
+        for TORCH_VER in "2.9.0" "2.8.0"; do
+            echo "Trying torch==${TORCH_VER} with ${CUDA_VER}..."
+            if uv pip install "torch==${TORCH_VER}" "torchvision" "torchaudio" \
+                --index-url "https://download.pytorch.org/whl/${CUDA_VER}" 2>/dev/null; then
+                echo "Installed PyTorch ${TORCH_VER}+${CUDA_VER}"
+                TORCH_INSTALLED=true
+                break 2
+            fi
+        done
+    done
+
+    # Fallback: try nightly wheels
+    if [[ "$TORCH_INSTALLED" != "true" ]]; then
+        echo "Stable wheels not available, trying nightly..."
+        for CUDA_VER in "nightly/cu130" "nightly/cu128"; do
+            if uv pip install --pre "torch" "torchvision" "torchaudio" \
+                --index-url "https://download.pytorch.org/whl/${CUDA_VER}" 2>/dev/null; then
+                echo "Installed PyTorch nightly from ${CUDA_VER}"
+                TORCH_INSTALLED=true
+                break
+            fi
+        done
+    fi
+
+    # Last resort: NVIDIA's index
+    if [[ "$TORCH_INSTALLED" != "true" ]]; then
+        echo "Trying NVIDIA index..."
+        uv pip install "torch" "torchvision" "torchaudio" \
+            --extra-index-url https://pypi.nvidia.com
+    fi
 else
-    # CUDA/NVIDIA version (default)
+    # CUDA/NVIDIA x86_64 version (default)
     uv pip install "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 fi
 
@@ -235,6 +312,8 @@ uv pip install packaging "uv_build>=0.8.4,<0.9.0" || true
 # =============================================================================
 # Try to install flash-attn (optional but recommended) - CUDA only
 # =============================================================================
+# Prebuilt wheels from: https://github.com/mjun0812/flash-attention-prebuild-wheels
+# Available for x86_64 with various torch/CUDA/Python combinations
 FLASH_ATTN_INSTALLED=false
 if [[ "$USE_ROCM" == "true" ]]; then
     echo ""
@@ -249,11 +328,79 @@ else
     echo "If installation fails, training will still work (just slower)."
     echo ""
 
-    # Try to install flash-attn with --no-build-isolation (uses installed torch)
-    if uv pip install "flash-attn>=2.8.3" --no-build-isolation 2>&1; then
-        echo "flash-attn installed successfully!"
-        FLASH_ATTN_INSTALLED=true
+    # Detect torch version for wheel selection (handle nightly versions like 2.11.0.dev20260204)
+    TORCH_VERSION=$(python -c "
+import torch
+v = torch.__version__.split('+')[0]  # Remove +cu128 suffix
+v = v.split('.dev')[0]  # Remove .devXXX suffix for nightlies
+parts = v.split('.')
+print(f'{parts[0]}.{parts[1]}')  # Major.minor only
+" 2>/dev/null || echo "2.8")
+    echo "Detected PyTorch version: $TORCH_VERSION"
+
+    # Try prebuilt wheels first (from mjun0812's repo)
+    # x86_64: flash_attn-2.6.3+cu{CUDA}torch{VER}-cp312-cp312-linux_x86_64.whl
+    # arm64:  flash_attn-2.8.3+cu{CUDA}torch{VER}-cp312-cp312-manylinux_2_34_aarch64.whl
+    PREBUILT_WHEEL_BASE="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16"
+
+    if [[ "$IS_AARCH64" == "true" ]]; then
+        # ARM64/aarch64 (e.g., GH200 Grace-Hopper on Jupiter)
+        # Available: torch 2.8/2.9/2.10 with cu128/cu130, flash-attn 2.8.3
+        echo "Trying prebuilt wheel for aarch64 (manylinux_2_34)..."
+
+        # Try combinations of CUDA versions and torch versions
+        # Prefer cu130 (matches Jupiter's CUDA 13.0), then cu128
+        for CUDA_VER in "130" "128"; do
+            for FA_TORCH in "$TORCH_VERSION" "2.9" "2.8" "2.10"; do
+                WHEEL_URL="${PREBUILT_WHEEL_BASE}/flash_attn-2.8.3+cu${CUDA_VER}torch${FA_TORCH}-cp312-cp312-manylinux_2_34_aarch64.whl"
+                echo "Trying: cu${CUDA_VER} + torch${FA_TORCH}..."
+                if uv pip install "$WHEEL_URL" 2>/dev/null; then
+                    echo "flash-attn installed from prebuilt aarch64 wheel (cu${CUDA_VER}, torch${FA_TORCH})!"
+                    FLASH_ATTN_INSTALLED=true
+                    break 2
+                fi
+            done
+        done
     else
+        # x86_64
+        echo "Trying prebuilt wheel for x86_64..."
+
+        # Try combinations of CUDA versions and torch versions
+        for CUDA_VER in "128" "130" "126"; do
+            for FA_TORCH in "$TORCH_VERSION" "2.9" "2.8" "2.10"; do
+                WHEEL_URL="${PREBUILT_WHEEL_BASE}/flash_attn-2.6.3+cu${CUDA_VER}torch${FA_TORCH}-cp312-cp312-linux_x86_64.whl"
+                echo "Trying: cu${CUDA_VER} + torch${FA_TORCH}..."
+                if uv pip install "$WHEEL_URL" 2>/dev/null; then
+                    echo "flash-attn installed from prebuilt x86_64 wheel (cu${CUDA_VER}, torch${FA_TORCH})!"
+                    FLASH_ATTN_INSTALLED=true
+                    break 2
+                fi
+            done
+        done
+    fi
+
+    # Fall back to building from source if prebuilt wheel not available/compatible
+    if [[ "$FLASH_ATTN_INSTALLED" != "true" ]]; then
+        echo "Prebuilt wheel not available, attempting to build from source..."
+
+        # Install psutil first - required by flash-attn's build system
+        echo "Installing psutil (flash-attn build dependency)..."
+        uv pip install psutil || true
+
+        # Limit build parallelism to avoid overwhelming login nodes
+        # flash-attn's CUDA compilation can be very resource-intensive
+        export MAX_JOBS=4
+        export FLASH_ATTENTION_FORCE_BUILD=FALSE
+        echo "Set MAX_JOBS=4 to limit build parallelism"
+
+        # Try to install flash-attn with --no-build-isolation (uses installed torch)
+        if uv pip install "flash-attn>=2.6.3" --no-build-isolation 2>&1; then
+            echo "flash-attn built and installed successfully!"
+            FLASH_ATTN_INSTALLED=true
+        fi
+    fi
+
+    if [[ "$FLASH_ATTN_INSTALLED" != "true" ]]; then
         echo ""
         echo "========================================================================"
         echo "WARNING: flash-attn installation failed."
@@ -261,7 +408,17 @@ else
         echo "Training will still work, but attention computation may be slower."
         echo ""
         echo "To try installing manually later:"
-        echo "  pip install flash-attn --no-build-isolation"
+        echo "  # Browse prebuilt wheels at:"
+        echo "  # https://github.com/mjun0812/flash-attention-prebuild-wheels/releases"
+        if [[ "$IS_AARCH64" == "true" ]]; then
+            echo "  # Example (aarch64, adjust cu/torch versions as needed):"
+            echo "  pip install ${PREBUILT_WHEEL_BASE}/flash_attn-2.8.3+cu130torch2.9-cp312-cp312-manylinux_2_34_aarch64.whl"
+        else
+            echo "  # Example (x86_64, adjust cu/torch versions as needed):"
+            echo "  pip install ${PREBUILT_WHEEL_BASE}/flash_attn-2.6.3+cu128torch2.8-cp312-cp312-linux_x86_64.whl"
+        fi
+        echo "  # Or build from source:"
+        echo "  MAX_JOBS=4 pip install flash-attn --no-build-isolation"
         echo "========================================================================"
         echo ""
     fi
@@ -284,6 +441,9 @@ if [[ "$USE_ROCM" == "true" ]]; then
         || true
 else
     # CUDA: Use requirements file as normal
+    # Limit build parallelism for any CUDA compilation
+    export MAX_JOBS=4
+
     if [[ -f "$RL_REQUIREMENTS" ]]; then
         echo "Using requirements file: $RL_REQUIREMENTS"
         # Use --no-build-isolation so packages use our installed torch/flash-attn
@@ -361,11 +521,15 @@ if [[ "$USE_ROCM" == "true" ]]; then
     # vLLM now has official ROCm wheels (as of Jan 2025)!
     echo "Using ROCm-compatible installation (skipping flash-attn)..."
 
+    # Limit build parallelism for any compilation
+    export MAX_JOBS=4
+
     # Install non-CUDA dependencies manually
+    # Pin transformers<=4.57.3 for API compatibility
     echo "Installing ROCm-compatible dependencies..."
     uv pip install \
         "ray>=2.50.0" \
-        "transformers>=4.51.0" \
+        "transformers>=4.51.0,<=4.57.3" \
         "accelerate" \
         "datasets>=4.0.0" \
         "omegaconf" \
@@ -386,18 +550,31 @@ if [[ "$USE_ROCM" == "true" ]]; then
     echo "Installing skyrl-train (--no-deps to skip flash-attn)..."
     uv pip install -e "$SKYRL_DIR/skyrl-train" --no-deps
 
-    # Install vLLM ROCm wheel (available for ROCm 7.0.x)
-    # See: https://www.phoronix.com/news/AMD-ROCm-vLLM-Wheel
-    # Note: vLLM ROCm requires pre-release aiter dependency, so we use --prerelease=allow
+    # Install vLLM ROCm wheel (available for ROCm 6.x and 7.x)
+    # See: https://docs.vllm.ai/en/latest/getting_started/amd-installation.html
+    # Note: We target vLLM 0.13.x for API compatibility
     if [[ "$ROCM_VERSION" == 7.0.* ]]; then
-        echo "Installing vLLM with ROCm 7.0.0 wheel..."
-        uv pip install "vllm==0.14.0+rocm700" \
-            --extra-index-url https://wheels.vllm.ai/rocm/0.14.0/rocm700 \
+        echo "Installing vLLM with ROCm 7.0.0 wheel (targeting 0.13.x)..."
+        # Try 0.13.x first for API compatibility
+        uv pip install "vllm>=0.11.0,<=0.13.0" \
+            --extra-index-url https://wheels.vllm.ai/rocm/rocm700 \
+            --prerelease=allow \
+            || {
+            echo "Warning: vLLM 0.13.x ROCm wheel not found, trying latest available..."
+            uv pip install "vllm" \
+                --extra-index-url https://wheels.vllm.ai/rocm/rocm700 \
+                --prerelease=allow \
+                || echo "Warning: vLLM ROCm wheel installation failed"
+        }
+    elif [[ "$ROCM_VERSION" == 6.* ]]; then
+        echo "Installing vLLM with ROCm 6.x wheel (targeting 0.13.x)..."
+        uv pip install "vllm>=0.11.0,<=0.13.0" \
+            --extra-index-url https://wheels.vllm.ai/rocm/rocm641 \
             --prerelease=allow \
             || echo "Warning: vLLM ROCm wheel installation failed"
     else
         echo ""
-        echo "NOTE: vLLM ROCm wheel requires ROCm 7.0.0, but ROCm $ROCM_VERSION is loaded."
+        echo "NOTE: vLLM ROCm wheels available for ROCm 6.x and 7.x, but ROCm $ROCM_VERSION is loaded."
         echo "vLLM will not be installed. For manual installation, see:"
         echo "  https://docs.vllm.ai/en/latest/getting_started/amd-installation.html"
     fi
@@ -406,12 +583,29 @@ else
     # CUDA installation path (original)
     # ==========================================================================
     # Use --no-build-isolation so it uses our pre-installed torch/flash-attn
+    # Limit MAX_JOBS for any CUDA compilation during install
+    export MAX_JOBS=4
     uv pip install -e "$SKYRL_DIR/skyrl-train" --no-build-isolation || {
         echo "Trying fallback installation..."
-        # Install deps first, then editable package with --no-deps
-        uv pip install ray transformers accelerate datasets omegaconf hydra-core loguru wandb vllm || true
+        # Install deps first with pinned versions, then editable package with --no-deps
+        # Pin vllm<=0.13.0 and transformers<=4.57.3 for API compatibility
+        uv pip install \
+            "ray>=2.50.0" \
+            "transformers>=4.51.0,<=4.57.3" \
+            accelerate \
+            "datasets>=4.0.0" \
+            omegaconf \
+            "hydra-core==1.3.2" \
+            loguru \
+            wandb \
+            "vllm>=0.11.0,<=0.13.0" \
+            || true
         uv pip install -e "$SKYRL_DIR/skyrl-train" --no-deps
     }
+
+    # Ensure version pins are enforced after install (in case deps pulled newer versions)
+    echo "Enforcing version pins..."
+    uv pip install "vllm>=0.11.0,<=0.13.0" "transformers>=4.51.0,<=4.57.3" || true
 fi
 
 echo ""

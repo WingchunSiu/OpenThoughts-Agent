@@ -244,7 +244,7 @@ def needs_pinggy_tunnel(agent_name: Optional[str], env_type: Optional[str]) -> b
         return False
 
     # Local container backends have direct network access to vLLM
-    local_backends = ("docker", "apptainer", "singularity", "local")
+    local_backends = ("docker", "podman_hpc", "apptainer", "singularity", "local")
     if env_type and env_type.lower() in local_backends:
         return False
 

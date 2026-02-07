@@ -118,6 +118,9 @@ def _build_vllm_cli_args(server_config: dict) -> tuple[list[str], dict[str, str]
         if isinstance(value, bool):
             # Non-flag booleans: pass as true/false string
             cli_args.extend([f"--{arg_name}", str(value).lower()])
+        elif isinstance(value, dict):
+            # Dict values need to be JSON-encoded (e.g., default_chat_template_kwargs)
+            cli_args.extend([f"--{arg_name}", json.dumps(value)])
         else:
             cli_args.extend([f"--{arg_name}", str(value)])
 

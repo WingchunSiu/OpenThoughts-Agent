@@ -1284,7 +1284,43 @@ def _merge_dependencies(*deps: Optional[str]) -> Optional[str]:
     return ",".join(merged)
 
 
-def launch_sbatch(sbatch_script_path, dependency=None, array: str | None = None) -> str:
+# Transient SLURM errors that should trigger retry
+_SBATCH_RETRYABLE_ERRORS = (
+    "Socket timed out",
+    "Unable to contact slurm controller",
+    "Connection refused",
+    "Connection timed out",
+    "Slurm temporarily unable",
+    "Resource temporarily unavailable",
+)
+
+
+def launch_sbatch(
+    sbatch_script_path,
+    dependency=None,
+    array: str | None = None,
+    max_retries: int = 5,
+    initial_delay: float = 5.0,
+    max_delay: float = 60.0,
+) -> str:
+    """Launch an sbatch job with retry logic for transient SLURM errors.
+
+    Args:
+        sbatch_script_path: Path to the sbatch script
+        dependency: Optional dependency string (e.g., "afterok:12345")
+        array: Optional array specification (e.g., "0-10")
+        max_retries: Maximum number of retry attempts for transient errors
+        initial_delay: Initial delay in seconds before first retry
+        max_delay: Maximum delay in seconds between retries
+
+    Returns:
+        The submitted job ID
+
+    Raises:
+        RuntimeError: If sbatch fails after all retries or with a non-retryable error
+    """
+    import time
+
     extra_args: list[str] = []
     if dependency is not None:
         extra_args.append(f"--dependency={dependency}")
@@ -1293,28 +1329,47 @@ def launch_sbatch(sbatch_script_path, dependency=None, array: str | None = None)
     extra_flags = " ".join(extra_args)
     sbatch_cmd = f"sbatch {extra_flags} {sbatch_script_path}".strip()
 
-    result = subprocess.run(
-        sbatch_cmd,
-        shell=True,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
+    last_error = None
+    delay = initial_delay
+
+    for attempt in range(max_retries + 1):
+        result = subprocess.run(
+            sbatch_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode == 0:
+            raw_output = (result.stdout or "").strip()
+            job_id = raw_output.split()[::-1][0]
+            if attempt > 0:
+                print(f"  sbatch succeeded on attempt {attempt + 1}")
+            print(
+                f"Job {job_id} submitted"
+                f"{f' with dependency {dependency}' if dependency else ''}"
+                f"{f' and array {array}' if array else ''}."
+            )
+            return job_id
+
+        # Check if error is retryable
         msg = result.stdout.strip()
         err = result.stderr.strip()
         combined = "\n".join(filter(None, [msg, err]))
-        raise RuntimeError(
-            f"sbatch command failed (code {result.returncode}): {sbatch_cmd}\n{combined}"
-        )
+        last_error = f"sbatch command failed (code {result.returncode}): {sbatch_cmd}\n{combined}"
 
-    raw_output = (result.stdout or "").strip()
-    job_id = raw_output.split()[::-1][0]
-    print(
-        f"Job {job_id} submitted"
-        f"{f' with dependency {dependency}' if dependency else ''}"
-        f"{f' and array {array}' if array else ''}."
-    )
-    return job_id
+        is_retryable = any(phrase in combined for phrase in _SBATCH_RETRYABLE_ERRORS)
+
+        if not is_retryable or attempt >= max_retries:
+            break
+
+        # Log and retry
+        print(f"  sbatch failed (attempt {attempt + 1}/{max_retries + 1}): {err or msg}")
+        print(f"  Retrying in {delay:.1f}s...")
+        time.sleep(delay)
+        delay = min(delay * 2, max_delay)
+
+    raise RuntimeError(last_error)
 
 
 def update_exp_args(exp_args, args, *, explicit_keys: Optional[set[str]] = None):

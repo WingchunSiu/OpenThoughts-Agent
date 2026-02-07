@@ -7,9 +7,6 @@ engine:
 backend:
   type: ray
   wait_for_endpoint: true
-  tensor_parallel_size: 1
-  pipeline_parallel_size: 1
-  data_parallel_size: 1
 vllm_server:
   model_path: R2E-Gym/R2EGym-32B-Agent
   num_replicas: 1

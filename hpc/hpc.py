@@ -57,6 +57,22 @@ class HPC(BaseModel):
     # SSH tunneling for no-internet clusters (JSC)
     needs_ssh_tunnel: bool = False
 
+    # InfiniBand hostname suffix for MASTER_ADDR (JSC clusters use "i" suffix)
+    master_addr_suffix: str = ""
+
+    # SOCKS5 proxy configuration for no-internet clusters (JSC)
+    # Alternative to SSH tunneling - uses existing proxy on login node
+    proxy_host: str = ""
+    proxy_port: int = 0
+    proxychains_preload: str = ""
+    # Path to proxychains4 binary for wrapped command approach (alternative to LD_PRELOAD)
+    # Use this when LD_PRELOAD doesn't work reliably (e.g., Jupiter with ARM GH200 nodes)
+    proxychains_binary: str = ""
+
+    # Pre-run shell commands (cluster-specific setup)
+    # These run at the start of the batch script before any other setup
+    pre_run_commands: List[str] = []
+
     # CUDA path detection for complex clusters (Perlmutter)
     needs_cuda_detection: bool = False
 
@@ -270,50 +286,364 @@ class HPC(BaseModel):
             lines.append(f'export {key}="{value}"')
         return "\n".join(lines)
 
+    def get_ray_env_exports(self, experiments_dir: str) -> str:
+        """Generate Ray-specific environment defaults for SBATCH scripts."""
+        lines = [
+            "# --- Ray defaults ---",
+            'export RAY_CGRAPH_get_timeout="${RAY_CGRAPH_get_timeout:-900}"',
+            'if [ -z "${RAY_TMPDIR:-}" ]; then',
+            '  RAY_TMPDIR_BASE="/tmp/ray"',
+            '  RAY_TMPDIR="${RAY_TMPDIR_BASE}/ray_${SLURM_JOB_ID:-$$}"',
+            '  mkdir -p "$RAY_TMPDIR"',
+            "fi",
+            'export RAY_TMPDIR="${RAY_TMPDIR}"',
+            'echo "[ray] RAY_TMPDIR=$RAY_TMPDIR"',
+        ]
+        return "\n".join(lines)
+
     def get_ssh_tunnel_setup(self) -> str:
         """Generate SSH tunnel setup script for no-internet clusters (JSC).
 
-        This keeps the battle-tested bash logic for SSH tunneling intact,
-        preserving the exact behavior from jsc_train.sbatch.
+        Creates SSH tunnel from compute node to login node, then uses LD_PRELOAD
+        with proxychains to route external traffic through the tunnel.
+
+        IMPORTANT: Uses LD_PRELOAD (not CMD_PREFIX wrapper) so that Ray workers
+        inherit the proxy configuration. The CMD_PREFIX approach doesn't work
+        because Ray spawns child processes that don't inherit the wrapper.
+
+        Requirements:
+        - SSH_KEY environment variable must be set to path of SSH private key
+        - Public key must be in ~/.ssh/authorized_keys on login node
+        - proxychains-ng library must exist at cluster-specific path
         """
         if not self.needs_ssh_tunnel:
             return "# No SSH tunnel needed for this cluster"
 
-        return r'''# SSH tunnel setup for no-internet clusters
-if [ -n "${SSH_KEY:-}" ]; then
-    USER_NAME="$(whoami)"
-    LOGIN_NODE="${SLURM_SUBMIT_HOST:-$(hostname -f | sed 's/^[^.]*\.//')}"
-    PORT_TO_USE=$((20000 + RANDOM % 10000))
-    head_node_ip=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
-    head_node_ip="$(nslookup "$head_node_ip" | grep -oP '(?<=Address: ).*')"
+        return r'''# ============================================================================
+# SSH Tunnel + Proxychains Setup for No-Internet Clusters (JSC)
+#
+# Creates SOCKS5 proxy via SSH tunnel to login node, then uses proxychains
+# to route external traffic through the tunnel.
+#
+# Jupiter (ARM GH200): Uses wrapped binary approach (proxychains4 -f <config> cmd)
+# Other JSC clusters: Uses LD_PRELOAD approach for Ray worker inheritance
+# ============================================================================
 
-    SSH_TUNNEL_CMD="ssh -g -f -N -D 0.0.0.0:$PORT_TO_USE \\
-        -o StrictHostKeyChecking=no \\
-        -o ConnectTimeout=1000 \\
-        -o ServerAliveInterval=15 \\
-        -o ServerAliveCountMax=15 \\
-        -o TCPKeepAlive=no \\
-        -o ExitOnForwardFailure=yes \\
-        -o BatchMode=yes \\
-        -i $SSH_KEY \\
-        ${USER_NAME}@$LOGIN_NODE"
+# Determine login node and proxychains paths based on cluster
+NODE_HOST=$(hostname -s)
+PROXYCHAINS_MODE=""  # "binary" or "ldpreload"
 
-    mkdir -p ~/.proxychains
-    cat > ~/.proxychains/proxychains.conf <<-EOT
-        strict_chain
-        proxy_dns
-        tcp_read_time_out 30000
-        tcp_connect_time_out 15000
-        localnet 127.0.0.0/255.0.0.0
-        [ProxyList]
-        socks5 ${head_node_ip} ${PORT_TO_USE}
-EOT
-    eval "$SSH_TUNNEL_CMD"
-    sleep 1
-    PROXY_CMD="proxychains4"
+if [[ $NODE_HOST == jrc* ]]; then
+    LOGIN_NODE="jrlogin05i"
+    PROXYCHAINS_LIB="/p/scratch/synthlaion/dc-agent-shared/tools/proxychains-ng-install/lib/libproxychains4.so"
+    PROXYCHAINS_MODE="ldpreload"
+elif [[ $NODE_HOST == jwb* ]]; then
+    LOGIN_NODE="jwlogin22i"
+    PROXYCHAINS_LIB="/p/scratch/synthlaion/dc-agent-shared/tools/proxychains-ng-install/lib/libproxychains4.so"
+    PROXYCHAINS_MODE="ldpreload"
+elif [[ $NODE_HOST == jpb* ]] || [[ $NODE_HOST == jpc* ]]; then
+    LOGIN_NODE="jpbl-s01-01"
+    # Jupiter uses aarch64 build - binary wrapper approach (LD_PRELOAD doesn't work reliably)
+    PROXYCHAINS_BIN="/e/scratch/jureap59/feuer1/proxychains-ng-aarch64/bin/proxychains4"
+    PROXYCHAINS_MODE="binary"
 else
-    PROXY_CMD=""
+    echo "[proxy] Unknown cluster for node $NODE_HOST - skipping proxy setup"
+    return 0
+fi
+
+TUNNEL_PORT=7003
+
+# Check if proxychains is available
+if [[ "$PROXYCHAINS_MODE" == "binary" ]]; then
+    if [ ! -x "$PROXYCHAINS_BIN" ]; then
+        echo "[proxy] ✗ proxychains binary not found at $PROXYCHAINS_BIN"
+        echo "[proxy] Skipping proxy setup - external connectivity will fail"
+        return 0
+    fi
+    echo "[proxy] ✓ Found proxychains binary at $PROXYCHAINS_BIN"
+else
+    if [ ! -f "$PROXYCHAINS_LIB" ]; then
+        echo "[proxy] ✗ proxychains library not found at $PROXYCHAINS_LIB"
+        echo "[proxy] Skipping proxy setup - external connectivity will fail"
+        return 0
+    fi
+    echo "[proxy] ✓ Found proxychains library at $PROXYCHAINS_LIB"
+fi
+
+if [ -z "${SSH_KEY:-}" ]; then
+    echo "[proxy] SSH_KEY not set - skipping proxy setup"
+    echo "[proxy] Set SSH_KEY in your environment to enable internet access"
+else
+    # Get this node's IP address for multi-node proxy access
+    NODE_IP=$(nslookup $NODE_HOST | grep 'Address' | tail -n1 | awk '{print $2}')
+    echo "[proxy] Setting up SSH tunnel to $LOGIN_NODE"
+    echo "[proxy] SSH key: $SSH_KEY"
+    echo "[proxy] Tunnel port: $TUNNEL_PORT"
+    echo "[proxy] Node IP: $NODE_IP (workers will connect here)"
+
+    # Create SSH tunnel with SOCKS5 proxy
+    # -g flag allows remote hosts (worker nodes) to connect to the tunnel
+    ssh -g -f -N -D ${TUNNEL_PORT} \
+        -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=1000 \
+        -o ServerAliveInterval=10 \
+        -o ServerAliveCountMax=30 \
+        -o TCPKeepAlive=yes \
+        -o ExitOnForwardFailure=yes \
+        -o BatchMode=yes \
+        -i ${SSH_KEY} \
+        ${USER}@${LOGIN_NODE}
+
+    # Give tunnel time to establish
+    sleep 5
+
+    # Verify tunnel is running
+    if pgrep -f "ssh.*-D.*${TUNNEL_PORT}" > /dev/null; then
+        echo "[proxy] ✓ SSH tunnel started successfully"
+    else
+        echo "[proxy] ✗ SSH tunnel failed to start"
+        return 0
+    fi
+
+    # ============================================================================
+    # Generate proxychains config
+    # Key: Uses NODE_IP (not localhost) so worker nodes can access the tunnel
+    # localnet entries ensure internal traffic (Ray, NCCL) bypasses proxy
+    # ============================================================================
+    SLURM_JOB_ID=${SLURM_JOB_ID:-"local"}
+    CFG_PATH=~/.proxychains/proxychains_${SLURM_JOB_ID}.conf
+    mkdir -p ~/.proxychains
+
+    cat > "$CFG_PATH" <<PCEOF
+strict_chain
+tcp_read_time_out 30000
+tcp_connect_time_out 15000
+localnet 127.0.0.0/255.0.0.0
+localnet 127.0.0.1/255.255.255.255
+localnet 10.0.0.0/255.0.0.0
+localnet 172.16.0.0/255.240.0.0
+localnet 192.168.0.0/255.255.0.0
+[ProxyList]
+socks5 ${NODE_IP} ${TUNNEL_PORT}
+PCEOF
+
+    echo "[proxy] ✓ Generated proxychains config at $CFG_PATH"
+    echo "[proxy]   - Internal traffic (10.x.x.x, 172.x.x.x) → DIRECT"
+    echo "[proxy]   - External traffic (internet) → PROXY via tunnel"
+
+    # ============================================================================
+    # Export proxychains configuration based on mode
+    # ============================================================================
+    export PROXYCHAINS_CONF_FILE="$CFG_PATH"
+    export PROXYCHAINS_SOCKS5_HOST="${NODE_IP}"
+    export PROXYCHAINS_SOCKS5_PORT="${TUNNEL_PORT}"
+
+    if [[ "$PROXYCHAINS_MODE" == "binary" ]]; then
+        # Binary wrapper approach (Jupiter ARM GH200)
+        # Ray workers will use: proxychains4 -f $PROXYCHAINS_CONF_FILE ray start ...
+        export PROXYCHAINS_BINARY="$PROXYCHAINS_BIN"
+        echo "[proxy] ✓ PROXYCHAINS_BINARY=$PROXYCHAINS_BIN"
+        echo "[proxy] ✓ PROXYCHAINS_CONF_FILE=$CFG_PATH"
+        echo "[proxy] ✓ PROXYCHAINS_SOCKS5_HOST=${NODE_IP} (accessible from worker nodes)"
+        echo "[proxy] ✓ PROXYCHAINS_SOCKS5_PORT=${TUNNEL_PORT}"
+    else
+        # LD_PRELOAD approach (Jureca, Juwels)
+        # Ray workers inherit proxy via LD_PRELOAD environment variable
+        export LD_PRELOAD="$PROXYCHAINS_LIB"
+        echo "[proxy] ✓ LD_PRELOAD set to $PROXYCHAINS_LIB"
+        echo "[proxy] ✓ PROXYCHAINS_CONF_FILE=$CFG_PATH"
+        echo "[proxy] ✓ PROXYCHAINS_SOCKS5_HOST=${NODE_IP} (accessible from worker nodes)"
+        echo "[proxy] ✓ PROXYCHAINS_SOCKS5_PORT=${TUNNEL_PORT}"
+    fi
+
+    # ============================================================================
+    # Daytona/aiohttp timeout and retry settings
+    # ============================================================================
+    export DAYTONA_MAX_RETRIES=5
+    export DAYTONA_RETRY_DELAY=30
+    export DAYTONA_BACKOFF_FACTOR=2
+    export DAYTONA_TIMEOUT=1800  # 30 minutes
+    export AIOHTTP_CLIENT_TIMEOUT=900  # 15 minutes
+    export AIOHTTP_CONNECTOR_TIMEOUT=900
+    export AIOHTTP_SOCK_CONNECT_TIMEOUT=300
+    export AIOHTTP_TOTAL_TIMEOUT=1800
+
+    # Disable SSL verification (JSC certificate issues)
+    export PYTHONHTTPSVERIFY=0
+    unset SSL_CERT_FILE
+    unset CURL_CA_BUNDLE
+    unset REQUESTS_CA_BUNDLE
+    unset SSL_CERT_DIR
+
+    echo "[proxy] ✓ Daytona timeout settings configured"
+
+    # Test proxy connectivity
+    echo "[proxy] Testing proxy connectivity..."
+    if [[ "$PROXYCHAINS_MODE" == "binary" ]]; then
+        if "$PROXYCHAINS_BIN" -f "$CFG_PATH" curl -s --connect-timeout 10 https://huggingface.co -o /dev/null; then
+            echo "[proxy] ✓ Proxy connectivity test passed (huggingface.co reachable via wrapped binary)"
+        else
+            echo "[proxy] ⚠ Proxy connectivity test failed (may still work for Daytona)"
+        fi
+    else
+        if curl -s --connect-timeout 10 https://huggingface.co -o /dev/null 2>/dev/null; then
+            echo "[proxy] ✓ Proxy connectivity test passed (huggingface.co reachable via LD_PRELOAD)"
+        else
+            echo "[proxy] ⚠ Proxy connectivity test failed (may still work for Daytona)"
+        fi
+    fi
+
+    # Test that tunnel is accessible from this node's IP (for worker node access)
+    if nc -z ${NODE_IP} ${TUNNEL_PORT} 2>/dev/null; then
+        echo "[proxy] ✓ Tunnel accessible at ${NODE_IP}:${TUNNEL_PORT} (workers can connect)"
+    else
+        echo "[proxy] ⚠ Tunnel not accessible at ${NODE_IP}:${TUNNEL_PORT} (workers may fail)"
+    fi
+
+    if [[ "$PROXYCHAINS_MODE" == "binary" ]]; then
+        echo "[proxy] ✓ Proxy setup complete (using wrapped binary for Ray workers)"
+    else
+        echo "[proxy] ✓ Proxy setup complete (using LD_PRELOAD for Ray worker inheritance)"
+    fi
+fi
+'''
+
+    def get_proxy_setup(self) -> str:
+        """Generate SOCKS5 proxy setup script for no-internet clusters (JSC).
+
+        Uses an existing SOCKS5 proxy (e.g., JSC's shared proxy at 10.14.0.53:1080)
+        instead of setting up an SSH tunnel. This is more reliable and doesn't
+        require SSH keys.
+
+        Sets:
+        - SOCKS_PROXY_URL: For Harbor/httpx to use via ALL_PROXY
+        - PROXYCHAINS_SOCKS5_HOST/PORT: For proxychains-ng
+        - PROXYCHAINS_PRELOAD: LD_PRELOAD path for proxychains
+
+        Returns:
+            Bash script for proxy setup, or comment if no proxy configured.
+        """
+        if not self.proxy_host or not self.proxy_port:
+            return "# No proxy configured for this cluster"
+
+        script = f'''# ============================================================================
+# SOCKS5 Proxy Setup for No-Internet Clusters (JSC)
+# Uses existing proxy instead of SSH tunnel - more reliable
+#
+# KEY: Proxychains with localnet exclusions ensures:
+#   - Internal traffic (Ray, NCCL) → DIRECT (no proxy)
+#   - External traffic (Daytona API) → Through SOCKS5 proxy
+# ============================================================================
+PROXY_HOST="{self.proxy_host}"
+PROXY_PORT="{self.proxy_port}"
+PROXYCHAINS_CONF="/tmp/proxychains_${{SLURM_JOB_ID}}.conf"
+
+echo "[proxy] Setting up SOCKS5 proxy at $PROXY_HOST:$PROXY_PORT"
+
+# Test proxy connectivity
+if nc -z $PROXY_HOST $PROXY_PORT 2>/dev/null; then
+    echo "[proxy] ✓ Proxy reachable at $PROXY_HOST:$PROXY_PORT"
+else
+    echo "[proxy] ✗ WARNING: Proxy not reachable at $PROXY_HOST:$PROXY_PORT"
+fi
+
+# Generate proxychains config with localnet exclusions
+cat > "$PROXYCHAINS_CONF" << PCEOF
+# Proxychains config for JSC HPC - auto-generated
+# Proxy ONLY external traffic (Daytona), bypass internal (Ray, NCCL)
+
+dynamic_chain
+quiet_mode
+
+# NOTE: proxy_dns is DISABLED to allow local DNS resolution for internal hostnames
+# (e.g., jpbo-021-27.jupiter.internal). External hostnames like api.daytona.io
+# will still work because socks5h:// does DNS at the proxy.
+
+tcp_read_time_out 15000
+tcp_connect_time_out 8000
+
+# CRITICAL: Exclude internal networks from proxying
+# This is what keeps Ray and NCCL working!
+localnet 127.0.0.0/255.0.0.0
+localnet 10.0.0.0/255.0.0.0
+localnet 172.16.0.0/255.240.0.0
+localnet 192.168.0.0/255.255.0.0
+localnet 169.254.0.0/255.255.0.0
+
+[ProxyList]
+socks5 $PROXY_HOST $PROXY_PORT
+PCEOF
+
+echo "[proxy] ✓ Generated proxychains config at $PROXYCHAINS_CONF"
+echo "[proxy]   - Internal traffic (10.x.x.x) → DIRECT (no proxy)"
+echo "[proxy]   - External traffic (internet) → PROXY"
+
+# Save a copy to the experiments directory for debugging
+EXPERIMENTS_DIR="${DCFT:-$PWD}/experiments"
+if [ -d "$EXPERIMENTS_DIR" ]; then
+    PERSISTENT_CONF="$EXPERIMENTS_DIR/proxychains_${SLURM_JOB_ID}.conf"
+    cp "$PROXYCHAINS_CONF" "$PERSISTENT_CONF" 2>/dev/null && \
+        echo "[proxy] ✓ Saved config copy to $PERSISTENT_CONF"
+fi
+
+# Export for proxychains
+export PROXYCHAINS_CONF_FILE="$PROXYCHAINS_CONF"
+echo "[proxy] PROXYCHAINS_CONF_FILE=$PROXYCHAINS_CONF_FILE"
+
+# Also set SOCKS_PROXY_URL for applications that can use it directly
+export SOCKS_PROXY_URL="socks5h://$PROXY_HOST:$PROXY_PORT"
+echo "[proxy] SOCKS_PROXY_URL=$SOCKS_PROXY_URL"'''
+
+        if self.proxychains_binary:
+            # Wrapped binary approach (preferred for Jupiter ARM GH200 nodes)
+            script += f'''
+
+# Proxychains binary for wrapped command approach
+export PROXYCHAINS_BINARY="{self.proxychains_binary}"
+echo "[proxy] PROXYCHAINS_BINARY=$PROXYCHAINS_BINARY"
+
+# Test proxychains with the config (using wrapped binary)
+echo "[proxy] Testing proxychains connectivity..."
+if "{self.proxychains_binary}" -f "$PROXYCHAINS_CONF" curl -s --connect-timeout 10 https://huggingface.co -o /dev/null; then
+    echo "[proxy] ✓ Proxychains test passed - external connectivity works"
+else
+    echo "[proxy] ⚠ Proxychains test failed (may still work for applications)"
 fi'''
+        elif self.proxychains_preload:
+            # LD_PRELOAD approach (fallback)
+            script += f'''
+
+# Proxychains library for LD_PRELOAD
+export PROXYCHAINS_PRELOAD="{self.proxychains_preload}"
+echo "[proxy] PROXYCHAINS_PRELOAD=$PROXYCHAINS_PRELOAD"
+
+# Test proxychains with the config
+if PROXYCHAINS_CONF_FILE="$PROXYCHAINS_CONF" LD_PRELOAD="{self.proxychains_preload}" \\
+   curl -s --connect-timeout 5 https://huggingface.co -o /dev/null 2>/dev/null; then
+    echo "[proxy] ✓ Proxychains test passed - external connectivity works"
+else
+    echo "[proxy] ⚠ Proxychains test failed (may still work for applications)"
+fi'''
+
+        script += '''
+
+echo "[proxy] ✓ Proxy environment configured"'''
+
+        return script
+
+    def get_pre_run_commands(self) -> str:
+        """Generate pre-run commands for cluster-specific setup.
+
+        Returns:
+            Bash commands to run at the start of the batch script.
+        """
+        if not self.pre_run_commands:
+            return "# No cluster-specific pre-run commands"
+
+        lines = ["# Cluster-specific pre-run commands"]
+        for cmd in self.pre_run_commands:
+            lines.append(cmd)
+        return "\n".join(lines)
 
 
 jureca = HPC(
@@ -341,7 +671,13 @@ jureca = HPC(
         "NCCL_IB_TIMEOUT": "60",
     },
     training_launcher="accelerate",
-    needs_ssh_tunnel=True,
+    # JSC shared SOCKS5 proxy (more reliable than SSH tunnels)
+    needs_ssh_tunnel=False,
+    proxy_host="10.14.0.53",
+    proxy_port=1080,
+    proxychains_preload="/p/scratch/laionize/raj3/proxychains-ng/libproxychains4.so",
+    # JSC-specific setup (disable core dumps to save disk space)
+    pre_run_commands=["ulimit -c 0"],
     # Job scaling (from jureca.env)
     default_time_limit="24:00:00",
     num_nodes_default=1,
@@ -350,29 +686,47 @@ jureca = HPC(
 
 jupiter = HPC(
     name="jupiter",
-    hostname_pattern=r"jpbl\.*?",
+    # Matches login nodes like jpbl-s01-01 (jupiter booster login) and compute nodes
+    hostname_pattern=r"jp(bl|cn|c)-.*",
     dotenv_filename="jupiter.env",
-    account="jureap1",
-    partition="all",
-    gpus_per_node=4,
-    cpus_per_node=48,
-    internet_node=False,
-    gpus_type="GH200 96GB",
-    total_partition_nodes=48,
+    account="jureap59",
+    partition="booster",
+    gpus_per_node=4,  # 4x GH200 superchips per node
+    cpus_per_node=72,  # 288 ARM cores total, but request subset; 72 per Grace CPU
+    internet_node=False,  # Compute nodes have no internet (like other JSC clusters)
+    gpus_type="GH200 96GB (H100 + Grace)",
+    total_partition_nodes=6000,  # ~6000 booster nodes
     gpu_directive_format="--gres=gpu:{n}",
+    # Modules: nvidia-compilers includes CUDA toolkit, nvcc, cuBLAS, etc.
+    # Note: GCC is auto-loaded; NVHPC is deprecated in favor of nvidia-compilers
+    # modules=["nvidia-compilers/25.9-CUDA-13"],
     env_vars={
-        "WANDB_MODE": "offline",  # No internet on compute nodes
+        "WANDB_MODE": "offline",  # Compute nodes have no internet
+        # Force GLOO and NCCL to use IPv4 (IPv6 doesn't work on Jupiter compute nodes)
+        "GLOO_USE_IPV6": "0",
+        "NCCL_SOCKET_FAMILY": "AF_INET",
+        # NOTE: Do NOT set GLOO_SOCKET_IFNAME=ib0 - it causes Gloo to use the IB hostname
+        # which resolves to IPv6. Let Gloo auto-detect the interface.
     },
-    # NCCL/networking settings for SFT training (InfiniBand, no internet)
+    # NOTE: Do NOT use master_addr_suffix="i" - the "i" suffixed hostname is not DNS-resolvable
+    # InfiniBand routing is handled by NCCL_SOCKET_IFNAME=ib0 instead
+    # NCCL/networking settings for SFT training (InfiniBand NDR)
     nccl_settings={
+        "NCCL_DEBUG": "INFO",
         "NCCL_NET_GDR_LEVEL": "0",
         "NCCL_SOCKET_IFNAME": "ib0",
         "NCCL_IB_TIMEOUT": "60",
     },
     training_launcher="accelerate",
+    # SSH tunnel for internet access (shared proxy 10.14.0.53 not reachable from Jupiter network)
     needs_ssh_tunnel=True,
-    # Job scaling (from jupiter.env)
+    # Use wrapped binary approach for proxychains (LD_PRELOAD doesn't work reliably on ARM GH200)
+    proxychains_binary="/e/scratch/jureap59/feuer1/proxychains-ng-aarch64/bin/proxychains4",
+    # JSC-specific setup (disable core dumps to save disk space)
+    pre_run_commands=["ulimit -c 0"],
+    # Job scaling
     default_time_limit="12:00:00",
+    max_time_limit="24:00:00",
     num_nodes_slow=1,
     num_nodes_default=4,
     num_nodes_fast=8,
@@ -401,7 +755,13 @@ juwels = HPC(
         "NCCL_IB_TIMEOUT": "60",
     },
     training_launcher="accelerate",
-    needs_ssh_tunnel=True,
+    # JSC shared SOCKS5 proxy (more reliable than SSH tunnels)
+    needs_ssh_tunnel=False,
+    proxy_host="10.14.0.53",
+    proxy_port=1080,
+    proxychains_preload="/p/scratch/laionize/raj3/proxychains-ng/libproxychains4.so",
+    # JSC-specific setup (disable core dumps to save disk space)
+    pre_run_commands=["ulimit -c 0"],
     # Job scaling (from juwels.env)
     default_time_limit="24:00:00",
     num_nodes_default=4,
@@ -728,12 +1088,14 @@ perlmutter = HPC(
         "A100 40GB": '"gpu"',
     },
     # Modules to load (CUDA toolkit and native GCC for compilation)
-    modules=["cudatoolkit/12.9", "gcc-native/13.2"],
+    modules=["cudatoolkit/13.0", "gcc-native/13.2"],
     # Compiler environment variables for flash_attn and other CUDA builds
     env_vars={
         "CC": "gcc",
         "CXX": "g++",
         "CUDAHOSTCXX": "g++",
+        # Disable addr2line for vLLM model inspection subprocess (prevents SIGSEGV hangs)
+        "TORCH_DISABLE_ADDR2LINE": "1",
     },
     # Library paths for CUDA
     library_paths={

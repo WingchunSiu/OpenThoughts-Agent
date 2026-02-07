@@ -231,6 +231,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             "cluster_env_file": cluster_env_file,
             "config_path": str(task_config_path),
             "email_address": os.environ.get("EMAIL_ADDRESS", ""),
+            "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
         }
 
         sbatch_text = substitute_template(template_text, substitutions)
@@ -367,6 +368,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             "config_path": str(trace_config_path),
             "email_address": os.environ.get("EMAIL_ADDRESS", ""),
             "harbor_env": harbor_env,
+            "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
         }
 
         sbatch_text = substitute_template(template_text, substitutions)

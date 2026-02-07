@@ -19,7 +19,7 @@ dependencies = [
     "datasets>=2.0.0",
     "supabase>=2.22.3",
     "python-dotenv>=1.0.0",
-    "harbor @ git+https://github.com/laude-institute/harbor.git@penfever/temp-override",
+    "harbor[daytona] @ git+https://github.com/laude-institute/harbor.git@penfever/temp-override",
     "dynamic-semaphore @ git+https://github.com/penfever/dynamic-semaphore",
     "google-cloud-storage",
     "h5py",
@@ -27,6 +27,7 @@ dependencies = [
     "rapidfuzz",
     "huggingface_hub",
     "uv>=0.4.17",
+    "socksio",  # SOCKS5 proxy support for httpx (needed for JSC SSH tunnels)
 ]
 
 [project.optional-dependencies]
@@ -39,11 +40,9 @@ datagen = [
     "torch-c-dlpack-ext==0.1.4",
     "google-cloud-aiplatform>=1.67.0",
     "google-genai>=0.1.0",
-    "nvidia-cuda-nvcc-cu12==12.8.93; platform_system != 'Darwin'",
-    "vllm[flashinfer]==0.11.2; platform_system != 'Darwin'",
+    "vllm[flashinfer]>=0.11.2,<=0.13.0; platform_system != 'Darwin'",
     "transformers==4.57.3",
-    "torch==2.9.0+cu128; platform_system != 'Darwin' or platform_machine != 'arm64'",
-    "torch==2.9.0; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "torch==2.9.0; platform_system != 'Darwin'",
 ]
 # ROCm/AMD GPU variant for datagen (e.g., OLCF Frontier with MI250X)
 # Install with:
@@ -70,6 +69,8 @@ datagen-swesmith = [
 cloud = [
     "skypilot>=0.6.1",
     "google-api-python-client",  # GCP support for SkyPilot
+    "boto3",  # S3-compatible object storage (MinIO, AWS S3)
+    "s3fs",   # Filesystem interface for S3/MinIO
 ]
 cloud-aws = [
     "skypilot>=0.6.1",
@@ -128,6 +129,11 @@ harbor-modal = [
 harbor-all = [
     "docker>=7.0.0",
     "modal>=0.60.0",
+]
+# Beam cluster setup (self-hosted Beta9 on GKE)
+beam = [
+    "requests>=2.31.0",
+    "beta9>=0.1.0",
 ]
 
 [tool.setuptools.packages.find]
