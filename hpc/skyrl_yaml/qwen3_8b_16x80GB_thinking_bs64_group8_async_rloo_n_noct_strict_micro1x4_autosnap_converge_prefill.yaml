@@ -142,7 +142,7 @@ trainer:
 
   # Micro batch sizes (increased for better GPU utilization)
   micro_forward_batch_size_per_gpu: 4
-  micro_train_batch_size_per_gpu: 2
+  micro_train_batch_size_per_gpu: 1
 
   max_prompt_length: 999999
 
