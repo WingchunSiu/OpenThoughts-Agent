@@ -626,6 +626,7 @@ def deploy_beta9(
         logger.info(f"[CONFIG]   Workspace endpoint: {s3_config.endpoint_url}")
 
         # Add S3 config to Helm values - this updates the mounted config file
+        logger.info(f"[CONFIG]   Image registry: S3 (bucket: {s3_config.bucket_name}, endpoint: {s3_config.endpoint_url})")
         values["config"] = {
             "debugMode": True,  # Enable debug logging to see what config is loaded
             "storage": {
@@ -640,6 +641,20 @@ def deploy_beta9(
                     "defaultAccessKey": s3_config.access_key,
                     "defaultSecretKey": s3_config.secret_key,
                     "defaultEndpointUrl": s3_config.endpoint_url,
+                },
+            },
+            # Image service - store built images in S3 (scalable, multi-node)
+            "imageService": {
+                "registryStore": "s3",
+                "registries": {
+                    "s3": {
+                        "bucketName": s3_config.bucket_name,
+                        "region": "us-east-1",
+                        "accessKey": s3_config.access_key,
+                        "secretKey": s3_config.secret_key,
+                        "endpoint": s3_config.endpoint_url,
+                        "forcePathStyle": True,
+                    },
                 },
             },
         }
@@ -662,6 +677,20 @@ def deploy_beta9(
                     "defaultAccessKey": "test",
                     "defaultSecretKey": "test",
                     "defaultEndpointUrl": "http://localstack:4566",
+                },
+            },
+            # Image service - use S3 for LocalStack too
+            "imageService": {
+                "registryStore": "s3",
+                "registries": {
+                    "s3": {
+                        "bucketName": "beta9-images",
+                        "region": "us-east-1",
+                        "accessKey": "test",
+                        "secretKey": "test",
+                        "endpoint": "http://localstack:4566",
+                        "forcePathStyle": True,
+                    },
                 },
             },
         }
