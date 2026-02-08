@@ -503,11 +503,14 @@ def build_skyrl_hydra_args(
     # Build args for each section
     # Keys under engine_init_kwargs need ++ prefix (add or override) since some keys
     # may already exist in SkyRL's base config while others are new
+    # Keys that may not exist in all base configs and need ++ prefix (add-or-override)
+    optional_keys = {".engine_init_kwargs.", ".hf_hub_repo_id", ".hf_hub_private"}
+
     for section, values in [("trainer", trainer), ("generator", generator), ("data", data)]:
         for key, val in _flatten_dict(values, section).items():
-            # engine_init_kwargs keys need ++ prefix to add-or-override
-            # (+ would fail if key already exists in base config like enforce_eager)
-            prefix = "++" if ".engine_init_kwargs." in key else ""
+            # Use ++ prefix for keys that may not exist in base config
+            # (+ would fail if key already exists, empty prefix fails if key doesn't exist)
+            prefix = "++" if any(opt in key for opt in optional_keys) else ""
             args.append(_format_hydra_arg(key, val, prefix=prefix))
 
     # Terminal bench with + prefix (these are new keys added by the config group)
