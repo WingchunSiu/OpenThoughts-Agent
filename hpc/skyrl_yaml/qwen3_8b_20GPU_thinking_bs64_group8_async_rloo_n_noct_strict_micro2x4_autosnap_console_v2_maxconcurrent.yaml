@@ -5,7 +5,7 @@
 # Key changes:
 #   - n_concurrent_trials: 256 -> 512 (2x concurrent trials - main bottleneck)
 #   - num_parallel_generation_workers: 128 -> 320 (2.5x workers to feed more trials)
-#   - num_inference_engines: 8 -> 10 (modest increase)
+#   - num_inference_engines: 8 -> 12 (for 20 total GPUs: 12 engines + 8 policy/ref)
 #   - max_staleness_steps: 8 -> 12 (allow more staleness for throughput)
 #
 # Expected impact: ~50-70% reduction in generation wait time
@@ -160,8 +160,8 @@ generator:
   model_dtype: bfloat16
 
   inference_engine_tensor_parallel_size: 1
-  # INCREASED: 8 -> 10 inference engines
-  num_inference_engines: 10
+  # INCREASED: 8 -> 12 inference engines (20 total GPUs)
+  num_inference_engines: 12
 
   n_samples_per_prompt: 8
   eval_n_samples_per_prompt: 8
