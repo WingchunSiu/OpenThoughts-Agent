@@ -1,18 +1,15 @@
-# SkyRL Configuration: Qwen3 8B - AGGRESSIVE THROUGHPUT VARIANT (v4)
+# SkyRL Configuration: Qwen3 8B - MAX CONCURRENCY VARIANT (v2)
 # Based on: qwen3_8b_16x80GB_thinking_bs64_group8_async_rloo_n_noct_strict_micro2x4_autosnap_console.yaml
 #
-# THROUGHPUT OPTIMIZATION v4: Aggressive Scaling (Push Limits)
+# THROUGHPUT OPTIMIZATION v2: Maximum Concurrent Trials
 # Key changes:
-#   - num_inference_engines: 8 -> 16 (2x engines)
-#   - num_parallel_generation_workers: 128 -> 384 (3x workers)
-#   - n_concurrent_trials: 256 -> 512 (2x concurrent trials)
-#   - max_num_seqs: 32 -> 64 (2x sequences per engine)
-#   - max_staleness_steps: 8 -> 16 (2x staleness tolerance)
-#   - gpu_memory_utilization: 0.90 -> 0.92 (slightly more memory)
+#   - n_concurrent_trials: 256 -> 512 (2x concurrent trials - main bottleneck)
+#   - num_parallel_generation_workers: 128 -> 320 (2.5x workers to feed more trials)
+#   - num_inference_engines: 8 -> 12 (for 20 total GPUs: 12 engines + 8 policy/ref)
+#   - max_staleness_steps: 8 -> 12 (allow more staleness for throughput)
 #
-# Expected impact: ~60-80% reduction in generation wait time
-# Trade-off: HIGH risk of OOM, high staleness, aggressive memory usage
-# Use for: Finding throughput ceiling, then tune back
+# Expected impact: ~50-70% reduction in generation wait time
+# Trade-off: Higher staleness, more memory for concurrent trial state
 
 entrypoint: examples.terminal_bench.entrypoints.main_tbench
 
@@ -59,7 +56,7 @@ terminal_bench:
       - VerifierOutputParseError
       - ContextLengthExceededError
 
-    n_concurrent_trials: 512
+    n_concurrent_trials: 1024
 
     log_level: INFO
 
@@ -151,10 +148,10 @@ trainer:
     ref_num_gpus_per_node: 4
 
   fully_async:
-    # AGGRESSIVE: 8 -> 16 staleness tolerance
-    max_staleness_steps: 16
-    # AGGRESSIVE: 128 -> 384 generation workers (3x)
-    num_parallel_generation_workers: 384
+    # INCREASED: 8 -> 12 staleness tolerance for more throughput
+    max_staleness_steps: 12
+    # INCREASED: 128 -> 320 generation workers
+    num_parallel_generation_workers: 320
 
 generator:
   backend: vllm
@@ -162,19 +159,16 @@ generator:
   model_dtype: bfloat16
 
   inference_engine_tensor_parallel_size: 1
-  # AGGRESSIVE: 8 -> 16 inference engines (2x)
-  num_inference_engines: 16
+  # INCREASED: 8 -> 12 inference engines (20 total GPUs)
+  num_inference_engines: 12
 
   n_samples_per_prompt: 8
   eval_n_samples_per_prompt: 8
 
-  # AGGRESSIVE: 0.90 -> 0.92 memory utilization
-  gpu_memory_utilization: 0.92
+  gpu_memory_utilization: 0.90
 
-  # AGGRESSIVE: 32 -> 64 sequences per engine (2x)
-  max_num_seqs: 64
-  # AGGRESSIVE: 32768 -> 49152 batched tokens (1.5x)
-  max_num_batched_tokens: 49152
+  max_num_seqs: 32
+  max_num_batched_tokens: 32768
 
   enable_prefix_caching: true
   enable_chunked_prefill: true

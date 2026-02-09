@@ -59,7 +59,7 @@ terminal_bench:
       - VerifierOutputParseError
       - ContextLengthExceededError
 
-    n_concurrent_trials: 512
+    n_concurrent_trials: 1024
 
     log_level: INFO
 
