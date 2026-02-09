@@ -194,10 +194,42 @@ def configure_beta9_endpoint(gateway_url: str, gateway_port: int = 1993, token: 
     logger.info(f"Configured beta9 endpoint: {gateway_host}:{gateway_port}")
 
 
+def _is_cold_start_error(error: str) -> bool:
+    """Check if an error is a typical cold-start/transient error.
+
+    Cold-start errors occur when:
+    - First image build hasn't completed yet
+    - Container infrastructure is still warming up
+    - Race conditions in container scheduling
+
+    Args:
+        error: Error message string.
+
+    Returns:
+        True if error appears to be a cold-start issue.
+    """
+    cold_start_patterns = [
+        "UnknownError",
+        "container not found",
+        "image not found",
+        "build failed",
+        "timeout",
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "connection refused",
+        "no such container",
+        "ContainerCreating",
+    ]
+    error_lower = error.lower()
+    return any(pattern.lower() in error_lower for pattern in cold_start_patterns)
+
+
 def validate_sandbox_lifecycle(
     gateway_url: str,
     test_id: str = None,
     gateway_port: int = 443,
+    max_retries: int = 0,
+    retry_delay_sec: int = 5,
 ) -> ValidationResult:
     """Test sandbox create -> exec -> terminate lifecycle.
 
@@ -205,93 +237,124 @@ def validate_sandbox_lifecycle(
         gateway_url: Beta9 gateway URL.
         test_id: Optional test identifier.
         gateway_port: Gateway gRPC port (443 for Pinggy tunnels, 1993 for direct).
+        max_retries: Maximum number of retries on cold-start errors (0 = no retries).
+        retry_delay_sec: Delay between retries in seconds.
 
     Returns:
         ValidationResult with test outcome.
     """
     test_name = f"sandbox_lifecycle_{test_id or uuid4().hex[:6]}"
     start_time = time.time()
-    instance = None
-    stdout = None
+    last_error = None
 
-    try:
-        # Import beta9 SDK
-        from beta9 import Image, PythonVersion, Sandbox
+    for attempt in range(max_retries + 1):
+        instance = None
+        stdout = None
 
-        # Configure endpoint with correct port for Pinggy (443) or direct (1993)
-        configure_beta9_endpoint(gateway_url, gateway_port=gateway_port)
+        if attempt > 0:
+            logger.info(f"[{test_name}] Retry {attempt}/{max_retries} after cold-start error...")
+            time.sleep(retry_delay_sec)
 
-        # Create sandbox
-        logger.info(f"[{test_name}] Creating sandbox...")
-        sandbox = Sandbox(
-            name=f"health-check-{uuid4().hex[:8]}",
-            image=Image(python_version=PythonVersion.Python311),
-            cpu=1,
-            memory=512,
-            env={"TEST_VAR": "beam-health-check"},
-        )
+        try:
+            # Import beta9 SDK
+            from beta9 import Image, PythonVersion, Sandbox
 
-        instance = sandbox.create()
-        logger.info(f"[{test_name}] Sandbox created")
+            # Configure endpoint with correct port for Pinggy (443) or direct (1993)
+            configure_beta9_endpoint(gateway_url, gateway_port=gateway_port)
 
-        # Execute test command
-        logger.info(f"[{test_name}] Executing test command...")
-        test_string = f"hello-beam-{uuid4().hex[:6]}"
+            # Create sandbox
+            logger.info(f"[{test_name}] Creating sandbox...")
+            sandbox = Sandbox(
+                name=f"health-check-{uuid4().hex[:8]}",
+                image=Image(python_version=PythonVersion.Python311),
+                cpu=1,
+                memory=512,
+                env={"TEST_VAR": "beam-health-check"},
+            )
 
-        # Use async execution
-        async def run_command():
-            process = await instance.aio.process.exec("echo", test_string)
-            exit_code = await process.wait()
-            stdout = process._sync.stdout.read()
-            return exit_code, stdout
+            instance = sandbox.create()
+            logger.info(f"[{test_name}] Sandbox created")
 
-        exit_code, stdout = asyncio.run(run_command())
+            # Execute test command
+            logger.info(f"[{test_name}] Executing test command...")
+            test_string = f"hello-beam-{uuid4().hex[:6]}"
 
-        # Verify output
-        if exit_code != 0:
-            raise RuntimeError(f"Command exited with code {exit_code}")
+            # Use async execution
+            async def run_command():
+                process = await instance.aio.process.exec("echo", test_string)
+                exit_code = await process.wait()
+                stdout = process._sync.stdout.read()
+                return exit_code, stdout
 
-        if test_string not in stdout:
-            raise RuntimeError(f"Expected '{test_string}' in output, got: {stdout}")
+            exit_code, stdout = asyncio.run(run_command())
 
-        logger.info(f"[{test_name}] Command executed successfully")
+            # Verify output
+            if exit_code != 0:
+                raise RuntimeError(f"Command exited with code {exit_code}")
 
-        duration = time.time() - start_time
-        return ValidationResult(
-            test_name=test_name,
-            passed=True,
-            duration_sec=duration,
-            stdout=stdout,
-        )
+            if test_string not in stdout:
+                raise RuntimeError(f"Expected '{test_string}' in output, got: {stdout}")
 
-    except ImportError as e:
-        duration = time.time() - start_time
-        return ValidationResult(
-            test_name=test_name,
-            passed=False,
-            duration_sec=duration,
-            error=f"beta9 SDK not installed: {e}",
-        )
-    except Exception as e:
-        duration = time.time() - start_time
-        return ValidationResult(
-            test_name=test_name,
-            passed=False,
-            duration_sec=duration,
-            error=str(e),
-        )
-    finally:
-        # Always clean up the sandbox
-        if instance is not None:
-            try:
-                logger.info(f"[{test_name}] Terminating sandbox...")
-                instance.terminate()
-                logger.info(f"[{test_name}] Sandbox terminated")
-            except Exception as cleanup_error:
-                logger.warning(f"[{test_name}] Failed to terminate sandbox: {cleanup_error}")
+            logger.info(f"[{test_name}] Command executed successfully")
+
+            duration = time.time() - start_time
+            return ValidationResult(
+                test_name=test_name,
+                passed=True,
+                duration_sec=duration,
+                stdout=stdout,
+            )
+
+        except ImportError as e:
+            duration = time.time() - start_time
+            return ValidationResult(
+                test_name=test_name,
+                passed=False,
+                duration_sec=duration,
+                error=f"beta9 SDK not installed: {e}",
+            )
+        except Exception as e:
+            last_error = str(e)
+
+            # Check if this is a cold-start error that might resolve with retry
+            if attempt < max_retries and _is_cold_start_error(last_error):
+                logger.warning(f"[{test_name}] Cold-start error (attempt {attempt + 1}): {last_error}")
+                # Continue to retry
+            else:
+                # Either no retries left or not a cold-start error
+                duration = time.time() - start_time
+                return ValidationResult(
+                    test_name=test_name,
+                    passed=False,
+                    duration_sec=duration,
+                    error=last_error,
+                )
+        finally:
+            # Always clean up the sandbox
+            if instance is not None:
+                try:
+                    logger.info(f"[{test_name}] Terminating sandbox...")
+                    instance.terminate()
+                    logger.info(f"[{test_name}] Sandbox terminated")
+                except Exception as cleanup_error:
+                    logger.warning(f"[{test_name}] Failed to terminate sandbox: {cleanup_error}")
+
+    # Should not reach here, but handle edge case
+    duration = time.time() - start_time
+    return ValidationResult(
+        test_name=test_name,
+        passed=False,
+        duration_sec=duration,
+        error=last_error or "Unknown error after retries",
+    )
 
 
-def validate_sandbox_isolation(gateway_url: str, gateway_port: int = 443) -> ValidationResult:
+def validate_sandbox_isolation(
+    gateway_url: str,
+    gateway_port: int = 443,
+    max_retries: int = 1,
+    retry_delay_sec: int = 5,
+) -> ValidationResult:
     """Test that sandboxes are properly isolated.
 
     Creates two sandboxes and verifies they cannot see each other's files.
@@ -299,95 +362,120 @@ def validate_sandbox_isolation(gateway_url: str, gateway_port: int = 443) -> Val
     Args:
         gateway_url: Beta9 gateway URL.
         gateway_port: Gateway gRPC port (443 for Pinggy tunnels, 1993 for direct).
+        max_retries: Maximum number of retries on cold-start errors.
+        retry_delay_sec: Delay between retries in seconds.
 
     Returns:
         ValidationResult with test outcome.
     """
     test_name = "sandbox_isolation"
     start_time = time.time()
-    instance1 = None
-    instance2 = None
+    last_error = None
 
-    try:
-        from beta9 import Image, PythonVersion, Sandbox
+    for attempt in range(max_retries + 1):
+        instance1 = None
+        instance2 = None
 
-        configure_beta9_endpoint(gateway_url, gateway_port=gateway_port)
+        if attempt > 0:
+            logger.info(f"[{test_name}] Retry {attempt}/{max_retries} after cold-start error...")
+            time.sleep(retry_delay_sec)
 
-        # Create first sandbox and write a file
-        sandbox1 = Sandbox(
-            name=f"isolation-test-1-{uuid4().hex[:6]}",
-            image=Image(python_version=PythonVersion.Python311),
-            cpu=1,
-            memory=512,
-        )
-        instance1 = sandbox1.create()
+        try:
+            from beta9 import Image, PythonVersion, Sandbox
 
-        secret_value = f"secret-{uuid4().hex}"
+            configure_beta9_endpoint(gateway_url, gateway_port=gateway_port)
 
-        async def write_file():
-            process = await instance1.aio.process.exec(
-                "bash", "-c", f"echo '{secret_value}' > /tmp/secret.txt"
+            # Create first sandbox and write a file
+            sandbox1 = Sandbox(
+                name=f"isolation-test-1-{uuid4().hex[:6]}",
+                image=Image(python_version=PythonVersion.Python311),
+                cpu=1,
+                memory=512,
             )
-            await process.wait()
+            instance1 = sandbox1.create()
 
-        asyncio.run(write_file())
+            secret_value = f"secret-{uuid4().hex}"
 
-        # Create second sandbox and try to read the file
-        sandbox2 = Sandbox(
-            name=f"isolation-test-2-{uuid4().hex[:6]}",
-            image=Image(python_version=PythonVersion.Python311),
-            cpu=1,
-            memory=512,
-        )
-        instance2 = sandbox2.create()
+            async def write_file():
+                process = await instance1.aio.process.exec(
+                    "bash", "-c", f"echo '{secret_value}' > /tmp/secret.txt"
+                )
+                await process.wait()
 
-        async def read_file():
-            process = await instance2.aio.process.exec(
-                "bash", "-c", "cat /tmp/secret.txt 2>/dev/null || echo 'FILE_NOT_FOUND'"
+            asyncio.run(write_file())
+
+            # Create second sandbox and try to read the file
+            sandbox2 = Sandbox(
+                name=f"isolation-test-2-{uuid4().hex[:6]}",
+                image=Image(python_version=PythonVersion.Python311),
+                cpu=1,
+                memory=512,
             )
-            exit_code = await process.wait()
-            stdout = process._sync.stdout.read()
-            return stdout
+            instance2 = sandbox2.create()
 
-        stdout = asyncio.run(read_file())
+            async def read_file():
+                process = await instance2.aio.process.exec(
+                    "bash", "-c", "cat /tmp/secret.txt 2>/dev/null || echo 'FILE_NOT_FOUND'"
+                )
+                exit_code = await process.wait()
+                stdout = process._sync.stdout.read()
+                return stdout
 
-        # Verify isolation
-        if secret_value in stdout:
-            raise RuntimeError("Sandbox isolation failed: secret visible across sandboxes")
+            stdout = asyncio.run(read_file())
 
-        duration = time.time() - start_time
-        return ValidationResult(
-            test_name=test_name,
-            passed=True,
-            duration_sec=duration,
-        )
+            # Verify isolation
+            if secret_value in stdout:
+                raise RuntimeError("Sandbox isolation failed: secret visible across sandboxes")
 
-    except ImportError as e:
-        duration = time.time() - start_time
-        return ValidationResult(
-            test_name=test_name,
-            passed=False,
-            duration_sec=duration,
-            error=f"beta9 SDK not installed: {e}",
-        )
-    except Exception as e:
-        duration = time.time() - start_time
-        return ValidationResult(
-            test_name=test_name,
-            passed=False,
-            duration_sec=duration,
-            error=str(e),
-        )
-    finally:
-        # Always clean up sandboxes
-        for idx, instance in enumerate([instance1, instance2], start=1):
-            if instance is not None:
-                try:
-                    logger.info(f"[{test_name}] Terminating sandbox {idx}...")
-                    instance.terminate()
-                    logger.info(f"[{test_name}] Sandbox {idx} terminated")
-                except Exception as cleanup_error:
-                    logger.warning(f"[{test_name}] Failed to terminate sandbox {idx}: {cleanup_error}")
+            duration = time.time() - start_time
+            return ValidationResult(
+                test_name=test_name,
+                passed=True,
+                duration_sec=duration,
+            )
+
+        except ImportError as e:
+            duration = time.time() - start_time
+            return ValidationResult(
+                test_name=test_name,
+                passed=False,
+                duration_sec=duration,
+                error=f"beta9 SDK not installed: {e}",
+            )
+        except Exception as e:
+            last_error = str(e)
+
+            # Check if this is a cold-start error that might resolve with retry
+            if attempt < max_retries and _is_cold_start_error(last_error):
+                logger.warning(f"[{test_name}] Cold-start error (attempt {attempt + 1}): {last_error}")
+                # Continue to retry
+            else:
+                duration = time.time() - start_time
+                return ValidationResult(
+                    test_name=test_name,
+                    passed=False,
+                    duration_sec=duration,
+                    error=last_error,
+                )
+        finally:
+            # Always clean up sandboxes
+            for idx, instance in enumerate([instance1, instance2], start=1):
+                if instance is not None:
+                    try:
+                        logger.info(f"[{test_name}] Terminating sandbox {idx}...")
+                        instance.terminate()
+                        logger.info(f"[{test_name}] Sandbox {idx} terminated")
+                    except Exception as cleanup_error:
+                        logger.warning(f"[{test_name}] Failed to terminate sandbox {idx}: {cleanup_error}")
+
+    # Should not reach here, but handle edge case
+    duration = time.time() - start_time
+    return ValidationResult(
+        test_name=test_name,
+        passed=False,
+        duration_sec=duration,
+        error=last_error or "Unknown error after retries",
+    )
 
 
 def wait_for_grpc_ready(
@@ -494,12 +582,64 @@ def _verify_grpc_connectivity(gateway_host: str, gateway_port: int, token: str) 
                 pass
 
 
+def _run_warmup_sandbox(gateway_url: str, gateway_port: int = 443, max_warmup_attempts: int = 3) -> bool:
+    """Run a warm-up sandbox to prime image cache before validation tests.
+
+    On a cold Beta9 cluster, the first sandbox creation triggers an image build
+    which can take time and may fail. This warm-up phase attempts to prime the
+    cache so subsequent tests run reliably.
+
+    Args:
+        gateway_url: Beta9 gateway URL.
+        gateway_port: Gateway gRPC port.
+        max_warmup_attempts: Maximum attempts to warm up the cluster.
+
+    Returns:
+        True if warm-up succeeded (cluster is ready), False otherwise.
+    """
+    logger.info("Running warm-up phase to prime image cache...")
+
+    for attempt in range(1, max_warmup_attempts + 1):
+        logger.info(f"Warm-up attempt {attempt}/{max_warmup_attempts}...")
+
+        # Run a lifecycle test with retries - we expect early attempts might fail
+        result = validate_sandbox_lifecycle(
+            gateway_url,
+            test_id=f"warmup_{attempt}",
+            gateway_port=gateway_port,
+            max_retries=2,  # Allow retries within each warm-up attempt
+            retry_delay_sec=10,
+        )
+
+        if result.passed:
+            logger.info(f"Warm-up succeeded on attempt {attempt} ({result.duration_sec:.1f}s)")
+            return True
+
+        # Check if this looks like a cold-start error we might recover from
+        if result.error and _is_cold_start_error(result.error):
+            logger.warning(f"Warm-up attempt {attempt} failed with cold-start error: {result.error}")
+            if attempt < max_warmup_attempts:
+                # Wait longer between warm-up attempts to let image build complete
+                wait_time = 15 * attempt  # Progressive backoff: 15s, 30s, 45s
+                logger.info(f"Waiting {wait_time}s for image build to complete...")
+                time.sleep(wait_time)
+        else:
+            # Non-transient error - don't keep trying
+            logger.error(f"Warm-up failed with non-transient error: {result.error}")
+            return False
+
+    logger.warning(f"Warm-up failed after {max_warmup_attempts} attempts")
+    return False
+
+
 def run_validation_suite(
     gateway_url: str,
     num_lifecycle_tests: int = 3,
     include_isolation_test: bool = True,
     gateway_port: int = 443,
     wait_for_ready: bool = True,
+    warmup_cluster: bool = True,
+    max_warmup_attempts: int = 3,
 ) -> ValidationReport:
     """Run full validation suite.
 
@@ -509,6 +649,8 @@ def run_validation_suite(
         include_isolation_test: Whether to include isolation test.
         gateway_port: Gateway gRPC port (443 for Pinggy tunnels, 1993 for direct).
         wait_for_ready: Whether to wait for gRPC endpoint to be ready before tests.
+        warmup_cluster: Whether to run warm-up phase for cold clusters.
+        max_warmup_attempts: Maximum attempts for warm-up phase.
 
     Returns:
         ValidationReport with all test results.
@@ -521,6 +663,7 @@ def run_validation_suite(
     logger.info(f"  Lifecycle tests: {num_lifecycle_tests}")
     logger.info(f"  Isolation test: {include_isolation_test}")
     logger.info(f"  Gateway port: {gateway_port}")
+    logger.info(f"  Warm-up enabled: {warmup_cluster}")
 
     # Extract hostname for gRPC connection
     parsed = urlparse(gateway_url if "://" in gateway_url else f"http://{gateway_url}")
@@ -538,9 +681,33 @@ def run_validation_suite(
             ))
             return report
 
-    # Run lifecycle tests
+    # Run warm-up phase to prime image cache on cold clusters
+    if warmup_cluster:
+        warmup_start = time.time()
+        warmup_success = _run_warmup_sandbox(gateway_url, gateway_port, max_warmup_attempts)
+        warmup_duration = time.time() - warmup_start
+
+        # Record warm-up result (informational - doesn't fail the suite)
+        report.add_result(ValidationResult(
+            test_name="cluster_warmup",
+            passed=warmup_success,
+            duration_sec=warmup_duration,
+            error=None if warmup_success else "Warm-up phase did not fully succeed",
+        ))
+
+        if not warmup_success:
+            logger.warning("Warm-up incomplete - subsequent tests may have cold-start issues")
+            # Continue anyway - the actual tests will reveal if there's a real problem
+
+    # Run lifecycle tests (with retry support for any remaining cold-start issues)
     for i in range(num_lifecycle_tests):
-        result = validate_sandbox_lifecycle(gateway_url, test_id=str(i + 1), gateway_port=gateway_port)
+        result = validate_sandbox_lifecycle(
+            gateway_url,
+            test_id=str(i + 1),
+            gateway_port=gateway_port,
+            max_retries=1,  # Allow one retry per test for transient issues
+            retry_delay_sec=5,
+        )
         report.add_result(result)
 
         # Small delay between tests
@@ -556,14 +723,26 @@ def run_validation_suite(
     return report
 
 
-def quick_health_check(gateway_url: str) -> bool:
+def quick_health_check(
+    gateway_url: str,
+    gateway_port: int = 443,
+    allow_cold_start_retries: bool = True,
+) -> bool:
     """Run a single quick health check.
 
     Args:
         gateway_url: Beta9 gateway URL.
+        gateway_port: Gateway gRPC port (443 for Pinggy tunnels, 1993 for direct).
+        allow_cold_start_retries: If True, retry on cold-start errors.
 
     Returns:
         True if health check passes.
     """
-    result = validate_sandbox_lifecycle(gateway_url, test_id="quick")
+    result = validate_sandbox_lifecycle(
+        gateway_url,
+        test_id="quick",
+        gateway_port=gateway_port,
+        max_retries=2 if allow_cold_start_retries else 0,
+        retry_delay_sec=10,
+    )
     return result.passed

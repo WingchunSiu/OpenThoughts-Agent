@@ -74,12 +74,18 @@ def create_cluster(config: GKEConfig, dry_run: bool = False) -> bool:
     """
     # Use --zone for a zonal cluster (exact num_nodes) instead of --region
     # Regional clusters create num_nodes PER ZONE (3 zones = 3x nodes)
+    #
+    # IMPORTANT: Use UBUNTU_CONTAINERD image type instead of default COS (Container-Optimized OS)
+    # because Beta9 workers require hostPath volume mounts at /images and /data/checkpoints.
+    # COS has a read-only root filesystem which causes "mkdir /images: read-only file system" errors.
+    # Ubuntu nodes have a writable root filesystem that allows these hostPath mounts.
     cmd = [
         "gcloud", "container", "clusters", "create", config.cluster_name,
         "--project", config.project_id,
         "--zone", config.zone,  # Zonal cluster: exactly num_nodes total
         "--num-nodes", str(config.num_nodes),
         "--machine-type", config.machine_type,
+        "--image-type", "UBUNTU_CONTAINERD",  # Required: writable root FS for Beta9 hostPath mounts
         "--disk-size", f"{config.disk_size_gb}GB",
         "--network", config.network,
         "--no-enable-autoupgrade",
@@ -95,6 +101,7 @@ def create_cluster(config: GKEConfig, dry_run: bool = False) -> bool:
 
     logger.info(f"Creating GKE cluster '{config.cluster_name}' with {config.num_nodes} nodes...")
     logger.info(f"  Machine type: {config.machine_type}")
+    logger.info(f"  Image type: UBUNTU_CONTAINERD (required for Beta9 hostPath mounts)")
     logger.info(f"  Zone: {config.zone} (zonal cluster)")
     logger.info("  This may take 5-10 minutes...")
 
