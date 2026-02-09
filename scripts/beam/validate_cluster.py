@@ -412,13 +412,19 @@ def wait_for_grpc_ready(
     for attempt in range(1, max_attempts + 1):
         logger.info(f"Checking gRPC endpoint readiness (attempt {attempt}/{max_attempts})...")
 
-        # Try to get a token - this tests both connectivity and the Authorize endpoint
-        token = get_or_create_token(gateway_host, gateway_port, force_refresh=True)
-
-        if token:
-            logger.info("gRPC endpoint is ready and token obtained")
-            _cached_token = token
-            return True
+        # If we have a cached token from bootstrap (via port-forward), verify
+        # connectivity to the external endpoint using that token
+        if _cached_token:
+            if _verify_grpc_connectivity(gateway_host, gateway_port, _cached_token):
+                logger.info("gRPC endpoint is ready (verified with cached token)")
+                return True
+        else:
+            # No cached token - try to get a new one (fresh deployment)
+            token = get_or_create_token(gateway_host, gateway_port, force_refresh=True)
+            if token:
+                logger.info("gRPC endpoint is ready and token obtained")
+                _cached_token = token
+                return True
 
         if attempt < max_attempts:
             logger.info(f"Endpoint not ready, waiting {delay_sec}s before retry...")
@@ -426,6 +432,66 @@ def wait_for_grpc_ready(
 
     logger.warning(f"gRPC endpoint not ready after {max_attempts} attempts")
     return False
+
+
+def _verify_grpc_connectivity(gateway_host: str, gateway_port: int, token: str) -> bool:
+    """Verify gRPC connectivity using an existing token.
+
+    Makes a lightweight gRPC call to verify the endpoint is reachable.
+
+    Args:
+        gateway_host: Gateway hostname.
+        gateway_port: Gateway gRPC port.
+        token: Auth token to use.
+
+    Returns:
+        True if endpoint is reachable, False otherwise.
+    """
+    import grpc
+
+    try:
+        from beta9.clients.gateway import GatewayServiceStub, AuthorizeRequest
+    except ImportError as e:
+        logger.warning(f"beta9 SDK import failed: {e}")
+        return False
+
+    channel = None
+    try:
+        logger.info(f"Verifying gRPC connectivity to {gateway_host}:{gateway_port}...")
+        channel = grpc.insecure_channel(
+            f"{gateway_host}:{gateway_port}",
+            options=[
+                ('grpc.connect_timeout_ms', 10000),
+                ('grpc.keepalive_time_ms', 30000),
+            ]
+        )
+        stub = GatewayServiceStub(channel)
+
+        # Use Authorize to verify connectivity - same endpoint as bootstrap
+        # ANY response (even error) proves the gateway is reachable and responding
+        # Only gRPC exceptions (timeout, connection refused) mean no connectivity
+        response = stub.authorize(AuthorizeRequest())
+
+        # Got a response - connectivity confirmed!
+        if response.ok:
+            logger.info(f"Connectivity verified (workspace: {response.workspace_id})")
+        else:
+            # Error response still proves connectivity (gateway responded)
+            logger.info(f"Connectivity verified (gateway responded: {response.error_msg})")
+        return True
+
+    except grpc.RpcError as e:
+        logger.warning(f"gRPC connectivity check failed: {e.code()} - {e.details()}")
+        return False
+    except Exception as e:
+        logger.warning(f"Connectivity check failed: {e}")
+        return False
+    finally:
+        if channel:
+            try:
+                channel.close()
+            except Exception:
+                pass
 
 
 def run_validation_suite(

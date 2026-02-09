@@ -61,12 +61,6 @@ terminal_bench:
     override_memory_mb: 2048
     override_storage_mb: 2048
 
-    # ==========================================================================
-    # AUTO SNAPSHOT: Reduce Daytona rate limits with hash-based snapshot caching
-    # ==========================================================================
-    # When true, automatically creates a snapshot from the Dockerfile on first use,
-    # then reuses it for all subsequent sandboxes with the same Dockerfile content.
-    # Snapshots are named: harbor__<sha256[:12]>__snapshot
     auto_snapshot: true
 
     # Verifier settings
@@ -157,6 +151,8 @@ trainer:
   hf_hub_repo_id: null
   hf_hub_private: false
   hf_hub_revision: main
+  # vLLM stats interval in steps
+  vllm_stats_interval: 1
 
   # Database registration (auto-registers trained model to Supabase)
   # Requires KEYS env var pointing to Supabase credentials file
@@ -201,8 +197,9 @@ trainer:
 
   # Fully async generation
   fully_async:
-    max_staleness_steps: 8
-    num_parallel_generation_workers: 128
+    max_staleness_steps: 32
+    # Large worker count
+    num_parallel_generation_workers: 1536
 
 # Generator configuration
 generator:
