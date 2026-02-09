@@ -517,6 +517,11 @@ def _build_config_json(s3_config: Optional[S3StorageConfig]) -> str:
                 }
             }
         }
+
+        # Worker config - disable PVC mounting when using S3 storage
+        config["worker"] = {
+            "imagePVCName": "",  # Empty string disables the PVC mount
+        }
     else:
         # Fall back to LocalStack (for testing without external S3)
         # NOTE: awsS3Bucket must be a FULL URL (endpoint + bucket)
@@ -549,6 +554,11 @@ def _build_config_json(s3_config: Optional[S3StorageConfig]) -> str:
                     "forcePathStyle": True,  # Required for LocalStack/MinIO
                 }
             }
+        }
+
+        # Worker config - disable PVC mounting when using S3 storage
+        config["worker"] = {
+            "imagePVCName": "",  # Empty string disables the PVC mount
         }
 
     return json.dumps(config)

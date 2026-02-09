@@ -45,7 +45,8 @@ config:
       # S3 credentials provided via CONFIG_JSON env var (not in mounted config file)
   worker:
     imageRegistry: public.ecr.aws/n4e0e1y0
-    # imagePVCName not needed when using S3 registry store
+    # Disable PVC mounting - images are stored in S3 (registryStore: s3)
+    imagePVCName: ""
   imageService:
     # Use S3 for image storage instead of local PVC (scalable, multi-node)
     registryStore: s3
