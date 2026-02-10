@@ -110,6 +110,14 @@ class RayClusterConfig:
     object_store_memory: Optional[int] = None  # Ray object store (plasma) size
     # Disable CPU binding for srun commands (needed for Frontier/Cray systems)
     disable_cpu_bind: bool = False
+    # GPU binding mode for NUMA locality (important for unified memory architectures like GH200)
+    # Options: "closest" (bind to NUMA-local CPUs), "none" (no binding), or other SLURM values
+    # "closest" is recommended for GH200 nodes to ensure CPU-GPU NUMA affinity
+    gpu_bind: str = "closest"
+    # Enable periodic NUMA monitoring (useful for debugging GH200 unified memory allocation)
+    # When enabled, logs numastat and nvidia-smi output every numa_monitor_interval seconds
+    enable_numa_monitoring: bool = False
+    numa_monitor_interval: int = 300  # 5 minutes
     # Enable proxychains for Ray workers (needed for JSC/Jupiter to access Daytona)
     # When True, LD_PRELOAD is preserved so Ray workers can make proxied external calls
     use_proxychains: bool = False
@@ -136,6 +144,8 @@ class RayCluster:
     _ray_pids: List[int] = field(default_factory=list)
     _ray_procs: List[subprocess.Popen] = field(default_factory=list)
     _ray_log_files: List = field(default_factory=list)  # Log file handles
+    _numa_monitor_procs: List[subprocess.Popen] = field(default_factory=list)
+    _numa_monitor_log_files: List = field(default_factory=list)
     _started: bool = False
 
     @classmethod
@@ -164,6 +174,10 @@ class RayCluster:
         proxychains_binary = getattr(hpc, "proxychains_binary", "")
         use_proxychains = bool(proxychains_binary or getattr(hpc, "proxychains_preload", ""))
 
+        # Enable NUMA monitoring if configured for this cluster (e.g., Jupiter GH200)
+        # This helps debug NUMA locality issues that cause variable vLLM latency
+        enable_numa_monitoring = getattr(hpc, "enable_numa_monitoring", False)
+
         ray_config = RayClusterConfig(
             num_nodes=num_nodes,
             gpus_per_node=hpc.gpus_per_node,
@@ -175,6 +189,7 @@ class RayCluster:
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             use_proxychains=use_proxychains,
             proxychains_binary=proxychains_binary,
+            enable_numa_monitoring=enable_numa_monitoring,
         )
         return cls.from_slurm(ray_config)
 
@@ -342,6 +357,9 @@ class RayCluster:
         self._wait_for_cluster()
         self._started = True
 
+        # Start NUMA monitoring if enabled (useful for GH200 debugging)
+        self._start_numa_monitoring()
+
         print(f"=== Ray Cluster Ready ===", flush=True)
         print(f"  Address: {self.address}", flush=True)
         print(f"  Total GPUs: {self.total_gpus}", flush=True)
@@ -398,6 +416,9 @@ class RayCluster:
             except Exception:
                 pass
         self._ray_log_files.clear()
+
+        # Stop NUMA monitoring
+        self._stop_numa_monitoring()
 
         print("Ray cluster stopped", flush=True)
 
@@ -472,6 +493,7 @@ class RayCluster:
             "--nodes=1",
             "--ntasks=1",
             f"--gres=gpu:{self.config.gpus_per_node}",
+            f"--gpu-bind={self.config.gpu_bind}",
             "--overlap",
         ]
         # Add --cpu-bind=none for Frontier/Cray systems
@@ -665,6 +687,122 @@ sys.exit(1)
             # Clean up temp script
             if os.path.exists(script_path):
                 os.remove(script_path)
+
+    def _start_numa_monitoring(self) -> None:
+        """Start background NUMA monitoring on all nodes.
+
+        Periodically logs numastat and nvidia-smi output to help debug
+        NUMA locality issues on unified memory architectures (e.g., GH200).
+        """
+        if not self.config.enable_numa_monitoring:
+            return
+
+        interval = self.config.numa_monitor_interval
+        print(f"  Starting NUMA monitoring (interval: {interval}s)...", flush=True)
+
+        log_dir = Path(os.environ.get("DCFT", ".")) / "experiments" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Monitoring script that runs on each node
+        monitor_script = f'''
+import time
+import subprocess
+import os
+from datetime import datetime
+
+interval = {interval}
+node = os.environ.get("SLURMD_NODENAME", "unknown")
+
+while True:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\\n{'='*60}", flush=True)
+    print(f"NUMA Monitor - {{node}} - {{timestamp}}", flush=True)
+    print(f"{'='*60}", flush=True)
+
+    # GPU memory and NUMA topology
+    print("\\n--- nvidia-smi ---", flush=True)
+    try:
+        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=30)
+        print(result.stdout, flush=True)
+        if result.stderr:
+            print(f"stderr: {{result.stderr}}", flush=True)
+    except Exception as e:
+        print(f"nvidia-smi error: {{e}}", flush=True)
+
+    # NUMA memory statistics
+    print("\\n--- numastat -m ---", flush=True)
+    try:
+        result = subprocess.run(["numastat", "-m"], capture_output=True, text=True, timeout=30)
+        print(result.stdout, flush=True)
+        if result.stderr:
+            print(f"stderr: {{result.stderr}}", flush=True)
+    except Exception as e:
+        print(f"numastat error: {{e}}", flush=True)
+
+    # CPU and memory binding info
+    print("\\n--- numactl --show ---", flush=True)
+    try:
+        result = subprocess.run(["numactl", "--show"], capture_output=True, text=True, timeout=30)
+        print(result.stdout, flush=True)
+    except Exception as e:
+        print(f"numactl error: {{e}}", flush=True)
+
+    time.sleep(interval)
+'''
+
+        for node in self.node_list:
+            numa_log_path = log_dir / f"numa_monitor_{node}.log"
+            numa_log_file = open(numa_log_path, "w")
+            numa_log_file.write(f"NUMA monitoring started on {node}\n")
+            numa_log_file.write(f"Interval: {interval}s\n")
+            numa_log_file.write("=" * 60 + "\n")
+            numa_log_file.flush()
+
+            # Run monitoring script in background via srun
+            srun_cmd = [
+                "srun",
+                f"--export={self.config.srun_export_env}",
+                "--nodes=1",
+                "--ntasks=1",
+                f"--gres=gpu:{self.config.gpus_per_node}",
+                f"--gpu-bind={self.config.gpu_bind}",
+                "--overlap",
+                "-w", node,
+                sys.executable, "-c", monitor_script,
+            ]
+
+            proc = subprocess.Popen(
+                srun_cmd,
+                stdout=numa_log_file,
+                stderr=subprocess.STDOUT,
+            )
+            self._numa_monitor_procs.append(proc)
+            self._numa_monitor_log_files.append(numa_log_file)
+            print(f"    NUMA monitor started on {node} (log: {numa_log_path})", flush=True)
+
+    def _stop_numa_monitoring(self) -> None:
+        """Stop NUMA monitoring processes."""
+        if not self._numa_monitor_procs:
+            return
+
+        print("  Stopping NUMA monitors...", flush=True)
+        for proc in self._numa_monitor_procs:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            except Exception:
+                pass
+
+        self._numa_monitor_procs.clear()
+
+        for log_file in self._numa_monitor_log_files:
+            try:
+                log_file.close()
+            except Exception:
+                pass
+        self._numa_monitor_log_files.clear()
 
     def __enter__(self) -> RayCluster:
         """Context manager entry - start the cluster."""

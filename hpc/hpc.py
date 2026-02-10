@@ -101,6 +101,10 @@ class HPC(BaseModel):
     # When True, adds --cpu-bind=none to srun commands for Ray startup
     disable_cpu_bind: bool = False
 
+    # Enable periodic NUMA monitoring for debugging unified memory allocation (GH200)
+    # When True, logs numastat and nvidia-smi output every 5 minutes during Ray jobs
+    enable_numa_monitoring: bool = False
+
     # Environment variables to unset after module loading (e.g., ROCR_VISIBLE_DEVICES on Frontier)
     # Modules may set these but they conflict with Ray/vLLM
     env_unsets: List[str] = []
@@ -740,6 +744,8 @@ jupiter = HPC(
     training_launcher="accelerate",
     needs_ssh_tunnel=True,
     proxychains_binary="/e/scratch/jureap59/feuer1/proxychains-ng-aarch64/bin/proxychains4",
+    # Enable NUMA monitoring for GH200 unified memory debugging
+    enable_numa_monitoring=True,
     pre_run_commands=["ulimit -c 0"],
     # Ray tmpdir on scratch (JSC /tmp is limited on compute nodes)
     #ray_tmpdir_base="$SCRATCH/ray",
