@@ -64,8 +64,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output",
-        default="probe_results.json",
-        help="Output JSON file path (default: probe_results.json)",
+        default=None,
+        help="Output JSON file path (default: probe_<model_short>_<timestamp>.json)",
     )
     p.add_argument(
         "--conversations-column",
@@ -164,14 +164,76 @@ def _resolve_device_and_dtype(dtype: str):
     return "cpu", torch_dtype, "cpu"
 
 
+def _generate_once(
+    model,
+    tokenizer,
+    messages: list[dict],
+    max_new_tokens: int,
+    enable_thinking: bool,
+    label: str,
+):
+    """Run a single generation pass and return result dict."""
+    import torch
+
+    # Some tokenizers don't support enable_thinking; fall back gracefully.
+    try:
+        inputs = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            enable_thinking=enable_thinking,
+        ).to(model.device)
+    except TypeError:
+        # Tokenizer chat template doesn't accept enable_thinking kwarg
+        if enable_thinking:
+            # Default call (thinking is the default for models that support it)
+            inputs = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            ).to(model.device)
+        else:
+            print(f"  [{label}] Tokenizer does not support enable_thinking, skipping")
+            return None
+
+    input_len = inputs["input_ids"].shape[-1]
+    print(f"  [{label}] Input tokens: {input_len}")
+
+    t0 = time.time()
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+        )
+    elapsed = time.time() - t0
+
+    generated_ids = outputs[0][input_len:]
+    response_text = tokenizer.decode(generated_ids, skip_special_tokens=False)
+    output_len = len(generated_ids)
+
+    print(f"  [{label}] Output tokens: {output_len}, time: {elapsed:.1f}s")
+    print(f"  [{label}] Response preview: {repr(response_text[:200])}")
+
+    return {
+        "input_tokens": input_len,
+        "output_tokens": output_len,
+        "generation_time_sec": round(elapsed, 2),
+        "response": response_text,
+    }
+
+
 def run_inference(
     model_name: str,
     prompts: list[dict],
     max_new_tokens: int,
     dtype: str,
 ) -> list[dict]:
-    """Run inference on each prompt and return results."""
-    import torch
+    """Run inference on each prompt with both thinking=True and thinking=False."""
     from transformers import AutoTokenizer, AutoModelForCausalLM
 
     device_map, torch_dtype, device_label = _resolve_device_and_dtype(dtype)
@@ -193,49 +255,58 @@ def run_inference(
 
         print(f"\n[probe] Prompt {i + 1}/{len(prompts)} ({task})...")
 
-        inputs = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-        ).to(model.device)
+        prompt_content = (
+            messages[0]["content"][:500] + "..."
+            if len(messages[0]["content"]) > 500
+            else messages[0]["content"]
+        )
 
-        input_len = inputs["input_ids"].shape[-1]
-        print(f"  Input tokens: {input_len}")
-
-        t0 = time.time()
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-            )
-        elapsed = time.time() - t0
-
-        generated_ids = outputs[0][input_len:]
-        response_text = tokenizer.decode(generated_ids, skip_special_tokens=False)
-        output_len = len(generated_ids)
-
-        print(f"  Output tokens: {output_len}, time: {elapsed:.1f}s")
-        print(f"  Response preview: {repr(response_text[:200])}")
-
-        results.append({
+        result_entry = {
             "row_index": prompt_info["row_index"],
             "task": task,
-            "input_tokens": input_len,
-            "output_tokens": output_len,
-            "generation_time_sec": round(elapsed, 2),
-            "prompt_content": messages[0]["content"][:500] + "..."
-                if len(messages[0]["content"]) > 500 else messages[0]["content"],
-            "response": response_text,
-        })
+            "prompt_content": prompt_content,
+        }
+
+        # Run with thinking enabled
+        thinking_on = _generate_once(
+            model, tokenizer, messages, max_new_tokens,
+            enable_thinking=True, label="thinking=ON",
+        )
+        if thinking_on is not None:
+            result_entry["thinking_enabled"] = thinking_on
+        else:
+            result_entry["thinking_enabled"] = {"skipped": True}
+
+        # Run with thinking disabled
+        thinking_off = _generate_once(
+            model, tokenizer, messages, max_new_tokens,
+            enable_thinking=False, label="thinking=OFF",
+        )
+        if thinking_off is not None:
+            result_entry["thinking_disabled"] = thinking_off
+        else:
+            result_entry["thinking_disabled"] = {"skipped": True}
+
+        results.append(result_entry)
 
     return results
 
 
+def _default_output_path(model: str) -> str:
+    """Build a default output filename from the model name and current time."""
+    from datetime import datetime
+    # Use the part after the last '/' (or the whole string) as the short name,
+    # replacing characters that are awkward in filenames.
+    short = model.rsplit("/", 1)[-1]
+    short = short.replace(" ", "_")[:60]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"probe_{short}_{ts}.json"
+
+
 def main() -> None:
     args = parse_args()
+    if args.output is None:
+        args.output = _default_output_path(args.model)
 
     prompts = extract_initial_prompts(
         args.dataset,

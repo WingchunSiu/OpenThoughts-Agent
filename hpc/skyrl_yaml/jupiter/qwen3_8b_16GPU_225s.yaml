@@ -34,7 +34,7 @@ terminal_bench:
       chat_template_kwargs:
         enable_thinking: true
       response_prefix: "<think>\n\n</think>\n\n{\n  \"analysis\": \""
-    override_timeout_sec: 900
+    override_timeout_sec: 450
     override_cpus: 1
     override_memory_mb: 2048
     override_storage_mb: 2048
@@ -51,7 +51,7 @@ terminal_bench:
       - RewardFileEmptyError
       - VerifierOutputParseError
       - ContextLengthExceededError
-    n_concurrent_trials: 384
+    n_concurrent_trials: 256
     log_level: INFO
     enable_reward_shaping: false
     enable_error_classification: true
@@ -153,7 +153,7 @@ generator:
   max_num_seqs: 32
   max_num_batched_tokens: 32768
 
-  enable_prefix_caching: true
+  enable_prefix_caching: false
   enable_chunked_prefill: true
 
   run_engines_locally: true
