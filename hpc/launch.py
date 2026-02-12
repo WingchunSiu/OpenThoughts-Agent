@@ -30,6 +30,7 @@ from hpc.sft_launch_utils import (
     ensure_deepspeed_config,
     maybe_apply_cluster_specific_env_overrides,
     maybe_compute_gradient_accumulation,
+    maybe_preprocess_thinking,
     apply_data_argument_overrides,
     submit_sft_job,
 )
@@ -342,6 +343,9 @@ def construct_config_yaml(exp_args):
     exp_args["_original_model_name_or_path"] = original_model_name
 
     artifacts = _materialize_dataset_and_model(base_config, exp_args, dataset_entries, datasets_dir)
+
+    # Preprocess thinking format for ReasoningTemplate-based templates (e.g. qwen3)
+    artifacts = maybe_preprocess_thinking(base_config, exp_args, artifacts)
 
     hub_model_id = base_config.get("hub_model_id")
     if hub_model_id is not None:

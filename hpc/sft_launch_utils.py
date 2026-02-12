@@ -178,6 +178,121 @@ def configure_sft_reporting(base_config: dict, exp_args: dict, model_path: str) 
     return base_config
 
 
+# Templates that use LLaMA-Factory's ReasoningTemplate and need thinking preprocessing.
+# Other templates (e.g. qwen3_nothink, qwen2_5, chatml) do NOT use ReasoningTemplate.
+_REASONING_TEMPLATES = {"qwen3"}
+
+
+def maybe_preprocess_thinking(
+    base_config: dict,
+    exp_args: dict,
+    artifacts,
+):
+    """Preprocess datasets for Qwen3 ReasoningTemplate thought_words format.
+
+    When the training template uses ReasoningTemplate (e.g. ``qwen3``), the
+    thought_words ``("<think>\\n", "\\n</think>\\n\\n")`` must be present in
+    assistant messages for proper loss masking.  This step normalises diverse
+    input formats (``<think>content</think>``, orphaned ``</think>``, no tags,
+    etc.) into the canonical format **before** LlamaFactory sees the data.
+
+    For non-ReasoningTemplate templates, a warning is emitted if the dataset
+    appears to contain ``<think>`` tags, since those tags will be treated as
+    plain text and the model may learn an unintended output format.
+
+    If the template does not require preprocessing, ``artifacts`` is returned
+    unchanged.
+    """
+    from hpc.arguments import JobType
+
+    template = base_config.get("template", "")
+
+    job_type = exp_args.get("job_type")
+    if job_type and job_type not in (JobType.SFT.value, None):
+        return artifacts
+
+    if template not in _REASONING_TEMPLATES:
+        # Warn if the dataset likely contains thinking tags but the template
+        # won't handle them with ReasoningTemplate.
+        _warn_if_thinking_data_with_plain_template(template, artifacts)
+        return artifacts
+
+    from huggingface_hub import snapshot_download
+    from scripts.datagen.prep_for_thinking import preprocess_local_dataset
+
+    role_tag = exp_args.get("role_tag", "role")
+    content_tag = exp_args.get("content_tag", "content")
+
+    new_paths: list[str] = []
+    for ds_path in artifacts.dataset_paths:
+        # If the path is an HF repo name (internet node), download first
+        if not os.path.isdir(ds_path):
+            print(f"[prep_for_thinking] Downloading {ds_path} for preprocessing...")
+            ds_path = snapshot_download(repo_id=ds_path, repo_type="dataset")
+
+        processed_path = preprocess_local_dataset(
+            ds_path,
+            role_tag=role_tag,
+            content_tag=content_tag,
+        )
+        new_paths.append(processed_path)
+
+    new_dataset_path = new_paths[0] if new_paths else artifacts.dataset_path
+    # Force the config to use the local preprocessed paths (even on internet
+    # nodes where LlamaFactory would otherwise load from HF Hub directly).
+    base_config["dataset"] = ",".join(new_paths)
+    base_config["dataset_dir"] = "ONLINE"
+
+    # Return a new artifacts object with updated paths.  We reconstruct the
+    # same dataclass the caller passed in so we don't need to import it here.
+    return type(artifacts)(
+        dataset_paths=new_paths,
+        dataset_path=new_dataset_path,
+        model_path=artifacts.model_path,
+    )
+
+
+def _warn_if_thinking_data_with_plain_template(template: str, artifacts) -> None:
+    """Emit a warning if the dataset appears to contain <think> tags but the
+    template is not a ReasoningTemplate.  This is a common misconfiguration
+    that results in the model learning to produce ``<think>`` as literal text
+    without proper loss masking or tokenization."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return  # best-effort; skip if pyarrow not available
+
+    for ds_path in artifacts.dataset_paths:
+        if not os.path.isdir(ds_path):
+            continue
+        # Quick check: read first parquet file and look for <think> in a sample
+        for root, _dirs, files in os.walk(ds_path):
+            for fname in files:
+                if not fname.endswith(".parquet"):
+                    continue
+                try:
+                    tbl = pq.read_table(os.path.join(root, fname), columns=["conversations"])
+                    sample = tbl.to_pydict().get("conversations", [])[:5]
+                    for conv in sample:
+                        for msg in (conv or []):
+                            content = msg.get("content", "") if isinstance(msg, dict) else ""
+                            if "<think>" in content or "</think>" in content:
+                                print(
+                                    f"\n*** WARNING: Dataset at {ds_path} contains <think> tags "
+                                    f"but template '{template}' is not a ReasoningTemplate. "
+                                    f"Thinking tokens will NOT be automatically converted to "
+                                    f"'{template}' format. This can cause training/inference "
+                                    f"incompatibilities. Consider using template 'qwen3' or "
+                                    f"pre-processing the dataset with:\n"
+                                    f"  python -m scripts.datagen.prep_for_thinking "
+                                    f"--source <dataset> --dry-run\n"
+                                )
+                                return
+                except Exception:
+                    continue
+            return  # only check first directory level
+
+
 def pre_validation_sft(cli_args: dict) -> None:
     """Validate SFT experiment configuration before job submission.
 
