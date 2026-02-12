@@ -418,6 +418,7 @@ class EvalJobRunner:
             memory_per_node=ray_memory,
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
+            gpu_bind=getattr(hpc, "gpu_bind", "none"),
         )
 
         raw_model_path = self.config.vllm_model_path or self.config.model

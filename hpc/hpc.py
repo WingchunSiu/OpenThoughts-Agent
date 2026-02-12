@@ -101,6 +101,12 @@ class HPC(BaseModel):
     # When True, adds --cpu-bind=none to srun commands for Ray startup
     disable_cpu_bind: bool = False
 
+    # GPU binding mode for srun commands. "closest" tells SLURM to bind CPUs based
+    # on GPU NUMA proximity, but can restrict affinity on complex topologies (GH200).
+    # Default "none" avoids SLURM interference; use SKYRL_ENABLE_NUMA_AFFINITY for
+    # application-level per-GPU NUMA binding instead.
+    gpu_bind: str = "none"
+
     # Enable periodic NUMA monitoring for debugging unified memory allocation (GH200)
     # When True, logs numastat and nvidia-smi output every 5 minutes during Ray jobs
     enable_numa_monitoring: bool = False
@@ -736,6 +742,8 @@ jupiter = HPC(
         "NCCL_SOCKET_FAMILY": "AF_INET",
         # NOTE: Do NOT set GLOO_SOCKET_IFNAME=ib0 - it causes Gloo to use the IB hostname
         # which resolves to IPv6. Let Gloo auto-detect the interface.
+        # GH200 NUMA affinity: bind each GPU worker to its local CPU NUMA node
+        "SKYRL_ENABLE_NUMA_AFFINITY": "1",
     },
     # NOTE: Do NOT use master_addr_suffix="i" - the "i" suffixed hostname is not DNS-resolvable
     # InfiniBand routing is handled by NCCL_SOCKET_IFNAME=ib0 instead
@@ -751,9 +759,10 @@ jupiter = HPC(
     proxychains_binary="/e/scratch/jureap59/feuer1/proxychains-ng-aarch64/bin/proxychains4",
     # Enable NUMA monitoring for GH200 unified memory debugging
     enable_numa_monitoring=True,
-    # GH200 NUMA topology: --gpu-bind=closest restricts CPU affinity to NUMA node 0 only
-    # (closest to GPU 0) even with all 4 GPUs allocated. --cpu-bind=none ensures Ray
-    # processes can use all 288 CPUs across all 4 Grace CPU NUMA domains.
+    # GH200 NUMA: --gpu-bind=closest restricts CPU affinity to NUMA node 0 only
+    # and overrides --cpu-bind=none. Use gpu_bind="none" + disable_cpu_bind=True
+    # to let SKYRL_ENABLE_NUMA_AFFINITY handle per-GPU NUMA binding at app level.
+    gpu_bind="none",
     disable_cpu_bind=True,
     pre_run_commands=["ulimit -c 0"],
     # Ray tmpdir on scratch (JSC /tmp is limited on compute nodes)

@@ -110,10 +110,11 @@ class RayClusterConfig:
     object_store_memory: Optional[int] = None  # Ray object store (plasma) size
     # Disable CPU binding for srun commands (needed for Frontier/Cray systems)
     disable_cpu_bind: bool = False
-    # GPU binding mode for NUMA locality (important for unified memory architectures like GH200)
-    # Options: "closest" (bind to NUMA-local CPUs), "none" (no binding), or other SLURM values
-    # "closest" is recommended for GH200 nodes to ensure CPU-GPU NUMA affinity
-    gpu_bind: str = "closest"
+    # GPU binding mode for srun. "closest" binds CPUs based on GPU NUMA proximity,
+    # "none" disables SLURM GPU-CPU binding. Default "none" avoids SLURM restricting
+    # CPU affinity on complex NUMA topologies (e.g., GH200 with 36 NUMA nodes).
+    # Use SKYRL_ENABLE_NUMA_AFFINITY for application-level per-GPU NUMA binding.
+    gpu_bind: str = "none"
     # Enable periodic NUMA monitoring (useful for debugging GH200 unified memory allocation)
     # When enabled, logs numastat and nvidia-smi output every numa_monitor_interval seconds
     enable_numa_monitoring: bool = False
@@ -187,6 +188,7 @@ class RayCluster:
             memory_per_node=ray_memory,
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
+            gpu_bind=getattr(hpc, "gpu_bind", "none"),
             use_proxychains=use_proxychains,
             proxychains_binary=proxychains_binary,
             enable_numa_monitoring=enable_numa_monitoring,
