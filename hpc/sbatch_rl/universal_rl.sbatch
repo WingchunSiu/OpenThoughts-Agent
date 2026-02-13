@@ -20,6 +20,7 @@
 
 set -euo pipefail
 ulimit -c 0  # Disable core dumps to avoid filling disk space
+ulimit -n 65536 2>/dev/null || true  # Raise fd limit for high-concurrency Harbor trials
 
 # Handle bash completion scripts that use BASH_COMPLETION_DEBUG
 if [ -z "${BASH_COMPLETION_DEBUG+x}" ]; then
