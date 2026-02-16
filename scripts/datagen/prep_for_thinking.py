@@ -101,18 +101,29 @@ def reformat_assistant_content(content: str) -> Tuple[str, str]:
             return _build_output(thinking, rest[json_pos:]), "orphaned_close_think_extracted_json"
         return _build_output(thinking, rest), "orphaned_close_think_no_json"
 
-    # 4. No think tags - just JSON (possibly with leading whitespace/newlines)
+    # 4. Bare/malformed <think> with no </think> (e.g. model went straight to JSON,
+    #    or doubled tags like <think><think>)
+    bare_think = re.match(r"^(?:<think>)+\s*(.*)", content.lstrip(), re.DOTALL)
+    if bare_think:
+        after_tag = bare_think.group(1)
+        after_tag_clean = _clean_rest(after_tag)
+        json_pos = after_tag_clean.find("{")
+        if json_pos >= 0:
+            thinking = after_tag_clean[:json_pos].strip()
+            return _build_output(thinking, after_tag_clean[json_pos:]), "bare_open_think"
+
+    # 5. No think tags - just JSON (possibly with leading whitespace/newlines)
     stripped = content.strip()
     stripped = _clean_rest(stripped)
     if stripped.startswith("{"):
         return f"{THINK_OPEN}{THINK_CLOSE}{stripped}", "no_think_json"
 
-    # 5. Fallback: strip everything before first {
+    # 6. Fallback: strip everything before first {
     json_pos = stripped.find("{")
     if json_pos >= 0:
         return f"{THINK_OPEN}{THINK_CLOSE}{stripped[json_pos:]}", "fallback_strip_to_json"
 
-    # 6. No JSON found at all - return unchanged
+    # 7. No JSON found at all - return unchanged
     return content, "no_json_unchanged"
 
 
