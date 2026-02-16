@@ -182,7 +182,7 @@ trainer:
     optimizer_config:
       lr: 1e-6
       weight_decay: 0.0
-      adam_betas: [0.93, 0.9995]
+      adam_betas: [0.9, 0.999]
       max_grad_norm: 10.0
     fsdp_config:
       cpu_offload: false
@@ -224,7 +224,7 @@ generator:
   gpu_memory_utilization: 0.90
 
   max_num_seqs: 32
-  max_num_batched_tokens: 65536
+  max_num_batched_tokens: 16384
 
   enable_prefix_caching: true
   enable_chunked_prefill: true
