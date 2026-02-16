@@ -520,7 +520,7 @@ def build_skyrl_hydra_args(
     # - engine_init_kwargs: vLLM engine settings vary by config
     # - hf_hub_*: HuggingFace upload settings not in base config
     # - enable_db_registration: database registration setting
-    optional_patterns = {".engine_init_kwargs.", ".hf_hub_", ".enable_db_registration", ".optimizer_kwargs"}
+    optional_patterns = {".engine_init_kwargs", ".hf_hub_", ".enable_db_registration", ".optimizer_kwargs"}
 
     for section, values in [("trainer", trainer), ("generator", generator), ("data", data)]:
         for key, val in _flatten_dict(values, section).items():
