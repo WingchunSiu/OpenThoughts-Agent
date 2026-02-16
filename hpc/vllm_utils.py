@@ -323,7 +323,7 @@ class VLLMServer:
         else:
             self._wait_with_http()
 
-    def _wait_for_endpoint_json(self, timeout: int = 180) -> None:
+    def _wait_for_endpoint_json(self, timeout: int = 600) -> None:
         """Wait for endpoint JSON file to be created."""
         if not self.config.endpoint_json_path:
             return
