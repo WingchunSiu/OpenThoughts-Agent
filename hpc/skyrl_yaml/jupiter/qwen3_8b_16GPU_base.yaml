@@ -112,7 +112,7 @@ trainer:
 
   policy:
     optimizer_config:
-      lr: 1e-6
+      lr: 5e-5
       weight_decay: 0.0
       adam_betas: [0.9, 0.999]
       max_grad_norm: 10.0
@@ -148,7 +148,7 @@ generator:
   n_samples_per_prompt: 8
   eval_n_samples_per_prompt: 8
 
-  gpu_memory_utilization: 0.90
+  gpu_memory_utilization: 0.75
 
   max_num_seqs: 24
   max_num_batched_tokens: 65536
