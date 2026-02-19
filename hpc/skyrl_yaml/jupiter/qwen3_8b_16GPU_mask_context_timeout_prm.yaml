@@ -25,13 +25,12 @@ terminal_bench:
     enable_episode_logging: false
     record_terminal_session: false
     enable_pane_logging: false
-    strict_json_parser: true
+    strict_json_parser: false
     # Interleaved Thinking Settings
     interleaved_thinking: true
     extra_body:
       chat_template_kwargs:
         enable_thinking: true
-      response_prefix: "<think>\n\n</think>\n\n{\n  \"analysis\": \""
     override_timeout_sec: 900
     override_cpus: 1
     override_memory_mb: 2048
