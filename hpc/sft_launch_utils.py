@@ -215,10 +215,24 @@ def maybe_preprocess_thinking(
     if job_type and job_type not in (JobType.SFT.value, None):
         return artifacts
 
+    agent_name = (
+        exp_args.get("trace_agent_name")
+        or exp_args.get("agent")
+        or "terminus-2"
+    )
+
     if template not in _REASONING_TEMPLATES:
         # Warn if the dataset likely contains thinking tags but the template
         # won't handle them with ReasoningTemplate.
         _warn_if_thinking_data_with_plain_template(template, artifacts)
+        return artifacts
+
+    if agent_name != "terminus-2":
+        # TODO: support prep_for_thinking for non-terminus-2 harnesses.
+        print(
+            "[prep_for_thinking] Skipping preprocessing for non-terminus-2 agent "
+            f"'{agent_name}'."
+        )
         return artifacts
 
     from huggingface_hub import snapshot_download
