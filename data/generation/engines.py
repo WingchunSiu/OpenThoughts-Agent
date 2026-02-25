@@ -67,8 +67,15 @@ class OpenAIEngine(InferenceEngine):
 
         client = OpenAI(api_key=self.api_key)
 
-        if self._default_max_tokens is not None and "max_tokens" not in generation_kwargs:
-            generation_kwargs["max_tokens"] = self._default_max_tokens
+        # Newer OpenAI models require max_completion_tokens instead of max_tokens.
+        # Normalise both the default and any caller-supplied value.
+        if "max_tokens" in generation_kwargs:
+            generation_kwargs["max_completion_tokens"] = generation_kwargs.pop("max_tokens")
+        if (
+            self._default_max_tokens is not None
+            and "max_completion_tokens" not in generation_kwargs
+        ):
+            generation_kwargs["max_completion_tokens"] = self._default_max_tokens
 
         response = client.chat.completions.create(
             model=self.model,

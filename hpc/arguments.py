@@ -145,6 +145,10 @@ class LlamaFactoryArgs:
     assistant_tag: Optional[str] = field(
         default="gpt", metadata={"help": "Assistant tag for the dataset"}
     )
+    tool_call_tag: Optional[str] = field(
+        default=None,
+        metadata={"help": "Tools column in ShareGPT datasets (maps to LlamaFactory 'tools' field)"},
+    )
     mix_strategy: Optional[str] = field(
         default=None,
         metadata={

@@ -141,7 +141,7 @@ trainer:
     tis_imp_ratio_cap: 2.0  # Standard cap from flash_rl examples
 
   # Training loop settings
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
 
   # Batch sizes

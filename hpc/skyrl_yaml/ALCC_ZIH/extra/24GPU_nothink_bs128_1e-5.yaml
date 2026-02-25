@@ -1,9 +1,9 @@
-# SkyRL Configuration: Qwen3 8B on 20 GPUs (5 nodes x 4 GPUs) - RLOO-N + Strict JSON + Auto Snapshot
-# Based on: qwen3_8b_16x80GB_thinking_bs64_group8_async_rloo_n_noct_strict_micro1x4_autosnap.yaml
+# SkyRL Configuration: Qwen3 8B on 24 GPUs (6 nodes x 4 GPUs) - RLOO-N + Strict JSON + Auto Snapshot
+# Based on: qwen3_8b_20GPU_thinking_bs64_group8_async_rloo_n_noct_strict_micro1x4_autosnap_noreg.yaml
 #
-# 20 GPU VARIANT:
-#   - Total GPUs: 20 (5 nodes x 4 GPUs)
-#   - Inference engines: 12 (dedicated GPUs)
+# 24 GPU VARIANT:
+#   - Total GPUs: 24 (6 nodes x 4 GPUs)
+#   - Inference engines: 16 (dedicated GPUs)
 #   - Policy/Reference: 8 shared GPUs (colocated via async RLOO-N)
 #   - micro_train_batch_size_per_gpu: 1 (from base micro1x4 config)
 #   - micro_forward_batch_size_per_gpu: 4
@@ -11,7 +11,7 @@
 # Inference settings from v2_maxconcurrent variant:
 #   - num_parallel_generation_workers: 768 (increased from 256)
 #   - max_staleness_steps: 12 (increased from 8)
-#   - num_inference_engines: 12 (for 20 total GPUs)
+#   - num_inference_engines: 16 (for 24 total GPUs)
 #
 # AUTO SNAPSHOT: Uses Daytona auto_snapshot feature to reduce rate limits
 #   - auto_snapshot: true (automatically create/reuse snapshots based on Dockerfile hash)
@@ -20,11 +20,11 @@
 # Usage:
 #   python -m hpc.launch \
 #       --job_type rl \
-#       --rl_config qwen3_8b_20GPU_thinking_bs64_group8_async_rloo_n_noct_strict_micro1x4_autosnap.yaml \
-#       --job_name qwen3_8b_agentic_async_rloo_n_strict_autosnap_20gpu \
+#       --rl_config qwen3_8b_24GPU_thinking_bs64_group8_async_rloo_n_noct_strict_micro1x4_autosnap_noreg.yaml \
+#       --job_name qwen3_8b_agentic_async_rloo_n_strict_autosnap_24gpu \
 #       --train_data '["mlfoundations-dev/your-dataset"]' \
 #       --model_path Qwen/Qwen3-8B \
-#       --num_nodes 5
+#       --num_nodes 6
 
 # SkyRL entrypoint module
 entrypoint: examples.terminal_bench.entrypoints.main_tbench
@@ -57,8 +57,9 @@ terminal_bench:
     extra_body:
       chat_template_kwargs:
         enable_thinking: true
-    # Long timeout for thinking models
-    override_timeout_sec: 1800
+      response_prefix: "<think>\n\n</think>\n\n{\n  \"analysis\": \""
+    # Timeout settings
+    override_timeout_sec: 1500
 
     # Environment settings
     override_cpus: 1
@@ -90,7 +91,8 @@ terminal_bench:
       - VerifierOutputParseError
       - ContextLengthExceededError
 
-    n_concurrent_trials: 256
+    # Orchestrator settings (432 = 384 base + 48 for 4 additional engines)
+    n_concurrent_trials: 320
 
     # Logging settings
     log_level: INFO
@@ -116,7 +118,7 @@ terminal_bench:
   # Model info for Harbor's hosted_vllm validation
   model_info:
     max_input_tokens: 32768
-    max_output_tokens: 4096
+    max_output_tokens: 8192
 
   archiving:
     # Enable trial archiving callback
@@ -134,13 +136,13 @@ trainer:
     loss_reduction: token_mean
 
   # Training loop settings
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
 
   # Batch sizes
-  train_batch_size: 64
-  policy_mini_batch_size: 64
-  eval_batch_size: 64
+  train_batch_size: 128
+  policy_mini_batch_size: 128
+  eval_batch_size: 128
 
   # Micro batch sizes (micro1x4 variant)
   micro_forward_batch_size_per_gpu: 4
@@ -178,10 +180,10 @@ trainer:
   # Policy optimizer
   policy:
     optimizer_config:
-      lr: 1e-6
+      lr: 1e-5
       weight_decay: 0.0
       adam_betas: [0.9, 0.999]
-      max_grad_norm: null
+      max_grad_norm: 10.0
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: false
@@ -213,8 +215,8 @@ generator:
   model_dtype: bfloat16
 
   inference_engine_tensor_parallel_size: 1
-  # 12 inference engines (20 total GPUs: 12 engines + 8 policy/ref shared)
-  num_inference_engines: 12
+  # 16 inference engines (24 total GPUs: 16 engines + 8 policy/ref shared)
+  num_inference_engines: 16
 
   n_samples_per_prompt: 8
   eval_n_samples_per_prompt: 8
@@ -238,10 +240,10 @@ generator:
   max_turns: 999999
 
   sampling_params:
-    max_generate_length: 4096
-    temperature: 1.0
+    max_generate_length: 8192
+    temperature: 0.7
     top_p: 0.95
-    top_k: -1
+    top_k: 20
 
   engine_init_kwargs:
     max_model_len: 32768

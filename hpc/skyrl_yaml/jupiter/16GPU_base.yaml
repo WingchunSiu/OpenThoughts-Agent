@@ -33,7 +33,6 @@ terminal_bench:
     extra_body:
       chat_template_kwargs:
         enable_thinking: true
-      response_prefix: "<think>\n\n</think>\n\n{\n  \"analysis\": \""
     override_timeout_sec: 900
     override_cpus: 1
     override_memory_mb: 2048
@@ -51,7 +50,7 @@ terminal_bench:
       - RewardFileEmptyError
       - VerifierOutputParseError
       - ContextLengthExceededError
-    n_concurrent_trials: 384
+    n_concurrent_trials: 192
     log_level: INFO
     enable_reward_shaping: false
     enable_error_classification: true
@@ -85,13 +84,13 @@ trainer:
     eps_clip_high: 0.2
     loss_reduction: token_mean
 
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
   train_batch_size: 64
   policy_mini_batch_size: 64
   eval_batch_size: 64
   micro_forward_batch_size_per_gpu: 4
-  micro_train_batch_size_per_gpu: 2
+  micro_train_batch_size_per_gpu: 1
   max_prompt_length: 999999
   eval_interval: 999999
   eval_before_train: false
@@ -112,10 +111,10 @@ trainer:
 
   policy:
     optimizer_config:
-      lr: 1e-6
+      lr: 5e-5
       weight_decay: 0.0
       adam_betas: [0.9, 0.999]
-      max_grad_norm: 5.0
+      max_grad_norm: 10.0
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: false
@@ -139,7 +138,7 @@ trainer:
 
 generator:
   backend: vllm
-  timeout_multiplier: 2.0
+  timeout_multiplier: 1.0
   model_dtype: bfloat16
 
   inference_engine_tensor_parallel_size: 1
@@ -148,9 +147,9 @@ generator:
   n_samples_per_prompt: 8
   eval_n_samples_per_prompt: 8
 
-  gpu_memory_utilization: 0.90
+  gpu_memory_utilization: 0.75
 
-  max_num_seqs: 32
+  max_num_seqs: 24
   max_num_batched_tokens: 65536
 
   enable_prefix_caching: true
@@ -168,9 +167,9 @@ generator:
 
   sampling_params:
     max_generate_length: 8192
-    temperature: 1.0
+    temperature: 0.7
     top_p: 0.95
-    top_k: -1
+    top_k: 20
 
   engine_init_kwargs:
     max_model_len: 32768

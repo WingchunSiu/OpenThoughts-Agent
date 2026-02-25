@@ -128,7 +128,7 @@ trainer:
     loss_reduction: token_mean
 
   # Training loop settings - OpenHands uses 100 epochs
-  epochs: 100
+  epochs: 20
   update_epochs_per_batch: 1
 
   # Batch sizes - OpenHands style

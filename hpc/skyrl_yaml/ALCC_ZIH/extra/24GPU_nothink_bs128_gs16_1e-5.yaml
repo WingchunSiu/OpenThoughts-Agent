@@ -92,7 +92,7 @@ terminal_bench:
       - ContextLengthExceededError
 
     # Orchestrator settings (432 = 384 base + 48 for 4 additional engines)
-    n_concurrent_trials: 432
+    n_concurrent_trials: 320
 
     # Logging settings
     log_level: INFO
@@ -136,13 +136,13 @@ trainer:
     loss_reduction: token_mean
 
   # Training loop settings
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
 
   # Batch sizes
-  train_batch_size: 64
-  policy_mini_batch_size: 64
-  eval_batch_size: 64
+  train_batch_size: 128
+  policy_mini_batch_size: 128
+  eval_batch_size: 128
 
   # Micro batch sizes (micro1x4 variant)
   micro_forward_batch_size_per_gpu: 4
@@ -180,7 +180,7 @@ trainer:
   # Policy optimizer
   policy:
     optimizer_config:
-      lr: 1e-6
+      lr: 1e-5
       weight_decay: 0.0
       adam_betas: [0.9, 0.999]
       max_grad_norm: 10.0
@@ -218,8 +218,8 @@ generator:
   # 16 inference engines (24 total GPUs: 16 engines + 8 policy/ref shared)
   num_inference_engines: 16
 
-  n_samples_per_prompt: 8
-  eval_n_samples_per_prompt: 8
+  n_samples_per_prompt: 16
+  eval_n_samples_per_prompt: 16
 
   gpu_memory_utilization: 0.90
 
@@ -241,9 +241,9 @@ generator:
 
   sampling_params:
     max_generate_length: 8192
-    temperature: 1.0
+    temperature: 0.7
     top_p: 0.95
-    top_k: -1
+    top_k: 20
 
   engine_init_kwargs:
     max_model_len: 32768

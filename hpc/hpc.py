@@ -876,12 +876,15 @@ capella = HPC(
     nccl_settings={
         "NCCL_DEBUG": "INFO",
         "NCCL_PROTO": "simple",
+        "NCCL_TIMEOUT": "1800",
         "NCCL_IB_TIMEOUT": "23",
+        "NCCL_IB_RETRY_CNT": "13",
         "FI_EFA_FORK_SAFE": "1",
         "FI_LOG_LEVEL": "1",
         "FI_EFA_USE_DEVICE_RDMA": "1",
         "NCCL_NET_GDR_LEVEL": "SYS",
         "NCCL_NET_GDR_READ": "1",
+        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
     },
     training_launcher="torchrun",
     # Job scaling (from zih_capella.env)
@@ -889,6 +892,8 @@ capella = HPC(
     num_nodes_slow=1,
     num_nodes_default=1,
     num_nodes_fast=4,
+    # Exclude flaky nodes: c69,c76,c144 have hanging SLURM prologs; c63,c108 have IB transport errors; c77 has rendezvous errors
+    node_exclusion_list="c63,c69,c76,c77,c108,c144",
     # ZIH license requirements
     extra_sbatch_directives=["#SBATCH --licenses=walrus:1,octopus:1,narwhal:1,cat:1"],
 )
@@ -910,12 +915,15 @@ alpha = HPC(
     nccl_settings={
         "NCCL_DEBUG": "INFO",
         "NCCL_PROTO": "simple",
+        "NCCL_TIMEOUT": "1800",
         "NCCL_IB_TIMEOUT": "23",
+        "NCCL_IB_RETRY_CNT": "13",
         "FI_EFA_FORK_SAFE": "1",
         "FI_LOG_LEVEL": "1",
         "FI_EFA_USE_DEVICE_RDMA": "1",
         "NCCL_NET_GDR_LEVEL": "SYS",
         "NCCL_NET_GDR_READ": "1",
+        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
     },
     training_launcher="torchrun",
     # Job scaling (same as Capella, ZIH cluster)

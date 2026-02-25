@@ -70,7 +70,7 @@ terminal_bench:
 
   model_info:
     max_input_tokens: 32768
-    max_output_tokens: 2048
+    max_output_tokens: 1024
 
   archiving:
     enabled: false
@@ -85,7 +85,7 @@ trainer:
     eps_clip_high: 0.2
     loss_reduction: token_mean
 
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
   train_batch_size: 64
   policy_mini_batch_size: 64
@@ -167,10 +167,10 @@ generator:
   max_turns: 999999
 
   sampling_params:
-    max_generate_length: 2048
-    temperature: 1.0
+    max_generate_length: 1024
+    temperature: 0.7
     top_p: 0.95
-    top_k: -1
+    top_k: 20
 
   engine_init_kwargs:
     max_model_len: 32768

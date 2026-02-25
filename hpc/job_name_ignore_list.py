@@ -42,6 +42,7 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "user_tag",
     "content_tag",
     "assistant_tag",
+    "tool_call_tag",
     "messages",
     "system",
     "mix_strategy",

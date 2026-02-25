@@ -35,7 +35,6 @@ vllm_server:
   max_num_seqs: 16
   gpu_memory_utilization: 0.9
   swap_space: 32
-  enable_expert_parallel: true
   enable_auto_tool_choice: true
   tool_call_parser: kimi_k2
   reasoning_parser: kimi_k2
@@ -44,23 +43,16 @@ vllm_server:
   # Vision encoder parallelism (required for K2.5 multimodal)
   - --mm-encoder-tp-mode
   - data
-  # Quantization (native INT4 from training)
-  - --quantization
-  - compressed-tensors
+  # Quantization: auto-detected from config.json (compressed-tensors INT4)
+  # Do NOT pass --quantization explicitly — causes garbled output with EP/offload
+  # Do NOT use --enable-expert-parallel, --all2all-backend pplx, or --cpu-offload-gb
+  # with this model — these optimizations corrupt INT4 weight loading
   - --kv-cache-dtype
   - fp8
   # Memory/performance optimizations
-  - --block-size
-  - '16'
   - --enable-chunked-prefill
   - --max-num-partial-prefills
   - '1'
   - --enable-prefix-caching
   - --max-num-batched-tokens
   - '8192'
-  # MoE optimizations
-  - --all2all-backend
-  - pplx
-  # CPU offload for memory headroom
-  - --cpu-offload-gb
-  - '20'

@@ -29,8 +29,9 @@ from hpc.launch_utils import (
     resolve_job_and_paths,
     substitute_template,
     derive_datagen_job_name,
+    convert_parquet_to_tasks,
 )
-from hpc.hf_utils import resolve_hf_repo_id, resolve_dataset_path
+from hpc.hf_utils import resolve_hf_repo_id, resolve_dataset_path, is_raw_tasks_directory
 
 # Import Harbor utilities from consolidated module
 from hpc.harbor_utils import (
@@ -66,6 +67,7 @@ def remap_eval_cli_args(cli_args: dict) -> dict:
     return cli_args
 
 
+
 def prepare_eval_configuration(exp_args: dict) -> dict:
     """Normalize eval config inputs prior to sbatch generation."""
 
@@ -98,6 +100,9 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
     if dataset_path:
         # Use shared utility to handle both HF repos and local paths
         resolved_dataset = resolve_dataset_path(dataset_path, verbose=True)
+        # Auto-detect parquet datasets and convert to task directories
+        if not is_raw_tasks_directory(resolved_dataset):
+            resolved_dataset = convert_parquet_to_tasks(resolved_dataset, dataset_path)
         exp_args["_eval_dataset_path_resolved"] = resolved_dataset
         exp_args["tasks_input_path"] = resolved_dataset
     if harbor_dataset:

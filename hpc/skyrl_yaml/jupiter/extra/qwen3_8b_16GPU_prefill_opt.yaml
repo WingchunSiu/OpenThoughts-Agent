@@ -1,13 +1,3 @@
-# SkyRL Configuration: Qwen3 8B on 16x80GB GPUs - TEST: gpu_memory_utilization=0.65
-# Based on: qwen3_8b_16GPU_thinking_bs64_group8_async_rloo_n_noct_strict_micro2x4_autosnap_console_v9_base_workers_noblock.yaml
-#
-# TEST VARIANT: Much lower GPU memory utilization for GH200's unified memory
-#   - gpu_memory_utilization: 0.65 (reduced from 0.90)
-#
-# Hypothesis: Since 0.80 helped a little, going even lower might help more.
-# For an 8B model on 96GB cards with 32k context, 0.65 still provides ~62GB
-# which is more than enough headroom.
-
 # SkyRL entrypoint module
 entrypoint: examples.terminal_bench.entrypoints.main_tbench
 
@@ -51,7 +41,7 @@ terminal_bench:
       - RewardFileEmptyError
       - VerifierOutputParseError
       - ContextLengthExceededError
-    n_concurrent_trials: 420
+    n_concurrent_trials: 192
     log_level: INFO
     enable_reward_shaping: false
     enable_error_classification: true
@@ -85,7 +75,7 @@ trainer:
     eps_clip_high: 0.2
     loss_reduction: token_mean
 
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
   train_batch_size: 64
   policy_mini_batch_size: 64

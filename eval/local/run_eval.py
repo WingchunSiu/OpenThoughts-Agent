@@ -97,8 +97,17 @@ class EvalRunner(LocalHarborRunner):
 
         # Resolve dataset path if provided (handles both local paths and HF repo IDs)
         if self.args.dataset_path:
-            from hpc.hf_utils import resolve_dataset_path
+            from hpc.hf_utils import resolve_dataset_path, is_raw_tasks_directory
+            from hpc.launch_utils import convert_parquet_to_tasks
+
+            original_identifier = self.args.dataset_path
             self.args.dataset_path = resolve_dataset_path(self.args.dataset_path, verbose=True)
+
+            # Auto-detect parquet datasets and convert to task directories
+            if not is_raw_tasks_directory(self.args.dataset_path):
+                self.args.dataset_path = convert_parquet_to_tasks(
+                    self.args.dataset_path, original_identifier
+                )
 
     def print_banner(self) -> None:
         """Print startup banner for eval."""

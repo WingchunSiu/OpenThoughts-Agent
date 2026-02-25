@@ -224,30 +224,12 @@ def _materialize_dataset_and_model(
         print(f"Downloaded dataset to {dataset_path}")
 
     if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
-        parquet_files: list[str] = []
-        for root, _, files in os.walk(dataset_path):
-            for fname in files:
-                if fname.endswith(".parquet"):
-                    parquet_files.append(os.path.join(root, fname))
-            if parquet_files:
-                break
-        if not parquet_files:
-            raise FileNotFoundError(f"No parquet files found in {dataset_path}")
-
-        parquet_file_path = parquet_files[0]
-        print(f"Found parquet file: {parquet_file_path}")
-
-        tasks_base_dir = os.path.join(os.environ.get("DATASETS_DIR", datasets_dir), "tasks_from_parquet")
-        os.makedirs(tasks_base_dir, exist_ok=True)
-        dataset_name = base_config["dataset"].split("/")[-1]
-        tasks_output_dir = os.path.join(tasks_base_dir, dataset_name)
-
-        print(f"Converting parquet to tasks folder at {tasks_output_dir}")
-        # Lazy import to avoid torch dependency at module load time
-        from scripts.harbor.tasks_parquet_converter import from_parquet
-        from_parquet(parquet_file_path, tasks_output_dir, on_exist="skip")
-        dataset_path = tasks_output_dir
-        print(f"Converted parquet to tasks folder: {dataset_path}")
+        from hpc.launch_utils import convert_parquet_to_tasks
+        dataset_path = convert_parquet_to_tasks(
+            snapshot_dir=dataset_path,
+            dataset_identifier=base_config["dataset"],
+            datasets_dir=datasets_dir,
+        )
 
 
     if os.path.isdir(base_config["model_name_or_path"]):

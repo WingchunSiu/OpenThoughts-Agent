@@ -1558,6 +1558,58 @@ def derive_benchmark_from_job_dir(job_dir: PathInput) -> str:
     return name
 
 
+def convert_parquet_to_tasks(
+    snapshot_dir: str,
+    dataset_identifier: str,
+    datasets_dir: Optional[str] = None,
+) -> str:
+    """Convert a parquet-based HF dataset to Harbor task directories.
+
+    Used by both eval and datagen/trace flows when the downloaded HF snapshot
+    contains parquet files with a ``task_binary`` column rather than raw task
+    directories.
+
+    Args:
+        snapshot_dir: Resolved local path to the HF snapshot.
+        dataset_identifier: Original dataset identifier (e.g. "DCAgent/my-dataset"),
+            used to derive the output directory name.
+        datasets_dir: Base directory for converted tasks. Defaults to
+            ``$DATASETS_DIR`` or ``<cwd>/datasets``.
+
+    Returns:
+        Path to the directory containing the extracted task folders.
+    """
+    parquet_files: list[str] = []
+    for root, _, files in os.walk(snapshot_dir):
+        for fname in files:
+            if fname.endswith(".parquet"):
+                parquet_files.append(os.path.join(root, fname))
+        if parquet_files:
+            break
+    if not parquet_files:
+        raise FileNotFoundError(
+            f"Dataset at {snapshot_dir} has no raw task directories and no parquet files. "
+            "Harbor expects task directories with task.toml, environment/, instruction.md, tests/test.sh."
+        )
+
+    parquet_file_path = parquet_files[0]
+    print(f"[convert_parquet_to_tasks] Found parquet file: {parquet_file_path}")
+
+    if datasets_dir is None:
+        datasets_dir = os.environ.get("DATASETS_DIR", os.path.join(os.getcwd(), "datasets"))
+    tasks_base_dir = os.path.join(datasets_dir, "tasks_from_parquet")
+    os.makedirs(tasks_base_dir, exist_ok=True)
+    dataset_name = dataset_identifier.split("/")[-1]
+    tasks_output_dir = os.path.join(tasks_base_dir, dataset_name)
+
+    print(f"[convert_parquet_to_tasks] Converting parquet to tasks folder at {tasks_output_dir}")
+    # Lazy import to avoid torch dependency at module load time
+    from scripts.harbor.tasks_parquet_converter import from_parquet
+    from_parquet(parquet_file_path, tasks_output_dir, on_exist="skip")
+    print(f"[convert_parquet_to_tasks] Converted parquet to tasks folder: {tasks_output_dir}")
+    return tasks_output_dir
+
+
 # =============================================================================
 # Upload Utilities
 # =============================================================================
