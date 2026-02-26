@@ -164,12 +164,12 @@ trainer:
       adam_betas: [0.9, 0.999]
       max_grad_norm: 10.0
     fsdp_config:
-      cpu_offload: false
+      cpu_offload: true
       reshard_after_forward: true
       fsdp_size: 4
   ref:
     fsdp_config:
-      cpu_offload: false
+      cpu_offload: true
       reshard_after_forward: true
       fsdp_size: 4
 
