@@ -145,25 +145,22 @@ trainer:
   ckpt_path: null
   export_path: null
 
-  # Policy optimizer
   policy:
     optimizer_config:
       lr: 5e-6
       weight_decay: 0.0
       adam_betas: [0.9, 0.999]
-      max_grad_norm: null
+      max_grad_norm: 10.0
     fsdp_config:
-      cpu_offload: true
+      cpu_offload: false
       reshard_after_forward: true
       fsdp_size: 4
-  # Reference model
   ref:
     fsdp_config:
-      cpu_offload: true
+      cpu_offload: false
       reshard_after_forward: true
       fsdp_size: 4
 
-  # Model placement (async training) - 8 shared GPUs for policy/ref
   placement:
     colocate_all: false
     policy_num_nodes: 2
@@ -171,27 +168,26 @@ trainer:
     policy_num_gpus_per_node: 4
     ref_num_gpus_per_node: 4
 
-  # Fully async generation (settings from v2_maxconcurrent)
   fully_async:
     max_staleness_steps: 16
     num_parallel_generation_workers: 768
 
-# Generator configuration
 generator:
   backend: vllm
   timeout_multiplier: 1.0
   model_dtype: bfloat16
 
   inference_engine_tensor_parallel_size: 1
+  # 16 inference engines (24 total GPUs: 16 engines + 8 policy/ref shared)
   num_inference_engines: 16
 
   n_samples_per_prompt: 8
   eval_n_samples_per_prompt: 8
 
-  gpu_memory_utilization: 0.90
+  gpu_memory_utilization: 0.75
 
   max_num_seqs: 24
-  max_num_batched_tokens: 16384
+  max_num_batched_tokens: 65536
 
   enable_prefix_caching: true
   enable_chunked_prefill: true
@@ -207,7 +203,7 @@ generator:
   max_turns: 999999
 
   sampling_params:
-    max_generate_length: 4096
+    max_generate_length: 8192
     temperature: 0.7
     top_p: 0.95
     top_k: 20
@@ -215,7 +211,6 @@ generator:
   engine_init_kwargs:
     max_model_len: 32768
 
-# Data paths
 data:
   train_data: []
   val_data: ["open-thoughts/OpenThoughts-TB-dev"]
