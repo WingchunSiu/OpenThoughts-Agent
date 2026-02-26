@@ -1,15 +1,15 @@
-# Qwen3.5-397B-A17B - MoE reasoning model (397B total params, 17B activated)
-# https://huggingface.co/Qwen/Qwen3.5-397B-A17B
+# Qwen3.5-397B-A17B-AWQ - MoE reasoning model, AWQ 4-bit quantized
+# https://huggingface.co/QuantTrio/Qwen3.5-397B-A17B-AWQ
 #
 # 32K context variant (more KV cache headroom for higher concurrency)
 #
 # Hardware: 8x H200 141GB (~1.1TB total)
-#   - Model weights ~794GB (bf16) → fits with room for KV cache
+#   - Model weights ~200GB (AWQ 4-bit) → much more room for KV cache
 #   - fp8 KV cache for memory efficiency
 #
 engine:
   type: vllm_local
-  model: Qwen/Qwen3.5-397B-A17B
+  model: QuantTrio/Qwen3.5-397B-A17B-AWQ
   max_output_tokens: 16384
   healthcheck_interval: 300
   request_params:
@@ -23,7 +23,7 @@ backend:
   healthcheck_max_attempts: 160
   healthcheck_retry_delay: 15
 vllm_server:
-  model_path: Qwen/Qwen3.5-397B-A17B
+  model_path: QuantTrio/Qwen3.5-397B-A17B-AWQ
   num_replicas: 1
   tensor_parallel_size: 8
   pipeline_parallel_size: 1
@@ -40,8 +40,10 @@ vllm_server:
   trust_remote_code: true
   extra_args:
   - --language-model-only
+  - --quantization
+  - awq
   - --dtype
-  - bfloat16
+  - auto
   - --kv-cache-dtype
   - fp8
   - --block-size

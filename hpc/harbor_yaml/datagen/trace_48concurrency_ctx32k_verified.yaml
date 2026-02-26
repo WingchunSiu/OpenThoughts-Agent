@@ -8,7 +8,7 @@ debug: false
 
 orchestrator:
   type: local
-  n_concurrent_trials: 128
+  n_concurrent_trials: 64
   quiet: false
   plain_output: true
   adaptive_concurrency:
@@ -26,6 +26,7 @@ orchestrator:
     max_retries: 10
     include_exceptions:
     - DaytonaRateLimitError
+    - AgentEnvironmentTimeoutError
     exclude_exceptions:
     - AgentTimeoutError
     - VerifierTimeoutError
@@ -50,7 +51,7 @@ environment:
 verifier:
   override_timeout_sec:
   max_timeout_sec:
-  disable: true
+  disable: false
 
 metrics: []
 

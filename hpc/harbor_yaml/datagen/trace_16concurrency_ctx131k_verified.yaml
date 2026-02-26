@@ -1,4 +1,4 @@
-# Default Harbor job configuration for trace generation with custom context limits (terminus-kira).
+# Default Harbor job configuration for trace generation with custom context limits.
 
 job_name: default-trace-job
 jobs_dir: trace_jobs
@@ -8,7 +8,7 @@ debug: false
 
 orchestrator:
   type: local
-  n_concurrent_trials: 48
+  n_concurrent_trials: 16
   quiet: false
   plain_output: true
   adaptive_concurrency:
@@ -26,6 +26,7 @@ orchestrator:
     max_retries: 10
     include_exceptions:
     - DaytonaRateLimitError
+    - AgentEnvironmentTimeoutError
     exclude_exceptions:
     - AgentTimeoutError
     - VerifierTimeoutError
@@ -50,12 +51,12 @@ environment:
 verifier:
   override_timeout_sec:
   max_timeout_sec:
-  disable: true
+  disable: false
 
 metrics: []
 
 agents:
-- name: terminus-kira
+- name: terminus-2
   import_path:
   model_name: placeholder/override-at-runtime
   override_timeout_sec: 1800
