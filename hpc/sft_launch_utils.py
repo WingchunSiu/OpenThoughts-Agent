@@ -186,6 +186,78 @@ def configure_sft_reporting(base_config: dict, exp_args: dict, model_path: str) 
 # Other templates (e.g. qwen3_nothink, qwen2_5, chatml) do NOT use ReasoningTemplate.
 _REASONING_TEMPLATES = {"qwen3"}
 
+# Mapping from ReasoningTemplate names to their non-thinking counterparts.
+_NOTHINK_TEMPLATE_MAP = {"qwen3": "qwen3_nothink"}
+
+# Threshold: if fewer than this fraction of assistant messages contain real
+# <think> content, automatically switch to the _nothink template variant.
+_THINKING_RATE_THRESHOLD = 0.5
+
+# How many parquet rows to sample when estimating thinking rate.
+_THINKING_SAMPLE_ROWS = 500
+
+
+def _estimate_thinking_rate(
+    dataset_paths: list[str],
+    role_tag: str = "role",
+    content_tag: str = "content",
+    conversations_col: str = "conversations",
+) -> tuple[float, int, int]:
+    """Estimate the fraction of assistant messages with real <think> content.
+
+    Samples up to ``_THINKING_SAMPLE_ROWS`` rows from the first parquet file
+    in each dataset path and checks assistant messages for non-empty thinking
+    blocks.
+
+    Returns:
+        (thinking_rate, n_with_thinking, n_total_assistant_msgs)
+    """
+    import re
+
+    think_pattern = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+    n_real_thinking = 0
+    n_total = 0
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        # Can't sample without pyarrow; assume thinking to be safe
+        return 1.0, 0, 0
+
+    for ds_path in dataset_paths:
+        if not os.path.isdir(ds_path):
+            continue
+        # Find first parquet file
+        for root, _dirs, files in os.walk(ds_path):
+            for fname in sorted(files):
+                if not fname.endswith(".parquet"):
+                    continue
+                try:
+                    tbl = pq.read_table(
+                        os.path.join(root, fname),
+                        columns=[conversations_col],
+                    )
+                    rows = tbl.to_pydict().get(conversations_col, [])
+                    for conv in rows[:_THINKING_SAMPLE_ROWS]:
+                        for msg in (conv or []):
+                            if not isinstance(msg, dict):
+                                continue
+                            if msg.get(role_tag) != "assistant":
+                                continue
+                            text = msg.get(content_tag, "")
+                            if not isinstance(text, str):
+                                continue
+                            n_total += 1
+                            m = think_pattern.search(text)
+                            if m and m.group(1).strip():
+                                n_real_thinking += 1
+                except Exception:
+                    continue
+            break  # only first directory level per dataset
+
+    rate = n_real_thinking / n_total if n_total > 0 else 0.0
+    return rate, n_real_thinking, n_total
+
 
 def maybe_preprocess_thinking(
     base_config: dict,
@@ -200,13 +272,20 @@ def maybe_preprocess_thinking(
     input formats (``<think>content</think>``, orphaned ``</think>``, no tags,
     etc.) into the canonical format **before** LlamaFactory sees the data.
 
+    **Auto-detection:** If the majority of assistant messages do *not* contain
+    real ``<think>`` content (threshold: {threshold}%), the template is
+    automatically switched to the ``_nothink`` variant (e.g.
+    ``qwen3`` → ``qwen3_nothink``).  This avoids training the model on
+    hundreds of thousands of empty ``<think>\\n\\n</think>`` blocks, which
+    degrades reasoning ability.
+
     For non-ReasoningTemplate templates, a warning is emitted if the dataset
     appears to contain ``<think>`` tags, since those tags will be treated as
     plain text and the model may learn an unintended output format.
 
     If the template does not require preprocessing, ``artifacts`` is returned
     unchanged.
-    """
+    """.format(threshold=int(_THINKING_RATE_THRESHOLD * 100))
     from hpc.arguments import JobType
 
     template = base_config.get("template", "")
@@ -236,18 +315,58 @@ def maybe_preprocess_thinking(
         return artifacts
 
     from huggingface_hub import snapshot_download
-    from scripts.datagen.prep_for_thinking import preprocess_local_dataset
 
     role_tag = exp_args.get("role_tag", "role")
     content_tag = exp_args.get("content_tag", "content")
 
-    new_paths: list[str] = []
+    # Ensure datasets are local before sampling
+    local_paths: list[str] = []
     for ds_path in artifacts.dataset_paths:
-        # If the path is an HF repo name (internet node), download first
         if not os.path.isdir(ds_path):
             print(f"[prep_for_thinking] Downloading {ds_path} for preprocessing...")
             ds_path = snapshot_download(repo_id=ds_path, repo_type="dataset")
+        local_paths.append(ds_path)
 
+    # Auto-detect: should we use thinking or nothink template?
+    thinking_rate, n_think, n_total = _estimate_thinking_rate(
+        local_paths, role_tag=role_tag, content_tag=content_tag,
+    )
+    print(
+        f"[prep_for_thinking] Thinking rate: {thinking_rate:.1%} "
+        f"({n_think}/{n_total} sampled assistant messages have real <think> content)"
+    )
+
+    if thinking_rate < _THINKING_RATE_THRESHOLD:
+        nothink_template = _NOTHINK_TEMPLATE_MAP.get(template)
+        if nothink_template:
+            print(
+                f"[prep_for_thinking] Majority of data has no thinking blocks "
+                f"({thinking_rate:.1%} < {_THINKING_RATE_THRESHOLD:.0%} threshold). "
+                f"Switching template: {template} -> {nothink_template}"
+            )
+            base_config["template"] = nothink_template
+            # No preprocessing needed for nothink templates — the data is
+            # used as-is and <think> tags (if any) are treated as plain text.
+            # Update dataset paths to local copies (already downloaded above).
+            base_config["dataset"] = ",".join(local_paths)
+            base_config["dataset_dir"] = "ONLINE"
+            return type(artifacts)(
+                dataset_paths=local_paths,
+                dataset_path=local_paths[0] if local_paths else artifacts.dataset_path,
+                model_path=artifacts.model_path,
+            )
+        else:
+            print(
+                f"[prep_for_thinking] WARNING: No nothink variant for template "
+                f"'{template}'. Proceeding with thinking preprocessing."
+            )
+
+    # Majority of data has real thinking — preprocess to canonical format
+    print(f"[prep_for_thinking] Preprocessing data for ReasoningTemplate ({template})")
+    from scripts.datagen.prep_for_thinking import preprocess_local_dataset
+
+    new_paths: list[str] = []
+    for ds_path in local_paths:
         processed_path = preprocess_local_dataset(
             ds_path,
             role_tag=role_tag,

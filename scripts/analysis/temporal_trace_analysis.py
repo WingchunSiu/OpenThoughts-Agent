@@ -380,6 +380,14 @@ def main() -> None:
             file=sys.stderr,
         )
 
+    # Drop the last (most recent) dated bin — it likely has partial traces
+    dated_keys = sorted(k for k in bins if k != "unknown")
+    if len(dated_keys) > 1:
+        dropped_key = dated_keys[-1]
+        dropped_rows = bins.pop(dropped_key)
+        print(f"Dropped last bin '{dropped_key}' ({len(dropped_rows)} rows, likely partial).",
+              flush=True)
+
     print(f"Computing statistics for {len(bins)} bins...", flush=True)
     bin_stats: Dict[str, Dict[str, Any]] = {}
     for bin_key, rows in bins.items():
