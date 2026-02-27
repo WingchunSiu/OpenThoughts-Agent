@@ -227,33 +227,30 @@ def _estimate_thinking_rate(
     for ds_path in dataset_paths:
         if not os.path.isdir(ds_path):
             continue
-        # Find first parquet file
-        for root, _dirs, files in os.walk(ds_path):
-            for fname in sorted(files):
-                if not fname.endswith(".parquet"):
-                    continue
-                try:
-                    tbl = pq.read_table(
-                        os.path.join(root, fname),
-                        columns=[conversations_col],
-                    )
-                    rows = tbl.to_pydict().get(conversations_col, [])
-                    for conv in rows[:_THINKING_SAMPLE_ROWS]:
-                        for msg in (conv or []):
-                            if not isinstance(msg, dict):
-                                continue
-                            if msg.get(role_tag) != "assistant":
-                                continue
-                            text = msg.get(content_tag, "")
-                            if not isinstance(text, str):
-                                continue
-                            n_total += 1
-                            m = think_pattern.search(text)
-                            if m and m.group(1).strip():
-                                n_real_thinking += 1
-                except Exception:
-                    continue
-            break  # only first directory level per dataset
+        # Find parquet files (may be in data/ subdirectory for HF snapshots)
+        parquet_files = sorted(Path(ds_path).rglob("*.parquet"))
+        for pq_file in parquet_files:
+            try:
+                tbl = pq.read_table(
+                    str(pq_file),
+                    columns=[conversations_col],
+                )
+                rows = tbl.to_pydict().get(conversations_col, [])
+                for conv in rows[:_THINKING_SAMPLE_ROWS]:
+                    for msg in (conv or []):
+                        if not isinstance(msg, dict):
+                            continue
+                        if msg.get(role_tag) != "assistant":
+                            continue
+                        text = msg.get(content_tag, "")
+                        if not isinstance(text, str):
+                            continue
+                        n_total += 1
+                        m = think_pattern.search(text)
+                        if m and m.group(1).strip():
+                            n_real_thinking += 1
+            except Exception:
+                continue
 
     rate = n_real_thinking / n_total if n_total > 0 else 0.0
     return rate, n_real_thinking, n_total
@@ -403,31 +400,28 @@ def _warn_if_thinking_data_with_plain_template(template: str, artifacts) -> None
         if not os.path.isdir(ds_path):
             continue
         # Quick check: read first parquet file and look for <think> in a sample
-        for root, _dirs, files in os.walk(ds_path):
-            for fname in files:
-                if not fname.endswith(".parquet"):
-                    continue
-                try:
-                    tbl = pq.read_table(os.path.join(root, fname), columns=["conversations"])
-                    sample = tbl.to_pydict().get("conversations", [])[:5]
-                    for conv in sample:
-                        for msg in (conv or []):
-                            content = msg.get("content", "") if isinstance(msg, dict) else ""
-                            if "<think>" in content or "</think>" in content:
-                                print(
-                                    f"\n*** WARNING: Dataset at {ds_path} contains <think> tags "
-                                    f"but template '{template}' is not a ReasoningTemplate. "
-                                    f"Thinking tokens will NOT be automatically converted to "
-                                    f"'{template}' format. This can cause training/inference "
-                                    f"incompatibilities. Consider using template 'qwen3' or "
-                                    f"pre-processing the dataset with:\n"
-                                    f"  python -m scripts.datagen.prep_for_thinking "
-                                    f"--source <dataset> --dry-run\n"
-                                )
-                                return
-                except Exception:
-                    continue
-            return  # only check first directory level
+        parquet_files = sorted(Path(ds_path).rglob("*.parquet"))
+        for pq_file in parquet_files[:1]:  # only check first file
+            try:
+                tbl = pq.read_table(str(pq_file), columns=["conversations"])
+                sample = tbl.to_pydict().get("conversations", [])[:5]
+                for conv in sample:
+                    for msg in (conv or []):
+                        content = msg.get("content", "") if isinstance(msg, dict) else ""
+                        if "<think>" in content or "</think>" in content:
+                            print(
+                                f"\n*** WARNING: Dataset at {ds_path} contains <think> tags "
+                                f"but template '{template}' is not a ReasoningTemplate. "
+                                f"Thinking tokens will NOT be automatically converted to "
+                                f"'{template}' format. This can cause training/inference "
+                                f"incompatibilities. Consider using template 'qwen3' or "
+                                f"pre-processing the dataset with:\n"
+                                f"  python -m scripts.datagen.prep_for_thinking "
+                                f"--source <dataset> --dry-run\n"
+                            )
+                            return
+            except Exception:
+                continue
 
 
 def pre_validation_sft(cli_args: dict) -> None:
