@@ -219,6 +219,9 @@ generator:
 
   engine_init_kwargs:
     max_model_len: 32768
+    # Interleaved thinking chat template: preserves <think> blocks on ALL
+    # historical assistant turns (stock Qwen3 template strips them).
+    custom_chat_template_chat_completion_path: chat_templates/qwen3_thinking_acc.jinja2
 
 data:
   train_data: []
