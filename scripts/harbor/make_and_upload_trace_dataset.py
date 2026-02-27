@@ -288,7 +288,7 @@ def _install_inline_subagent_merger() -> None:
         return conv
 
     def patched_extract_conversations_from_trajectory(
-        trajectory_file: Path, run_metadata: Dict[str, Any]
+        trajectory_file: Path, run_metadata: Dict[str, Any], embed_tools_in_conversation: bool = True,
     ) -> List[Dict[str, Any]]:
         try:
             trajectory_data = json.loads(trajectory_file.read_text())
