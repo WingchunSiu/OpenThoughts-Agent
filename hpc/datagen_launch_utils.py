@@ -492,6 +492,7 @@ class TaskgenJobRunner:
     def __init__(self, config: TaskgenJobConfig):
         self.config = config
         self._hpc = None
+        self._proxychains_binary = ""
 
     def _get_hpc(self):
         """Lazy-load HPC configuration."""
@@ -506,6 +507,8 @@ class TaskgenJobRunner:
                     raise ValueError(f"Unknown cluster: {self.config.cluster_name}")
             else:
                 self._hpc = detect_hpc()
+            # Stash proxychains binary for wrapping commands on no-internet clusters
+            self._proxychains_binary = getattr(self._hpc, "proxychains_binary", "") or ""
         return self._hpc
 
     def run(self) -> int:
@@ -517,6 +520,9 @@ class TaskgenJobRunner:
         print(f"=== TaskgenJobRunner: {self.config.job_name} ===")
 
         try:
+            # Ensure HPC is loaded (sets _proxychains_binary for no-internet clusters)
+            self._get_hpc()
+
             if self.config.needs_vllm:
                 exit_code = self._run_with_vllm()
             else:
@@ -545,6 +551,8 @@ class TaskgenJobRunner:
         from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
         hpc = self._get_hpc()
+        # Stash proxychains binary for wrapping datagen script (needed on no-internet clusters like JSC)
+        self._proxychains_binary = getattr(hpc, "proxychains_binary", "") or ""
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
 
         # Use config values (from CLI overrides) instead of cluster defaults
@@ -567,6 +575,7 @@ class TaskgenJobRunner:
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
+            proxychains_binary=self._proxychains_binary or None,
         )
 
         model_path = self.config.vllm_model_path or ""
@@ -638,6 +647,16 @@ class TaskgenJobRunner:
         if self.config.extra_args:
             extra_tokens = shlex.split(self.config.extra_args)
             cmd.extend(extra_tokens)
+
+        # Wrap with proxychains on no-internet clusters (e.g., JSC)
+        proxychains_binary = getattr(self, "_proxychains_binary", "")
+        proxychains_conf = os.environ.get("PROXYCHAINS_CONF_FILE", "") if proxychains_binary else ""
+        if proxychains_binary and proxychains_conf:
+            print(f"[TaskgenJobRunner] Using proxychains: {proxychains_binary} -f {proxychains_conf}", flush=True)
+            cmd = [proxychains_binary, "-f", proxychains_conf] + cmd
+        elif proxychains_binary:
+            print(f"[TaskgenJobRunner] Using proxychains: {proxychains_binary} (no conf file)", flush=True)
+            cmd = [proxychains_binary] + cmd
 
         print(f"Running datagen command: {' '.join(cmd)}")
         result = subprocess.run(cmd)
@@ -718,6 +737,7 @@ class TracegenJobRunner:
     def __init__(self, config: TracegenJobConfig):
         self.config = config
         self._hpc = None
+        self._proxychains_binary = ""
 
     def _get_hpc(self):
         """Lazy-load HPC configuration."""
@@ -732,6 +752,8 @@ class TracegenJobRunner:
                     raise ValueError(f"Unknown cluster: {self.config.cluster_name}")
             else:
                 self._hpc = detect_hpc()
+            # Stash proxychains binary for wrapping commands on no-internet clusters
+            self._proxychains_binary = getattr(self._hpc, "proxychains_binary", "") or ""
         return self._hpc
 
     def run(self) -> int:
@@ -743,6 +765,9 @@ class TracegenJobRunner:
         print(f"=== TracegenJobRunner: {self.config.job_name} ===")
 
         try:
+            # Ensure HPC is loaded (sets _proxychains_binary for no-internet clusters)
+            self._get_hpc()
+
             if self.config.needs_vllm:
                 exit_code = self._run_with_vllm()
             else:
@@ -800,6 +825,8 @@ class TracegenJobRunner:
         from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
         hpc = self._get_hpc()
+        # Stash proxychains binary for wrapping Harbor CLI (needed on no-internet clusters like JSC)
+        self._proxychains_binary = getattr(hpc, "proxychains_binary", "") or ""
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
 
         # Use config values (from CLI overrides) instead of cluster defaults
@@ -822,6 +849,7 @@ class TracegenJobRunner:
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
+            proxychains_binary=self._proxychains_binary or None,
         )
 
         raw_model_path = self.config.vllm_model_path or self.config.model
@@ -940,6 +968,17 @@ class TracegenJobRunner:
             jobs_dir=jobs_dir,
             extra_agent_kwargs=self.config.agent_kwargs or None,
         )
+
+        # Wrap with proxychains on no-internet clusters (e.g., JSC)
+        # This routes Daytona API calls through the SSH tunnel proxy
+        proxychains_binary = getattr(self, "_proxychains_binary", "")
+        proxychains_conf = os.environ.get("PROXYCHAINS_CONF_FILE", "") if proxychains_binary else ""
+        if proxychains_binary and proxychains_conf:
+            print(f"[TracegenJobRunner] Using proxychains: {proxychains_binary} -f {proxychains_conf}", flush=True)
+            cmd = [proxychains_binary, "-f", proxychains_conf] + cmd
+        elif proxychains_binary:
+            print(f"[TracegenJobRunner] Using proxychains: {proxychains_binary} (no conf file)", flush=True)
+            cmd = [proxychains_binary] + cmd
 
         print(f"Running Harbor command: {' '.join(cmd)}")
         sys.stdout.flush()
