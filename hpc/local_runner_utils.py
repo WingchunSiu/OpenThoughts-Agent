@@ -774,6 +774,12 @@ class LocalHarborRunner:
             self._fd_monitor = FileDescriptorMonitor(interval_seconds=fd_interval)
             self._fd_monitor.start()
 
+        # Set NUMA affinity for the orchestrator process (binds to GPU 0's NUMA node).
+        # On GH200 (Jupiter), this ensures Ray/vLLM subprocesses inherit optimal
+        # CPU-GPU locality. No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
+        from hpc.numa_utils import apply_numa_affinity
+        apply_numa_affinity(gpu_id=0)
+
         # Start Ray and vLLM only if needed (local vLLM engine)
         if needs_local_vllm:
             controller_script = self.repo_root / "scripts" / "vllm" / "start_vllm_ray_controller.py"

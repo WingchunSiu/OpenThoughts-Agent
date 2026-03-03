@@ -218,6 +218,13 @@ class VLLMServer:
         print(f"  Ray Address: {self.ray_cluster.address}")
         print(f"============================")
 
+        # Set NUMA affinity for the controller process (binds to GPU 0's NUMA node).
+        # On GH200 (Jupiter), this ensures the vLLM controller and its subprocess
+        # run on CPUs local to GPU 0, avoiding cross-NUMA memory accesses.
+        # No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
+        from hpc.numa_utils import apply_numa_affinity
+        apply_numa_affinity(gpu_id=0)
+
         # Open log file if path provided (line-buffered for real-time tail access)
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
