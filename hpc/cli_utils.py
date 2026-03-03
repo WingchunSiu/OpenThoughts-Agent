@@ -273,6 +273,62 @@ def normalize_job_type(exp_args: dict) -> str | None:
     return str(raw_value).strip().lower()
 
 
+def resolve_n_concurrent(
+    cli_value: Any = None,
+    harbor_config: Any = None,
+    default: int = 64,
+) -> int:
+    """Resolve concurrency from CLI override, Harbor config, or default.
+
+    Precedence (highest wins):
+      1. ``cli_value``  (--trace-n-concurrent on the command line)
+      2. ``harbor_config``  (orchestrator.n_concurrent_trials in the Harbor YAML)
+      3. ``default``  (hard-coded fallback, 64)
+
+    Args:
+        cli_value: Value of --trace-n-concurrent (may be None, int, or str).
+        harbor_config: Parsed Harbor config — either a raw dict or a Pydantic
+            JobConfig model.  Both ``{"orchestrator": {"n_concurrent_trials": N}}``
+            and ``obj.orchestrator.n_concurrent_trials`` are supported.
+        default: Fallback when neither CLI nor YAML provides a value.
+
+    Returns:
+        Positive integer concurrency value.
+    """
+    # 1. CLI override wins
+    if cli_value is not None:
+        try:
+            val = int(cli_value)
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+
+    # 2. Harbor config (dict or Pydantic model)
+    yaml_val = None
+    if isinstance(harbor_config, dict):
+        orch = harbor_config.get("orchestrator") or {}
+        if isinstance(orch, dict):
+            yaml_val = orch.get("n_concurrent_trials")
+        else:
+            yaml_val = getattr(orch, "n_concurrent_trials", None)
+    elif harbor_config is not None:
+        orch = getattr(harbor_config, "orchestrator", None)
+        if orch is not None:
+            yaml_val = getattr(orch, "n_concurrent_trials", None)
+
+    if yaml_val is not None:
+        try:
+            val = int(yaml_val)
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+
+    # 3. Fallback
+    return default
+
+
 __all__ = [
     "looks_like_file_path",
     "resolve_paths_in_dict",
@@ -283,5 +339,6 @@ __all__ = [
     "parse_bool_flag",
     "coerce_str_bool_none",
     "coerce_numeric_cli_values",
+    "resolve_n_concurrent",
     "run_harbor_cli",
 ]

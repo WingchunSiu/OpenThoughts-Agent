@@ -629,6 +629,12 @@ def build_harbor_command(
     # create a fresh AgentConfig and lose settings like override_setup_timeout_sec.
     modified_config = copy.deepcopy(harbor_config_data)
 
+    # Sync orchestrator.n_concurrent_trials with the resolved value so the
+    # merged config is an accurate record of what was actually used.
+    if "orchestrator" not in modified_config:
+        modified_config["orchestrator"] = {}
+    modified_config["orchestrator"]["n_concurrent_trials"] = n_concurrent
+
     # Update all agents in the config with model_name and merged kwargs
     agents = modified_config.get("agents", [])
     for agent in agents:

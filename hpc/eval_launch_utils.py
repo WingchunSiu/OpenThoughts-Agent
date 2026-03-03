@@ -43,6 +43,7 @@ from hpc.harbor_utils import (
 )
 
 from scripts.harbor.job_config_utils import load_job_config
+from hpc.cli_utils import resolve_n_concurrent
 
 
 def remap_eval_cli_args(cli_args: dict) -> dict:
@@ -197,15 +198,9 @@ def prepare_eval_configuration(exp_args: dict) -> dict:
     )
     exp_args["trace_backend"] = trace_backend
 
-    default_n_concurrent = harbor_job.orchestrator.n_concurrent_trials
-    if default_n_concurrent is None or default_n_concurrent < 1:
-        default_n_concurrent = 64
-    n_concurrent_override = _parse_optional_int(
-        exp_args.get("trace_n_concurrent"),
-        "--trace_n_concurrent",
+    exp_args["_eval_n_concurrent"] = resolve_n_concurrent(
+        exp_args.get("trace_n_concurrent"), harbor_job,
     )
-    n_concurrent_int = n_concurrent_override or default_n_concurrent
-    exp_args["_eval_n_concurrent"] = max(1, int(n_concurrent_int))
 
     default_n_attempts = harbor_job.n_attempts or 3
     n_attempts_override = _parse_optional_int(
@@ -291,6 +286,7 @@ class EvalJobRunner:
     def __init__(self, config: EvalJobConfig):
         self.config = config
         self._hpc = None
+        self._proxychains_binary = ""
 
     def _get_hpc(self):
         """Lazy-load HPC configuration."""
@@ -306,6 +302,8 @@ class EvalJobRunner:
                     raise ValueError(f"Unknown cluster: {self.config.cluster_name}")
             else:
                 self._hpc = detect_hpc()
+            # Stash proxychains binary for wrapping commands on no-internet clusters
+            self._proxychains_binary = getattr(self._hpc, "proxychains_binary", "") or ""
         return self._hpc
 
     def run(self) -> int:
@@ -317,6 +315,9 @@ class EvalJobRunner:
         print(f"=== EvalJobRunner: {self.config.job_name} ===")
 
         try:
+            # Ensure HPC is loaded (sets _proxychains_binary for no-internet clusters)
+            self._get_hpc()
+
             if self.config.needs_vllm:
                 exit_code = self._run_with_vllm()
             else:
@@ -403,6 +404,8 @@ class EvalJobRunner:
         from hpc.vllm_utils import VLLMServer, VLLMConfig
 
         hpc = self._get_hpc()
+        # Stash proxychains binary for wrapping Harbor CLI (needed on no-internet clusters like JSC)
+        self._proxychains_binary = getattr(hpc, "proxychains_binary", "") or ""
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
 
         # Use config values (from CLI overrides) instead of cluster defaults
@@ -425,6 +428,7 @@ class EvalJobRunner:
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
+            proxychains_binary=self._proxychains_binary or None,
         )
 
         raw_model_path = self.config.vllm_model_path or self.config.model
@@ -537,6 +541,17 @@ class EvalJobRunner:
             jobs_dir=jobs_dir,
             extra_agent_kwargs=self.config.agent_kwargs or None,
         )
+
+        # Wrap with proxychains on no-internet clusters (e.g., JSC)
+        # This routes Daytona API calls through the SSH tunnel proxy
+        proxychains_binary = getattr(self, "_proxychains_binary", "")
+        proxychains_conf = os.environ.get("PROXYCHAINS_CONF_FILE", "") if proxychains_binary else ""
+        if proxychains_binary and proxychains_conf:
+            print(f"[EvalJobRunner] Using proxychains: {proxychains_binary} -f {proxychains_conf}", flush=True)
+            cmd = [proxychains_binary, "-f", proxychains_conf] + cmd
+        elif proxychains_binary:
+            print(f"[EvalJobRunner] Using proxychains: {proxychains_binary} (no conf file)", flush=True)
+            cmd = [proxychains_binary] + cmd
 
         print(f"Running Harbor command: {' '.join(cmd)}")
         sys.stdout.flush()

@@ -35,7 +35,7 @@ vllm_server:
   data_parallel_size: 1
   time_limit: '48:00:00'
   max_model_len: 32768
-  max_num_seqs: 16
+  max_num_seqs: 64
   gpu_memory_utilization: 0.9
   swap_space: 32
   enable_auto_tool_choice: true
@@ -54,8 +54,6 @@ vllm_server:
   - fp8
   # Memory/performance optimizations
   - --enable-chunked-prefill
-  - --max-num-partial-prefills
-  - '1'
   - --enable-prefix-caching
   - --max-num-batched-tokens
-  - '8192'
+  - '16384'

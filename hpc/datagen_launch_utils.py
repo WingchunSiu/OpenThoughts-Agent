@@ -34,6 +34,7 @@ from hpc.harbor_utils import (
     resolve_harbor_config_path,
 )
 from hpc.hf_utils import resolve_dataset_path, derive_default_hf_repo_id, sanitize_hf_repo_id
+from hpc.cli_utils import resolve_n_concurrent
 
 # Backward compatibility aliases
 _normalize_cli_args = normalize_cli_args
@@ -355,7 +356,7 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             served_model_id=served_model_id,
             agent=trace_agent_name or "",
             trace_env=exp_args.get("trace_env") or get_harbor_env_from_config(harbor_config_resolved),
-            n_concurrent=int(exp_args.get("trace_n_concurrent") or 64),
+            n_concurrent=resolve_n_concurrent(exp_args.get("trace_n_concurrent"), harbor_config_data),
             n_attempts=int(exp_args.get("trace_n_attempts") or 1),
             agent_kwargs=agent_kwargs,
             num_nodes=int(exp_args.get("num_nodes") or 1),

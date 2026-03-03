@@ -51,8 +51,6 @@ vllm_server:
   - fp8
   # Memory/performance optimizations
   - --enable-chunked-prefill
-  - --max-num-partial-prefills
-  - '1'
   - --enable-prefix-caching
   - --max-num-batched-tokens
-  - '8192'
+  - '32768'

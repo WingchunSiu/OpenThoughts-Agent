@@ -218,12 +218,15 @@ class VLLMServer:
         print(f"  Ray Address: {self.ray_cluster.address}")
         print(f"============================")
 
-        # Set NUMA affinity for the controller process (binds to GPU 0's NUMA node).
-        # On GH200 (Jupiter), this ensures the vLLM controller and its subprocess
-        # run on CPUs local to GPU 0, avoiding cross-NUMA memory accesses.
-        # No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
-        from hpc.numa_utils import apply_numa_affinity
-        apply_numa_affinity(gpu_id=0)
+        # NOTE: We intentionally do NOT call apply_numa_affinity(gpu_id=0) here.
+        # The orchestrator process may already be pinned (by ray_utils.py), but the
+        # vLLM API server + EngineCore should NOT inherit that restriction:
+        # - The API server handles HTTP, tokenization, and scheduling across all GPUs
+        # - EngineCore communicates with Ray workers via compiled DAGs (network), not
+        #   shared memory, so GPU 0 locality provides no benefit
+        # - Pinning to one NUMA node's CPUs (e.g., 72/288 on GH200) wastes 75% of
+        #   available CPU capacity for tokenization and I/O handling
+        # Instead, we reset affinity before spawning so the child gets all CPUs.
 
         # Open log file if path provided (line-buffered for real-time tail access)
         if self.log_path:
@@ -282,6 +285,20 @@ class VLLMServer:
         if self.extra_env_vars:
             env.update(self.extra_env_vars)
 
+        # Reset CPU affinity before spawning the vLLM server so it can use all CPUs.
+        # The parent may be pinned to one NUMA node's CPUs (e.g., CPUs 0-71 on GH200)
+        # by apply_numa_affinity() in ray_utils.py. The child inherits this restriction,
+        # but the vLLM server needs all CPUs for tokenization and scheduling.
+        _saved_affinity = None
+        try:
+            _saved_affinity = os.sched_getaffinity(0)
+            all_cpus = set(range(os.cpu_count() or 1))
+            if _saved_affinity != all_cpus:
+                os.sched_setaffinity(0, all_cpus)
+                print(f"  Reset CPU affinity: {len(_saved_affinity)} → {len(all_cpus)} CPUs for vLLM server")
+        except (OSError, AttributeError):
+            pass
+
         # Start the server process
         self._process = subprocess.Popen(
             cmd,
@@ -289,6 +306,13 @@ class VLLMServer:
             stderr=stderr_dest,
             env=env,
         )
+
+        # Restore the parent's original NUMA affinity (keep orchestrator pinned)
+        if _saved_affinity is not None:
+            try:
+                os.sched_setaffinity(0, _saved_affinity)
+            except (OSError, AttributeError):
+                pass
 
         print(f"  Started vLLM controller (PID: {self._process.pid})")
         if self.log_path:
