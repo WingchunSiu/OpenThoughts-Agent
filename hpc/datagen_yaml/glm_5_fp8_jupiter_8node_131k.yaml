@@ -39,10 +39,7 @@ vllm_server:
   reasoning_parser: glm45
   trust_remote_code: true
   extra_args:
-  # KV cache
-  - --kv-cache-dtype
-  - fp8
   # Prefill/caching optimizations
   - --enable-prefix-caching
   - --max-num-batched-tokens
-  - '65536'
+  - '16384'
