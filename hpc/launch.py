@@ -241,6 +241,16 @@ def _materialize_dataset_and_model(
     return _DatasetArtifacts(dataset_paths, dataset_path, model_path)
 
 
+_COMPLETED_MODEL_FILES = {
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+    "adapter_model.safetensors",
+    "adapter_model.bin",
+}
+
+
 def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints_dir: str) -> dict:
     raw_output_dir = base_config.get("output_dir")
     if raw_output_dir and checkpoints_dir not in raw_output_dir:
@@ -249,6 +259,26 @@ def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints
         output_dir = os.path.join(checkpoints_dir, exp_args["job_name"])
     os.makedirs(output_dir, exist_ok=True)
     base_config["output_dir"] = output_dir
+
+    # Pre-flight check: detect completed or resumable runs in output_dir
+    if os.path.isdir(output_dir) and not base_config.get("overwrite_output_dir"):
+        completed_files = [f for f in _COMPLETED_MODEL_FILES if os.path.isfile(os.path.join(output_dir, f))]
+        checkpoint_dirs = sorted(
+            [d for d in os.listdir(output_dir) if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))],
+        )
+        if completed_files:
+            raise SystemExit(
+                f"\nERROR: output_dir already contains a completed model ({', '.join(completed_files)}):\n"
+                f"  {output_dir}\n\n"
+                f"To force a fresh start, re-run with --overwrite_output_dir true\n"
+            )
+        if checkpoint_dirs:
+            print(
+                f"\nINFO: Found existing checkpoint(s) in output_dir: {', '.join(checkpoint_dirs)}\n"
+                f"  {output_dir}\n"
+                f"  LLaMA-Factory will auto-resume from the latest checkpoint.\n"
+                f"  To force a fresh start, re-run with --overwrite_output_dir true\n"
+            )
 
     wandb_dir = os.path.join(exp_args["experiments_dir"], "wandb", exp_args["job_name"])
     os.makedirs(wandb_dir, exist_ok=True)
@@ -383,7 +413,7 @@ def submit_job(
                     exp_args["train_sbatch_path_out"], dependency=current_dependency
                 )
                 job_id = job_id.split()[-1]
-                current_dependency = f"afternotok:{job_id}"
+                current_dependency = f"afterany:{job_id}"
 
     job_id = launch_sbatch(
         exp_args["train_sbatch_path_out"], current_dependency
