@@ -75,6 +75,11 @@ if [ -n "$DAYTONA_API_KEY_OVERRIDE" ]; then
   export DAYTONA_API_KEY="$DAYTONA_API_KEY_OVERRIDE"
 fi
 
+# --- Daytona target (tells Harbor this is an RL job) ---
+if [ "{harbor_env}" = "daytona" ]; then
+  export DAYTONA_TARGET="RL"
+fi
+
 # --- RL Environment Activation ---
 # The RL environment is separate from datagen due to dependency conflicts.
 # Options:

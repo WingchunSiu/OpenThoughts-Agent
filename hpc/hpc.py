@@ -698,6 +698,8 @@ jureca = HPC(
     env_vars={
         "PYTHONFAULTHANDLER": "1",
         "WANDB_MODE": "offline",  # No internet on compute nodes
+        # Disable symmetric memory allreduce — send_fd fails in Singularity containers
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
     },
     # NCCL/networking settings for SFT training (InfiniBand, no internet)
     nccl_settings={
@@ -750,6 +752,8 @@ jupiter = HPC(
         # acompletion() calls, the abandoned coroutine's aiohttp session gets GC'd,
         # closing the socket fd while uvloop's epoll still references it → EBADF → SIGABRT.
         "DISABLE_AIOHTTP_TRANSPORT": "True",
+        # Disable symmetric memory allreduce — send_fd fails in Singularity containers
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
     },
     # NOTE: Do NOT use master_addr_suffix="i" - the "i" suffixed hostname is not DNS-resolvable
     # InfiniBand routing is handled by NCCL_SOCKET_IFNAME=ib0 instead
@@ -798,6 +802,8 @@ juwels = HPC(
     gpu_directive_format="--gres=gpu:{n}",
     env_vars={
         "WANDB_MODE": "offline",  # No internet on compute nodes
+        # Disable symmetric memory allreduce — send_fd fails in Singularity containers
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
     },
     # NCCL/networking settings for SFT training (InfiniBand, no internet)
     nccl_settings={
