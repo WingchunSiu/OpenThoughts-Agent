@@ -4,7 +4,7 @@ engine:
   max_output_tokens: 16384
   healthcheck_interval: 300
   request_params:
-    temperature: 1.0
+    temperature: 0.7
     top_p: 0.95
   vllm_local: {}
 backend:

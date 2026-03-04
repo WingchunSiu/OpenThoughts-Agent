@@ -62,6 +62,9 @@ agents:
   max_timeout_sec:
   kwargs:
     max_episodes: 32
+    record_terminal_session: false
+    enable_episode_logging: false
+    enable_pane_logging: false
     collect_rollout_details: false
     collect_engine_metrics: false
     metrics_endpoint: https://replace-with-api-host/metrics
