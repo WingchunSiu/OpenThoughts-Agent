@@ -47,8 +47,8 @@ vllm_server:
   # Do NOT pass --quantization explicitly — causes garbled output with EP/offload
   # Do NOT use --enable-expert-parallel, --all2all-backend pplx, or --cpu-offload-gb
   # with this model — these optimizations corrupt INT4 weight loading
-  - --kv-cache-dtype
-  - fp8
+  # Do NOT use --kv-cache-dtype fp8 — compounding INT4 weights + FP8 KV cache
+  # causes numerical corruption (garbage tokens) in this MoE model
   # Memory/performance optimizations
   - --enable-chunked-prefill
   - --enable-prefix-caching
