@@ -986,36 +986,65 @@ def derive_consolidate_job_name(cli_args: Mapping[str, Any]) -> str:
     return f"{identifier}{suffix}"
 
 
+def _strip_yaml_ext(value: str) -> str:
+    """Remove .yaml / .yml extensions from a value string."""
+    for ext in (".yaml", ".yml"):
+        if value.endswith(ext):
+            return value[: -len(ext)]
+    return value
+
+
+# Keys that identify the dataset across different job types.
+_DATASET_KEYS = {"dataset", "train_data"}
+# Keys that identify the model across different job types.
+_MODEL_KEYS = {"model_name_or_path", "model_path"}
+# Keys that carry a config file path (include stem only, no extension).
+_CONFIG_KEYS = {"rl_config"}
+
+
 def derive_default_job_name(cli_args: Mapping[str, Any]) -> str:
     """Construct job names for SFT / RL / SFT-MCA workloads.
 
-    Order: dataset__model[__extras]
+    Order: config__dataset__model[__extras]
     The model component is hard-truncated to MODEL_NAME_MAX_LENGTH characters.
     """
 
-    # ---- extract the two primary components ----------------------------
-    dataset_raw = cli_args.get("dataset") or ""
-    model_raw = cli_args.get("model_name_or_path") or ""
-
-    # Dataset: may be comma-separated (multi-dataset)
+    # ---- extract primary components ------------------------------------
+    # Dataset: first non-empty value across dataset key aliases
+    dataset_raw = ""
+    for dk in _DATASET_KEYS:
+        dataset_raw = cli_args.get(dk) or dataset_raw
+    # Dataset: may be comma-separated or JSON list (multi-dataset)
     dataset_parts: list[str] = []
-    for ds in str(dataset_raw).split(","):
+    for ds in str(dataset_raw).replace("[", "").replace("]", "").replace('"', "").split(","):
         ds_name = ds.strip().split("/")[-1]
         if ds_name and ds_name != "None":
             dataset_parts.append(ds_name)
     dataset_component = "-".join(dataset_parts) if dataset_parts else ""
 
-    # Model: shortened
+    # Model: first non-empty value across model key aliases, shortened
+    model_raw = ""
+    for mk in _MODEL_KEYS:
+        model_raw = cli_args.get(mk) or model_raw
     model_component = shorten_model_name(str(model_raw)) if model_raw and str(model_raw) != "None" else ""
 
+    # Config: stem only (no .yaml/.yml extension)
+    config_component = ""
+    for ck in _CONFIG_KEYS:
+        cfg_val = cli_args.get(ck) or ""
+        if cfg_val and str(cfg_val) != "None":
+            config_component = _strip_yaml_ext(Path(str(cfg_val)).stem)
+            break
+
     # ---- collect remaining meaningful args (extras) --------------------
+    skip_keys = _DATASET_KEYS | _MODEL_KEYS | _CONFIG_KEYS
     extras: list[str] = []
     for key, value in cli_args.items():
         if not isinstance(value, (str, int, float)):
             continue
         if value == "None" or key in JOB_NAME_IGNORE_KEYS:
             continue
-        if key in {"dataset", "model_name_or_path"}:
+        if key in skip_keys:
             continue
         if key == "seed":
             try:
@@ -1023,11 +1052,13 @@ def derive_default_job_name(cli_args: Mapping[str, Any]) -> str:
                     continue
             except (TypeError, ValueError):
                 pass
-        value_str = str(value).split("/")[-1]
+        value_str = _strip_yaml_ext(str(value).split("/")[-1])
         extras.append(value_str)
 
-    # ---- assemble: dataset first, then model, then extras ---------------
+    # ---- assemble: config, dataset, model, extras ----------------------
     parts: list[str] = []
+    if config_component:
+        parts.append(config_component)
     if dataset_component:
         parts.append(dataset_component)
     if model_component:
