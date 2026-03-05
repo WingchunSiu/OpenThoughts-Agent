@@ -112,9 +112,18 @@ def _count_tasks_in_path(tasks_path: str) -> int:
         print(f"[chunk] Counted {count} tasks via JSONL line count")
         return count
 
+    # Strategy 5: Pre-extracted task directories (each task has an instruction.md)
+    if p.is_dir():
+        task_marker = "instruction.md"
+        count = sum(1 for d in p.rglob(task_marker) if d.is_file())
+        if count > 0:
+            print(f"[chunk] Counted {count} tasks via task folder marker ({task_marker})")
+            return count
+
     raise ValueError(
         f"Cannot determine task count from {tasks_path}. "
-        "Supported formats: HF datasets (Arrow), Parquet, JSONL."
+        "Supported formats: HF datasets (Arrow), Parquet, JSONL, "
+        "pre-extracted task directories (with instruction.md)."
     )
 
 
