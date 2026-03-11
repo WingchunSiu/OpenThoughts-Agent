@@ -161,7 +161,7 @@ trainer:
     loss_reduction: token_mean
 
   # Training loop settings
-  epochs: 10
+  epochs: 2
   update_epochs_per_batch: 1
 
   # Batch sizes - async training requires train_batch_size == policy_mini_batch_size

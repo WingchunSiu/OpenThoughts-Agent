@@ -26,6 +26,135 @@ from hpc.hf_utils import is_hf_dataset_path
 from hpc.launch_utils import get_daytona_api_key_override
 
 
+def prebuild_daytona_snapshots(
+    resolved_train_data: List[str],
+    max_new_snapshots: int = 5,
+    max_org_snapshots: int = 40,
+    build_region: str = "us",
+    target_region: str = "RL",
+    build_timeout: float = 600.0,
+) -> None:
+    """Pre-build Daytona snapshots for RL region from the login node.
+
+    The RL region lacks build runners, so snapshots must be built using the
+    ``us`` region's build infrastructure and registered for the RL region.
+    This function:
+    1. Discovers task directories from resolved train_data paths
+    2. Analyzes unique Dockerfile environments
+    3. Creates missing snapshots via Daytona SDK
+
+    Args:
+        resolved_train_data: List of local task dataset root directories.
+        max_new_snapshots: Max unique snapshots allowed per launch (safety gate).
+        max_org_snapshots: Max total snapshots allowed in the org.
+        build_region: Region with build runners (used to init Daytona client).
+        target_region: Region where snapshots should be registered.
+        build_timeout: Timeout in seconds for each snapshot build.
+    """
+    from scripts.harbor.count_snapshots_from_tasks import (
+        discover_task_dirs,
+        get_snapshot_env_dirs,
+    )
+    from harbor.utils.container_cache import analyze_task_dockerfiles
+
+    print("\n=== Pre-building Daytona snapshots for RL region ===")
+
+    # 1. Discover tasks
+    task_dirs = discover_task_dirs(resolved_train_data)
+    if not task_dirs:
+        print("No task directories found; skipping snapshot pre-build.")
+        return
+
+    # 2. Analyze environments
+    stats = analyze_task_dockerfiles(task_dirs)
+    print(f"Found {stats.total_tasks} tasks with {stats.unique_hashes} unique environment(s)")
+
+    if stats.unique_hashes == 0:
+        print("No environments to snapshot; skipping.")
+        return
+
+    if stats.unique_hashes > max_new_snapshots:
+        raise ValueError(
+            f"Dataset requires {stats.unique_hashes} unique snapshots, "
+            f"exceeding the safety limit of {max_new_snapshots}. "
+            f"Increase max_new_snapshots if this is intentional."
+        )
+
+    # 3. Get hash -> env_dir mapping
+    hash_to_env_dir = get_snapshot_env_dirs(task_dirs)
+
+    # 4. Init Daytona client (build in us, register for RL)
+    from daytona import Daytona, DaytonaConfig, CreateSnapshotParams
+    from daytona.common.image import Image
+    from daytona.common.errors import DaytonaNotFoundError
+
+    api_key = os.environ.get("DAYTONA_API_KEY", "")
+    api_url = os.environ.get("DAYTONA_API_URL", "")
+    if not api_key:
+        print("WARNING: DAYTONA_API_KEY not set; skipping snapshot pre-build.")
+        return
+
+    config_kwargs: dict = {"api_key": api_key, "target": build_region}
+    if api_url:
+        config_kwargs["api_url"] = api_url
+    daytona = Daytona(DaytonaConfig(**config_kwargs))
+
+    # 5. Check org capacity
+    existing = daytona.snapshot.list(limit=1)
+    total_existing = existing.total
+    new_needed = stats.unique_hashes
+    if total_existing + new_needed > max_org_snapshots:
+        raise ValueError(
+            f"Org has {total_existing} snapshots; adding {new_needed} would "
+            f"exceed the limit of {max_org_snapshots}. Delete unused snapshots first."
+        )
+
+    # 6. Build missing snapshots
+    built = 0
+    skipped = 0
+    for hash_val, env_dir in hash_to_env_dir.items():
+        snapshot_name = f"harbor__{hash_val}__{target_region}__snapshot"
+        # Check if snapshot already exists and is usable
+        try:
+            snap = daytona.snapshot.get(snapshot_name)
+            state = getattr(snap, 'state', None)
+            if state is not None and str(state).upper() in ("ACTIVE", "SNAPSHOTSTATE.ACTIVE"):
+                print(f"  {snapshot_name}: already ACTIVE, skipping")
+                skipped += 1
+                continue
+            # Snapshot exists but is not ACTIVE (PENDING/ERROR/BUILD_FAILED) —
+            # delete and rebuild so we don't get stuck with a broken snapshot.
+            print(f"  {snapshot_name}: exists but state={state}, deleting and rebuilding")
+            try:
+                daytona.snapshot.delete(snap)
+            except Exception as del_err:
+                print(f"  {snapshot_name}: WARNING failed to delete: {del_err}")
+        except DaytonaNotFoundError:
+            pass
+
+        # Build the snapshot
+        dockerfile_path = env_dir / "Dockerfile"
+        if not dockerfile_path.exists():
+            print(f"  {snapshot_name}: WARNING no Dockerfile at {dockerfile_path}, skipping")
+            skipped += 1
+            continue
+
+        print(f"  {snapshot_name}: building from {dockerfile_path} ...")
+        daytona.snapshot.create(
+            CreateSnapshotParams(
+                name=snapshot_name,
+                image=Image.from_dockerfile(str(dockerfile_path)),
+                region_id=target_region,
+            ),
+            on_logs=print,
+            timeout=build_timeout,
+        )
+        built += 1
+        print(f"  {snapshot_name}: built successfully")
+
+    print(f"\nSnapshot pre-build complete: {built} built, {skipped} already existed")
+
+
 def resolve_rl_train_data(
     train_data: List[str],
     scratch_dir: Optional[str] = None,
@@ -534,6 +663,13 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         resolved_train_data = resolve_rl_train_data(train_data_raw)
         exp_args["train_data"] = resolved_train_data
         print(f"Resolved train_data: {resolved_train_data}")
+
+        # Pre-build Daytona snapshots for RL region (train_data only; val_data
+        # snapshots are not pre-built due to capacity constraints)
+        if (os.environ.get("DAYTONA_API_KEY")
+                and harbor_env == "daytona"
+                and resolved_train_data):
+            prebuild_daytona_snapshots(resolved_train_data)
 
     # Resolve val_data similarly (eval datasets may also be HF repos)
     # Check CLI first, then fall back to YAML config default

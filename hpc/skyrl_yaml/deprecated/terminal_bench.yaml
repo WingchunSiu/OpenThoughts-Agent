@@ -99,7 +99,7 @@ trainer:
   algorithm:
     advantage_estimator: grpo
     use_kl_loss: true
-  epochs: 10
+  epochs: 2
   # IMPORTANT: train_batch_size must be >= total GPUs (data parallel size)
   # Override with --skyrl_override trainer.train_batch_size=N if needed
   train_batch_size: 16

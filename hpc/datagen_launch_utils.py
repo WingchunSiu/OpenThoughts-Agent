@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -20,6 +21,7 @@ from hpc.launch_utils import (
     resolve_config_path,
     build_sbatch_directives,
     generate_served_model_id,
+    get_daytona_api_key_override,
     hosted_vllm_alias,
     strip_hosted_vllm_alias,
     set_or_pop,
@@ -33,6 +35,7 @@ from hpc.harbor_utils import (
     resolve_harbor_config_path,
 )
 from hpc.hf_utils import resolve_dataset_path, derive_default_hf_repo_id, sanitize_hf_repo_id
+from hpc.cli_utils import resolve_n_concurrent
 
 # Backward compatibility aliases
 _normalize_cli_args = normalize_cli_args
@@ -42,6 +45,86 @@ DATAGEN_CONFIG_DIR = os.path.join(DIRENV, "datagen_yaml")
 DEFAULT_RAY_CGRAPH_TIMEOUT = os.environ.get("RAY_CGRAPH_TIMEOUT_DEFAULT", "86500")
 DEFAULT_RAY_CGRAPH_MAX_INFLIGHT = os.environ.get("RAY_CGRAPH_MAX_INFLIGHT_DEFAULT", "")
 HARBOR_MODEL_PLACEHOLDER = "placeholder/override-at-runtime"
+
+
+def _count_tasks_in_path(tasks_path: str) -> int:
+    """Count the number of tasks in a dataset directory or file.
+
+    Tries multiple loading strategies in order:
+    1. HuggingFace ``load_from_disk`` (Arrow format saved with ``save_to_disk``)
+    2. HuggingFace ``load_dataset`` (directory of Parquet/JSON/CSV files)
+    3. Parquet row count via pyarrow (single file)
+    4. JSONL line count (single file)
+
+    Raises ``ValueError`` if the task count cannot be determined.
+    """
+    p = Path(tasks_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Tasks path does not exist: {tasks_path}")
+
+    # Strategy 1: HF load_from_disk (Arrow dataset_dict or dataset)
+    try:
+        from datasets import load_from_disk
+        ds = load_from_disk(str(p))
+        # DatasetDict → use the first split
+        if hasattr(ds, "keys"):
+            split = list(ds.keys())[0]
+            count = len(ds[split])
+        else:
+            count = len(ds)
+        print(f"[chunk] Counted {count} tasks via load_from_disk")
+        return count
+    except Exception:
+        pass
+
+    # Strategy 2: HF load_dataset (directory of data files)
+    try:
+        from datasets import load_dataset
+        ds = load_dataset(str(p))
+        if hasattr(ds, "keys"):
+            split = list(ds.keys())[0]
+            count = len(ds[split])
+        else:
+            count = len(ds)
+        print(f"[chunk] Counted {count} tasks via load_dataset")
+        return count
+    except Exception:
+        pass
+
+    # Strategy 3: single Parquet file
+    parquet_files = list(p.glob("*.parquet")) if p.is_dir() else ([p] if p.suffix == ".parquet" else [])
+    if parquet_files:
+        try:
+            import pyarrow.parquet as pq
+            count = sum(pq.read_metadata(str(f)).num_rows for f in parquet_files)
+            print(f"[chunk] Counted {count} tasks via Parquet metadata")
+            return count
+        except Exception:
+            pass
+
+    # Strategy 4: JSONL line count
+    jsonl_files = list(p.glob("*.jsonl")) if p.is_dir() else ([p] if p.suffix == ".jsonl" else [])
+    if jsonl_files:
+        count = 0
+        for f in jsonl_files:
+            with open(f) as fh:
+                count += sum(1 for _ in fh)
+        print(f"[chunk] Counted {count} tasks via JSONL line count")
+        return count
+
+    # Strategy 5: Pre-extracted task directories (each task has an instruction.md)
+    if p.is_dir():
+        task_marker = "instruction.md"
+        count = sum(1 for d in p.rglob(task_marker) if d.is_file())
+        if count > 0:
+            print(f"[chunk] Counted {count} tasks via task folder marker ({task_marker})")
+            return count
+
+    raise ValueError(
+        f"Cannot determine task count from {tasks_path}. "
+        "Supported formats: HF datasets (Arrow), Parquet, JSONL, "
+        "pre-extracted task directories (with instruction.md)."
+    )
 
 
 def _prepare_datagen_configuration(exp_args: dict):
@@ -151,6 +234,24 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
     engine = str(exp_args.get("datagen_engine") or "openai").lower()
     requires_vllm = bool(vllm_cfg and engine == "vllm_local")
 
+    # Pre-download model for no-internet clusters (JSC).
+    # Must happen on the login node (which has internet) before sbatch submission.
+    # Also avoids race conditions from multiple Ray workers downloading simultaneously.
+    from hpc.checkpoint_utils import pre_download_model, is_huggingface_repo
+    vllm_model = getattr(vllm_cfg, "model_path", None) if vllm_cfg else None
+    datagen_model = exp_args.get("datagen_model") or exp_args.get("trace_model")
+    model_to_download = vllm_model or datagen_model
+    if model_to_download and is_huggingface_repo(model_to_download):
+        print(f"Pre-downloading model: {model_to_download}")
+        dl_result = pre_download_model(model_to_download)
+        if vllm_cfg and hasattr(vllm_cfg, "model_path"):
+            vllm_cfg.model_path = dl_result.local_path
+        if exp_args.get("datagen_model"):
+            exp_args["datagen_model"] = dl_result.local_path
+        if exp_args.get("trace_model"):
+            exp_args["trace_model"] = dl_result.local_path
+        print(f"Model available at: {dl_result.local_path}")
+
     gpus_per_node = int(exp_args.get("gpus_per_node") or getattr(hpc, "gpus_per_node", 0) or 0)
     cpus_per_node = int(exp_args.get("cpus_per_node") or getattr(hpc, "cpus_per_node", 24) or 24)
     tensor_parallel_size = getattr(vllm_cfg, "tensor_parallel_size", None) or 1
@@ -232,7 +333,11 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
             "cluster_env_file": cluster_env_file,
             "config_path": str(task_config_path),
             "email_address": os.environ.get("EMAIL_ADDRESS", ""),
+            "env_exports": hpc.get_env_exports(),
             "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
+            "daytona_api_key_override": get_daytona_api_key_override(exp_args),
+            "ssh_tunnel_setup": hpc.get_ssh_tunnel_setup(),
+            "proxy_setup": hpc.get_proxy_setup(),
         }
 
         sbatch_text = substitute_template(template_text, substitutions)
@@ -310,99 +415,127 @@ def launch_datagen_job_v2(exp_args: dict, hpc) -> None:
         # Convert vllm_cfg dataclass to dict for pass-through (if not already done)
         trace_vllm_server_config = asdict(vllm_cfg) if vllm_cfg else {}
 
-        trace_config = TracegenJobConfig(
-            job_name=f"{job_name}_traces",
-            harbor_config=harbor_config_resolved,
-            trace_script=trace_script or "",
-            experiments_dir=experiments_subdir,
-            cluster_name=hpc.name,
-            tasks_input_path=tasks_input_path or "",
-            output_dir=exp_args.get("trace_output_dir"),
-            target_repo=trace_target_repo,
-            engine=engine,
-            datagen_config_path=exp_args.get("datagen_config_path"),
-            needs_vllm=requires_vllm,
-            vllm_model_path=vllm_model_path,
-            tensor_parallel_size=tensor_parallel_size,
-            pipeline_parallel_size=pipeline_parallel_size,
-            data_parallel_size=data_parallel_size,
-            endpoint_json_path=endpoint_json_path,
-            ray_port=int(exp_args.get("datagen_ray_port") or 6379),
-            api_port=int(exp_args.get("datagen_api_port") or 8000),
-            model=harbor_model_name,
-            served_model_id=served_model_id,
-            agent=trace_agent_name or "",
-            trace_env=exp_args.get("trace_env") or get_harbor_env_from_config(harbor_config_resolved),
-            n_concurrent=int(exp_args.get("trace_n_concurrent") or 64),
-            n_attempts=int(exp_args.get("trace_n_attempts") or 1),
-            agent_kwargs=agent_kwargs,
-            num_nodes=int(exp_args.get("num_nodes") or 1),
-            gpus_per_node=gpus_per_node,
-            cpus_per_node=cpus_per_node,
-            vllm_server_config=trace_vllm_server_config,
-            # HF upload settings (use trace_target_repo as default HF repo)
-            hf_repo_id=exp_args.get("upload_hf_repo") or trace_target_repo,
-            hf_private=bool(exp_args.get("upload_hf_private")),
-            hf_episodes=exp_args.get("upload_hf_episodes") or "last",
-            # Pinggy tunnel settings (for cloud backends that can't reach local vLLM)
-            pinggy_persistent_url=exp_args.get("pinggy_persistent_url"),
-            pinggy_token=exp_args.get("pinggy_token"),
-        )
+        # --- Chunking logic ---
+        chunk_size = int(exp_args.get("chunk_size") or 0)
+        num_chunks = 1
+        if chunk_size > 0 and tasks_input_path:
+            total_tasks = _count_tasks_in_path(tasks_input_path)
+            num_chunks = math.ceil(total_tasks / chunk_size)
+            if num_chunks <= 1:
+                print(f"[datagen] Task count ({total_tasks}) ≤ chunk_size ({chunk_size}), no chunking needed")
+                chunk_size = 0
+                num_chunks = 1
+            else:
+                print(f"[datagen] Splitting {total_tasks} tasks into {num_chunks} chunks of ≤{chunk_size}")
 
-        # Write trace config JSON
-        trace_config_path = exp_paths.configs / f"{job_name}_tracegen_config.json"
-        trace_config_path.write_text(json.dumps(asdict(trace_config), indent=2))
+        # Build the list of (chunk_index | None) to iterate over.
+        # None means "no chunking, single job".
+        chunk_indices = list(range(num_chunks)) if chunk_size > 0 else [None]
 
-        # Load and populate tracegen template
+        # Shared template + directives (same for all chunks)
         template_path = Path(__file__).parent / "sbatch_data" / "universal_tracegen.sbatch"
         if not template_path.exists():
             raise FileNotFoundError(f"Universal tracegen template not found: {template_path}")
-
         template_text = template_path.read_text()
-
-        # Build SBATCH directives using shared utility
         sbatch_directives = build_sbatch_directives(hpc, exp_args)
-
-        # Determine harbor_env for conditional docker setup
         harbor_env = exp_args.get("trace_env") or get_harbor_env_from_config(harbor_config_resolved)
 
-        substitutions = {
-            "time_limit": exp_args.get("time_limit") or "24:00:00",
-            "num_nodes": str(exp_args.get("num_nodes") or 1),
-            "cpus_per_node": str(exp_args.get("cpus_per_node") or hpc.cpus_per_node),
-            "experiments_dir": experiments_subdir,
-            "job_name": f"{job_name}_traces",
-            "sbatch_extra_directives": "\n".join(sbatch_directives),
-            "module_commands": hpc.get_module_commands(),
-            "conda_activate": hpc.conda_activate or "# No conda activation configured",
-            "cluster_env_file": cluster_env_file,
-            "config_path": str(trace_config_path),
-            "email_address": os.environ.get("EMAIL_ADDRESS", ""),
-            "harbor_env": harbor_env,
-            "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
-        }
-
-        sbatch_text = substitute_template(template_text, substitutions)
-
-        trace_sbatch_output = exp_paths.sbatch / f"{job_name}_tracegen.sbatch"
-        trace_sbatch_output.write_text(sbatch_text)
-        os.chmod(trace_sbatch_output, 0o750)
+        base_hf_repo_id = exp_args.get("upload_hf_repo") or trace_target_repo
 
         # Set dependency on task job if both are enabled, otherwise use CLI dependency
         if task_enabled and task_job_id and task_job_id != "dry_run_task_job_id":
-            # Task job already waited for CLI dependency, so trace only needs to wait for task
             dependency = f"afterok:{task_job_id}"
         else:
-            # No task job, use CLI dependency if provided
             dependency = exp_args.get("dependency")
 
-        if exp_args.get("dry_run"):
-            print(f"DRY RUN: Tracegen sbatch script written to {trace_sbatch_output}")
-            if dependency:
-                print(f"  Would submit with dependency: {dependency}")
-        else:
-            job_id = launch_sbatch(str(trace_sbatch_output), dependency=dependency)
-            print(f"✓ Trace generation job submitted: {job_id}")
+        for chunk_idx in chunk_indices:
+            is_chunked = chunk_idx is not None
+            suffix = f"_chunk{chunk_idx}" if is_chunked else ""
+            chunk_job_name = f"{job_name}_traces{suffix}"
+            chunk_hf_repo_id = sanitize_hf_repo_id(f"{base_hf_repo_id}{suffix}") if is_chunked else base_hf_repo_id
+            # Each chunk gets its own experiments subdirectory to avoid output collisions
+            chunk_experiments_dir = (
+                str(Path(experiments_subdir).parent / f"{Path(experiments_subdir).name}{suffix}")
+                if is_chunked else experiments_subdir
+            )
+
+            trace_config = TracegenJobConfig(
+                job_name=chunk_job_name,
+                harbor_config=harbor_config_resolved,
+                trace_script=trace_script or "",
+                experiments_dir=chunk_experiments_dir,
+                cluster_name=hpc.name,
+                tasks_input_path=tasks_input_path or "",
+                output_dir=exp_args.get("trace_output_dir"),
+                target_repo=trace_target_repo,
+                engine=engine,
+                datagen_config_path=exp_args.get("datagen_config_path"),
+                needs_vllm=requires_vllm,
+                vllm_model_path=vllm_model_path,
+                tensor_parallel_size=tensor_parallel_size,
+                pipeline_parallel_size=pipeline_parallel_size,
+                data_parallel_size=data_parallel_size,
+                endpoint_json_path=endpoint_json_path,
+                ray_port=int(exp_args.get("datagen_ray_port") or 6379),
+                api_port=int(exp_args.get("datagen_api_port") or 8000),
+                model=harbor_model_name,
+                served_model_id=served_model_id,
+                agent=trace_agent_name or "",
+                trace_env=exp_args.get("trace_env") or get_harbor_env_from_config(harbor_config_resolved),
+                n_concurrent=resolve_n_concurrent(exp_args.get("trace_n_concurrent"), harbor_config_data),
+                n_attempts=int(exp_args.get("trace_n_attempts") or 1),
+                agent_kwargs=agent_kwargs,
+                num_nodes=int(exp_args.get("num_nodes") or 1),
+                gpus_per_node=gpus_per_node,
+                cpus_per_node=cpus_per_node,
+                vllm_server_config=trace_vllm_server_config,
+                hf_repo_id=chunk_hf_repo_id,
+                hf_private=bool(exp_args.get("upload_hf_private")),
+                hf_episodes=exp_args.get("upload_hf_episodes") or "last",
+                pinggy_persistent_url=exp_args.get("pinggy_persistent_url"),
+                pinggy_token=exp_args.get("pinggy_token"),
+                # Chunking fields (None when not chunking)
+                chunk_size=chunk_size if is_chunked else None,
+                chunk_index=chunk_idx,
+                num_chunks=num_chunks if is_chunked else None,
+            )
+
+            trace_config_path = exp_paths.configs / f"{chunk_job_name}_tracegen_config.json"
+            trace_config_path.write_text(json.dumps(asdict(trace_config), indent=2))
+
+            substitutions = {
+                "time_limit": exp_args.get("time_limit") or "24:00:00",
+                "num_nodes": str(exp_args.get("num_nodes") or 1),
+                "cpus_per_node": str(exp_args.get("cpus_per_node") or hpc.cpus_per_node),
+                "experiments_dir": chunk_experiments_dir,
+                "job_name": chunk_job_name,
+                "sbatch_extra_directives": "\n".join(sbatch_directives),
+                "module_commands": hpc.get_module_commands(),
+                "conda_activate": hpc.conda_activate or "# No conda activation configured",
+                "cluster_env_file": cluster_env_file,
+                "config_path": str(trace_config_path),
+                "email_address": os.environ.get("EMAIL_ADDRESS", ""),
+                "harbor_env": harbor_env,
+                "env_exports": hpc.get_env_exports(),
+                "ray_env_exports": hpc.get_ray_env_exports(chunk_experiments_dir),
+                "daytona_api_key_override": get_daytona_api_key_override(exp_args),
+                "ssh_tunnel_setup": hpc.get_ssh_tunnel_setup(),
+                "proxy_setup": hpc.get_proxy_setup(),
+            }
+
+            sbatch_text = substitute_template(template_text, substitutions)
+
+            trace_sbatch_output = exp_paths.sbatch / f"{chunk_job_name}_tracegen.sbatch"
+            trace_sbatch_output.write_text(sbatch_text)
+            os.chmod(trace_sbatch_output, 0o750)
+
+            if exp_args.get("dry_run"):
+                print(f"DRY RUN: Tracegen sbatch script written to {trace_sbatch_output}")
+                if dependency:
+                    print(f"  Would submit with dependency: {dependency}")
+            else:
+                job_id = launch_sbatch(str(trace_sbatch_output), dependency=dependency)
+                print(f"✓ Trace generation job submitted: {job_id} ({chunk_job_name})")
 
 
 # ==============================================================================
@@ -467,6 +600,7 @@ class TaskgenJobRunner:
     def __init__(self, config: TaskgenJobConfig):
         self.config = config
         self._hpc = None
+        self._proxychains_binary = ""
 
     def _get_hpc(self):
         """Lazy-load HPC configuration."""
@@ -481,6 +615,8 @@ class TaskgenJobRunner:
                     raise ValueError(f"Unknown cluster: {self.config.cluster_name}")
             else:
                 self._hpc = detect_hpc()
+            # Stash proxychains binary for wrapping commands on no-internet clusters
+            self._proxychains_binary = getattr(self._hpc, "proxychains_binary", "") or ""
         return self._hpc
 
     def run(self) -> int:
@@ -492,6 +628,9 @@ class TaskgenJobRunner:
         print(f"=== TaskgenJobRunner: {self.config.job_name} ===")
 
         try:
+            # Ensure HPC is loaded (sets _proxychains_binary for no-internet clusters)
+            self._get_hpc()
+
             if self.config.needs_vllm:
                 exit_code = self._run_with_vllm()
             else:
@@ -520,6 +659,8 @@ class TaskgenJobRunner:
         from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
         hpc = self._get_hpc()
+        # Stash proxychains binary for wrapping datagen script (needed on no-internet clusters like JSC)
+        self._proxychains_binary = getattr(hpc, "proxychains_binary", "") or ""
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
 
         # Use config values (from CLI overrides) instead of cluster defaults
@@ -542,6 +683,7 @@ class TaskgenJobRunner:
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
+            proxychains_binary=self._proxychains_binary or None,
         )
 
         model_path = self.config.vllm_model_path or ""
@@ -614,6 +756,16 @@ class TaskgenJobRunner:
             extra_tokens = shlex.split(self.config.extra_args)
             cmd.extend(extra_tokens)
 
+        # Wrap with proxychains on no-internet clusters (e.g., JSC)
+        proxychains_binary = getattr(self, "_proxychains_binary", "")
+        proxychains_conf = os.environ.get("PROXYCHAINS_CONF_FILE", "") if proxychains_binary else ""
+        if proxychains_binary and proxychains_conf:
+            print(f"[TaskgenJobRunner] Using proxychains: {proxychains_binary} -f {proxychains_conf}", flush=True)
+            cmd = [proxychains_binary, "-f", proxychains_conf] + cmd
+        elif proxychains_binary:
+            print(f"[TaskgenJobRunner] Using proxychains: {proxychains_binary} (no conf file)", flush=True)
+            cmd = [proxychains_binary] + cmd
+
         print(f"Running datagen command: {' '.join(cmd)}")
         result = subprocess.run(cmd)
         return result.returncode
@@ -679,6 +831,11 @@ class TracegenJobConfig:
     pinggy_persistent_url: Optional[str] = None
     pinggy_token: Optional[str] = None
 
+    # Chunking settings (for splitting large task sets across parallel jobs)
+    chunk_size: Optional[int] = None
+    chunk_index: Optional[int] = None
+    num_chunks: Optional[int] = None
+
 
 class TracegenJobRunner:
     """Runs trace generation jobs with optional vLLM management.
@@ -693,6 +850,7 @@ class TracegenJobRunner:
     def __init__(self, config: TracegenJobConfig):
         self.config = config
         self._hpc = None
+        self._proxychains_binary = ""
 
     def _get_hpc(self):
         """Lazy-load HPC configuration."""
@@ -707,7 +865,101 @@ class TracegenJobRunner:
                     raise ValueError(f"Unknown cluster: {self.config.cluster_name}")
             else:
                 self._hpc = detect_hpc()
+            # Stash proxychains binary for wrapping commands on no-internet clusters
+            self._proxychains_binary = getattr(self._hpc, "proxychains_binary", "") or ""
         return self._hpc
+
+    @staticmethod
+    def _is_task_folder_dir(path: Path) -> bool:
+        """Check if path is a directory of pre-extracted task folders (with instruction.md)."""
+        if not path.is_dir():
+            return False
+        # Quick check: any instruction.md under the directory?
+        return any(path.rglob("instruction.md"))
+
+    def _slice_task_folders(self, tasks_path: str, chunk_index: int, chunk_size: int) -> str:
+        """Slice a directory of pre-extracted task folders for this chunk.
+
+        Creates a chunk directory with symlinks to the selected task folders.
+        Returns the path to the chunk directory.
+        """
+        p = Path(tasks_path)
+        # Collect all task directories (containing instruction.md), sorted for determinism
+        task_dirs = sorted(
+            d.parent for d in p.rglob("instruction.md") if d.is_file()
+        )
+        total = len(task_dirs)
+        start = chunk_index * chunk_size
+        end = min(start + chunk_size, total)
+        if start >= total:
+            print(f"[chunk] Warning: chunk {chunk_index} start ({start}) >= total task folders ({total}), nothing to process")
+            end = start
+
+        chunk_dir = Path(self.config.experiments_dir) / "task_chunks" / f"chunk_{chunk_index}"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+
+        selected = task_dirs[start:end]
+        for task_dir in selected:
+            link = chunk_dir / task_dir.name
+            if not link.exists():
+                link.symlink_to(task_dir.resolve())
+
+        print(f"[chunk] Chunk {chunk_index}/{self.config.num_chunks}: "
+              f"task folders [{start}:{end}] ({len(selected)} of {total}) linked in {chunk_dir}")
+        return str(chunk_dir)
+
+    def _slice_hf_dataset(self, tasks_path: str, chunk_index: int, chunk_size: int) -> str:
+        """Slice an HF dataset (Arrow/Parquet/JSONL) for this chunk.
+
+        Saves the chunk to disk and returns the path.
+        """
+        from datasets import load_from_disk, load_dataset
+
+        try:
+            ds = load_from_disk(tasks_path)
+            if hasattr(ds, "keys"):
+                split = list(ds.keys())[0]
+                ds = ds[split]
+        except Exception:
+            ds = load_dataset(tasks_path, split="train")
+
+        total = len(ds)
+        start = chunk_index * chunk_size
+        end = min(start + chunk_size, total)
+        if start >= total:
+            print(f"[chunk] Warning: chunk {chunk_index} start ({start}) >= total tasks ({total}), nothing to process")
+            end = start
+
+        ds_chunk = ds.select(range(start, end))
+
+        chunk_dir = Path(self.config.experiments_dir) / "task_chunks" / f"chunk_{chunk_index}"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        ds_chunk.save_to_disk(str(chunk_dir))
+
+        print(f"[chunk] Chunk {chunk_index}/{self.config.num_chunks}: "
+              f"tasks [{start}:{end}] ({len(ds_chunk)} of {total}) saved to {chunk_dir}")
+        return str(chunk_dir)
+
+    def _maybe_slice_tasks_for_chunk(self) -> None:
+        """If this is a chunked job, slice tasks_input_path to this chunk's subset.
+
+        Supports both HF datasets (Arrow/Parquet/JSONL) and pre-extracted task
+        folder directories (containing instruction.md markers).
+        """
+        if self.config.chunk_index is None or not self.config.chunk_size:
+            return
+
+        chunk_index = self.config.chunk_index
+        chunk_size = self.config.chunk_size
+        tasks_path = self.config.tasks_input_path
+        if not tasks_path:
+            print(f"[chunk] Warning: chunk_index={chunk_index} set but no tasks_input_path, skipping slice")
+            return
+
+        if self._is_task_folder_dir(Path(tasks_path)):
+            self.config.tasks_input_path = self._slice_task_folders(tasks_path, chunk_index, chunk_size)
+        else:
+            self.config.tasks_input_path = self._slice_hf_dataset(tasks_path, chunk_index, chunk_size)
 
     def run(self) -> int:
         """Execute the trace generation job.
@@ -718,6 +970,12 @@ class TracegenJobRunner:
         print(f"=== TracegenJobRunner: {self.config.job_name} ===")
 
         try:
+            # Ensure HPC is loaded (sets _proxychains_binary for no-internet clusters)
+            self._get_hpc()
+
+            # If this is a chunked job, slice tasks to this chunk's subset
+            self._maybe_slice_tasks_for_chunk()
+
             if self.config.needs_vllm:
                 exit_code = self._run_with_vllm()
             else:
@@ -737,7 +995,13 @@ class TracegenJobRunner:
             raise
 
     def _maybe_upload_traces(self) -> None:
-        """Upload traces to HuggingFace after Harbor completes."""
+        """Upload traces to HuggingFace after Harbor completes.
+
+        On no-internet clusters (JSC), the upload runs as a subprocess wrapped
+        with proxychains so that HuggingFace Hub API calls are routed through
+        the SSH tunnel proxy.  On clusters with direct internet access the
+        upload runs in-process for simplicity.
+        """
         if not self.config.hf_repo_id:
             print("[upload] No HF repo configured; skipping upload.")
             return
@@ -749,6 +1013,57 @@ class TracegenJobRunner:
             print(f"[upload] Job directory {job_dir} does not exist; skipping upload.")
             return
 
+        # On no-internet clusters using proxychains binary mode (e.g., Jupiter ARM),
+        # LD_PRELOAD is NOT inherited so in-process HTTP calls have no proxy.
+        # Run the upload as a subprocess wrapped with proxychains instead.
+        proxychains_binary = getattr(self, "_proxychains_binary", "")
+        proxychains_conf = os.environ.get("PROXYCHAINS_CONF_FILE", "") if proxychains_binary else ""
+
+        if proxychains_binary:
+            self._upload_traces_via_subprocess(job_dir, proxychains_binary, proxychains_conf)
+        else:
+            self._upload_traces_in_process(job_dir)
+
+    def _upload_traces_via_subprocess(
+        self, job_dir: Path, proxychains_binary: str, proxychains_conf: str
+    ) -> None:
+        """Upload traces as a proxychains-wrapped subprocess (for no-internet clusters)."""
+        cmd = [
+            sys.executable, "-c",
+            "import sys, os; "
+            "sys.path.insert(0, os.environ.get('OT_AGENT', '.')); "
+            "from hpc.launch_utils import upload_traces_to_hf; "
+            f"upload_traces_to_hf("
+            f"job_dir={str(job_dir)!r}, "
+            f"hf_repo_id={self.config.hf_repo_id!r}, "
+            f"hf_private={self.config.hf_private!r}, "
+            f"hf_episodes={self.config.hf_episodes!r})"
+        ]
+        if proxychains_binary and proxychains_conf:
+            print(f"[upload] Using proxychains: {proxychains_binary} -f {proxychains_conf}", flush=True)
+            cmd = [proxychains_binary, "-f", proxychains_conf] + cmd
+        elif proxychains_binary:
+            print(f"[upload] Using proxychains: {proxychains_binary}", flush=True)
+            cmd = [proxychains_binary] + cmd
+
+        print(f"[upload] Uploading traces via subprocess to {self.config.hf_repo_id}", flush=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.stdout:
+                print(result.stdout)
+            if result.returncode != 0:
+                print(f"[upload] Subprocess upload failed (exit {result.returncode})", file=sys.stderr)
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr)
+            else:
+                print(f"[upload] Subprocess upload completed successfully", flush=True)
+        except subprocess.TimeoutExpired:
+            print("[upload] Subprocess upload timed out after 600s", file=sys.stderr)
+        except Exception as e:
+            print(f"[upload] Subprocess upload error: {e}", file=sys.stderr)
+
+    def _upload_traces_in_process(self, job_dir: Path) -> None:
+        """Upload traces directly in-process (for clusters with internet access)."""
         from hpc.launch_utils import upload_traces_to_hf
 
         try:
@@ -775,6 +1090,8 @@ class TracegenJobRunner:
         from hpc.model_utils import is_gpt_oss_model, setup_gpt_oss_tiktoken
 
         hpc = self._get_hpc()
+        # Stash proxychains binary for wrapping Harbor CLI (needed on no-internet clusters like JSC)
+        self._proxychains_binary = getattr(hpc, "proxychains_binary", "") or ""
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
 
         # Use config values (from CLI overrides) instead of cluster defaults
@@ -797,6 +1114,7 @@ class TracegenJobRunner:
             object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
+            proxychains_binary=self._proxychains_binary or None,
         )
 
         raw_model_path = self.config.vllm_model_path or self.config.model
@@ -915,6 +1233,17 @@ class TracegenJobRunner:
             jobs_dir=jobs_dir,
             extra_agent_kwargs=self.config.agent_kwargs or None,
         )
+
+        # Wrap with proxychains on no-internet clusters (e.g., JSC)
+        # This routes Daytona API calls through the SSH tunnel proxy
+        proxychains_binary = getattr(self, "_proxychains_binary", "")
+        proxychains_conf = os.environ.get("PROXYCHAINS_CONF_FILE", "") if proxychains_binary else ""
+        if proxychains_binary and proxychains_conf:
+            print(f"[TracegenJobRunner] Using proxychains: {proxychains_binary} -f {proxychains_conf}", flush=True)
+            cmd = [proxychains_binary, "-f", proxychains_conf] + cmd
+        elif proxychains_binary:
+            print(f"[TracegenJobRunner] Using proxychains: {proxychains_binary} (no conf file)", flush=True)
+            cmd = [proxychains_binary] + cmd
 
         print(f"Running Harbor command: {' '.join(cmd)}")
         sys.stdout.flush()
