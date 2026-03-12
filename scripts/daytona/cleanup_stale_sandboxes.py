@@ -17,7 +17,8 @@ Usage:
     python cleanup_stale_sandboxes.py --delete --threshold 120
 
 Environment:
-    DAYTONA_RL_API_KEY  — API key for the RL organization (or set in secrets.env)
+    DAYTONA_API_KEY     — API key for the target organization (default)
+    DAYTONA_RL_API_KEY  — Fallback API key (or set in secrets.env)
 """
 
 import argparse
@@ -51,10 +52,17 @@ else:
             break
 
 
-def get_api_key() -> str:
-    key = os.environ.get("DAYTONA_RL_API_KEY")
+def get_api_key(env_var: str = "DAYTONA_API_KEY") -> str:
+    key = os.environ.get(env_var)
     if not key:
-        sys.exit("ERROR: DAYTONA_RL_API_KEY not set in environment or secrets.env")
+        # Fallback chain: try common key names
+        for fallback in ("DAYTONA_API_KEY", "DAYTONA_RL_API_KEY"):
+            if fallback != env_var:
+                key = os.environ.get(fallback)
+                if key:
+                    break
+    if not key:
+        sys.exit(f"ERROR: {env_var} (and fallbacks) not set in environment or secrets.env")
     return key
 
 
@@ -149,9 +157,15 @@ def main():
         default=DEFAULT_THRESHOLD_MINUTES,
         help=f"Minutes of inactivity before a sandbox is considered stale (default: {DEFAULT_THRESHOLD_MINUTES})",
     )
+    parser.add_argument(
+        "--api-key-env",
+        type=str,
+        default="DAYTONA_API_KEY",
+        help="Environment variable name containing the API key (default: DAYTONA_API_KEY)",
+    )
     args = parser.parse_args()
 
-    api_key = get_api_key()
+    api_key = get_api_key(args.api_key_env)
 
     # 1. List all active sandboxes
     print("Fetching all started sandboxes …")

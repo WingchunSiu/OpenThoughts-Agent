@@ -1,0 +1,86 @@
+agents:
+- import_path: null
+  kwargs:
+    collect_engine_metrics: false
+    collect_rollout_details: false
+    enable_episode_logging: false
+    enable_pane_logging: false
+    enable_summarize: true
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+    interleaved_thinking: true
+    metrics_endpoint: https://replace-with-vllm-host/metrics
+    metrics_timeout_sec: 10
+    model_info:
+      input_cost_per_token: 0
+      max_input_tokens: 114688
+      max_output_tokens: 16384
+      output_cost_per_token: 0
+    parser_name: json
+    proactive_summarization_threshold: 8192
+    reasoning_effort: medium
+    record_terminal_session: false
+    tmux_pane_height: 40
+    tmux_pane_width: 160
+    trajectory_config:
+      linear_history: true
+      raw_content: true
+  max_timeout_sec: null
+  model_name: openai/gpt-5-mini
+  name: terminus-2
+  override_timeout_sec: 1800
+datasets:
+- n_tasks: 10
+  path: /Users/benjaminfeuer/Documents/tasks/swe_rebench_patched
+debug: false
+environment:
+  delete: true
+  force_build: false
+  kwargs: {}
+  override_cpus: 1
+  override_memory_mb: 2048
+  override_storage_mb: 2048
+  type: daytona
+job_name: default-trace-job
+jobs_dir: trace_jobs
+metrics: []
+n_attempts: 1
+orchestrator:
+  adaptive_concurrency:
+    algorithm: gradient2
+    algorithm_kwargs: {}
+    enabled: false
+    max_limit: null
+    metrics_endpoint: null
+    metrics_timeout_sec: 10.0
+    min_limit: null
+    poll_interval_sec: 120.0
+    queue_p95_drop_threshold: null
+    window_size: 5
+  kwargs: {}
+  n_concurrent_trials: 10
+  plain_output: true
+  quiet: false
+  retry:
+    exclude_exceptions:
+    - AgentTimeoutError
+    - VerifierTimeoutError
+    - RewardFileNotFoundError
+    - RewardFileEmptyError
+    - VerifierOutputParseError
+    - SandboxBuildFailedError
+    - VerifierRuntimeError
+    include_exceptions:
+    - DaytonaRateLimitError
+    - AgentEnvironmentTimeoutError
+    max_retries: 10
+    max_wait_sec: 90.0
+    min_wait_sec: 1.0
+    wait_multiplier: 2.0
+  type: local
+timeout_multiplier: 1.0
+verifier:
+  disable: false
+  max_timeout_sec: null
+  override_timeout_sec: null
