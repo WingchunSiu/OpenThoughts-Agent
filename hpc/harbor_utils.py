@@ -637,9 +637,12 @@ def build_harbor_command(
         modified_config["orchestrator"] = {}
     modified_config["orchestrator"]["n_concurrent_trials"] = n_concurrent
 
-    # Update all agents in the config with model_name and merged kwargs
+    # Update all agents in the config with model_name and merged kwargs.
+    # If agent_name is specified, also override the agent name (e.g., "oracle").
     agents = modified_config.get("agents", [])
     for agent in agents:
+        if agent_name:
+            agent["name"] = agent_name
         # Set model_name directly in config
         agent["model_name"] = model_name
         # Merge kwargs into the agent's existing kwargs
