@@ -1,0 +1,57 @@
+# HF Storage Bucket Offload Pipeline Configuration
+# Copy this to config.yaml and edit for your setup.
+
+# Source HF org/user namespace (where model repos live)
+source_org: "your-source-org"
+
+# Bucket HF org/user namespace (can differ from source_org for testing)
+bucket_org: "your-bucket-org"
+
+# Target bucket for cold storage
+bucket_name: "cold-storage"  # created as {bucket_org}/{bucket_name}
+
+# Source repos to offload from (under the org namespace)
+# These are HF model repos that contain checkpoints/artifacts
+source_repos:
+  - "your-model-repo-name"
+  # or a fully-qualified repo for testing:
+  # - "username_or_org/repo-name"
+
+# File patterns to offload (glob patterns)
+include_patterns:
+  - "*.safetensors"
+  - "*.bin"
+  - "*.pt"
+  - "*.pth"
+  - "*.gguf"
+  - "optimizer.*"
+  - "training_args.bin"
+  - "scheduler.*"
+
+# File patterns to NEVER offload (always keep in hot storage)
+exclude_patterns:
+  - "config.json"
+  - "tokenizer*"
+  - "special_tokens_map.json"
+  - "README.md"
+  - "*.md"
+
+# Retention: keep the N most recent files matching include_patterns
+# Set to 0 to offload everything matching the patterns
+keep_recent: 1
+
+# Safety: if true, uploads to bucket but does NOT delete from source repos
+skip_delete: true
+
+# Supabase integration (for DB updates)
+# Richard will help with the schema details
+supabase:
+  enabled: false
+  url: ""  # e.g. https://xxxxx.supabase.co
+  table: ""  # table where model paths are stored
+  path_column: ""  # column that stores the HF repo path
+  # SUPABASE_KEY should be set as an environment variable
+
+# Safety
+dry_run: true  # ALWAYS start with dry_run: true
+verbose: true
