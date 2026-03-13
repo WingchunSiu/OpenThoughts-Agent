@@ -134,26 +134,21 @@ def _load_base_train_config(train_config_path: str) -> dict:
         return yaml.safe_load(f.read())
 
 
-def _sanitize_model_component(component: str) -> str:
-    comp = component.strip().rstrip("/")
-    comp = os.path.basename(comp) if comp else component
-    comp = re.sub(r"[^A-Za-z0-9]+", "-", comp).strip("-")
-    return comp or "model"
-
-
 def _maybe_include_model_in_job_name(base_config: dict, exp_args: dict) -> dict:
+    from hpc.launch_utils import shorten_model_name, JOB_NAME_SEP
+
     model_name = base_config.get("model_name_or_path") or exp_args.get("model_name_or_path")
     if not isinstance(model_name, str) or not model_name:
         return exp_args
 
-    model_component = _sanitize_model_component(model_name)
+    model_component = shorten_model_name(model_name)
     current_job_name = exp_args.get("job_name", "")
     if current_job_name and model_component.lower() in current_job_name.lower():
         return exp_args
 
-    suggested = f"{current_job_name}_{model_component}" if current_job_name else model_component
+    suggested = f"{current_job_name}{JOB_NAME_SEP}{model_component}" if current_job_name else model_component
     if len(suggested) > 96:
-        suggested = suggested[:96]
+        suggested = suggested[:96].rstrip("-_")
     print(f"Including model identifier in job name: {current_job_name} -> {suggested}")
     return update_exp_args(exp_args, {"job_name": suggested})
 
@@ -224,30 +219,12 @@ def _materialize_dataset_and_model(
         print(f"Downloaded dataset to {dataset_path}")
 
     if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
-        parquet_files: list[str] = []
-        for root, _, files in os.walk(dataset_path):
-            for fname in files:
-                if fname.endswith(".parquet"):
-                    parquet_files.append(os.path.join(root, fname))
-            if parquet_files:
-                break
-        if not parquet_files:
-            raise FileNotFoundError(f"No parquet files found in {dataset_path}")
-
-        parquet_file_path = parquet_files[0]
-        print(f"Found parquet file: {parquet_file_path}")
-
-        tasks_base_dir = os.path.join(os.environ.get("DATASETS_DIR", datasets_dir), "tasks_from_parquet")
-        os.makedirs(tasks_base_dir, exist_ok=True)
-        dataset_name = base_config["dataset"].split("/")[-1]
-        tasks_output_dir = os.path.join(tasks_base_dir, dataset_name)
-
-        print(f"Converting parquet to tasks folder at {tasks_output_dir}")
-        # Lazy import to avoid torch dependency at module load time
-        from scripts.harbor.tasks_parquet_converter import from_parquet
-        from_parquet(parquet_file_path, tasks_output_dir, on_exist="skip")
-        dataset_path = tasks_output_dir
-        print(f"Converted parquet to tasks folder: {dataset_path}")
+        from hpc.launch_utils import convert_parquet_to_tasks
+        dataset_path = convert_parquet_to_tasks(
+            snapshot_dir=dataset_path,
+            dataset_identifier=base_config["dataset"],
+            datasets_dir=datasets_dir,
+        )
 
 
     if os.path.isdir(base_config["model_name_or_path"]):
@@ -259,6 +236,16 @@ def _materialize_dataset_and_model(
     return _DatasetArtifacts(dataset_paths, dataset_path, model_path)
 
 
+_COMPLETED_MODEL_FILES = {
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+    "adapter_model.safetensors",
+    "adapter_model.bin",
+}
+
+
 def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints_dir: str) -> dict:
     raw_output_dir = base_config.get("output_dir")
     if raw_output_dir and checkpoints_dir not in raw_output_dir:
@@ -267,6 +254,26 @@ def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints
         output_dir = os.path.join(checkpoints_dir, exp_args["job_name"])
     os.makedirs(output_dir, exist_ok=True)
     base_config["output_dir"] = output_dir
+
+    # Pre-flight check: detect completed or resumable runs in output_dir
+    if os.path.isdir(output_dir) and not base_config.get("overwrite_output_dir"):
+        completed_files = [f for f in _COMPLETED_MODEL_FILES if os.path.isfile(os.path.join(output_dir, f))]
+        checkpoint_dirs = sorted(
+            [d for d in os.listdir(output_dir) if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))],
+        )
+        if completed_files:
+            raise SystemExit(
+                f"\nERROR: output_dir already contains a completed model ({', '.join(completed_files)}):\n"
+                f"  {output_dir}\n\n"
+                f"To force a fresh start, re-run with --overwrite_output_dir true\n"
+            )
+        if checkpoint_dirs:
+            print(
+                f"\nINFO: Found existing checkpoint(s) in output_dir: {', '.join(checkpoint_dirs)}\n"
+                f"  {output_dir}\n"
+                f"  LLaMA-Factory will auto-resume from the latest checkpoint.\n"
+                f"  To force a fresh start, re-run with --overwrite_output_dir true\n"
+            )
 
     wandb_dir = os.path.join(exp_args["experiments_dir"], "wandb", exp_args["job_name"])
     os.makedirs(wandb_dir, exist_ok=True)
@@ -352,6 +359,9 @@ def construct_config_yaml(exp_args):
         hub_model_id = hub_model_id.replace(".", "_")
     else:
         hub_model_id = f"mlfoundations-dev/{exp_args['job_name']}"
+    # Ensure hub_model_id complies with HuggingFace's 96-char repo ID limit
+    from hpc.hf_utils import sanitize_hf_repo_id
+    hub_model_id = sanitize_hf_repo_id(hub_model_id)
     base_config["hub_model_id"] = hub_model_id
 
     if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
@@ -398,7 +408,7 @@ def submit_job(
                     exp_args["train_sbatch_path_out"], dependency=current_dependency
                 )
                 job_id = job_id.split()[-1]
-                current_dependency = f"afternotok:{job_id}"
+                current_dependency = f"afterany:{job_id}"
 
     job_id = launch_sbatch(
         exp_args["train_sbatch_path_out"], current_dependency
@@ -459,10 +469,10 @@ def main():
         exp_args["job_name"] = get_job_name(cli_args)
     print(f"Job name: {exp_args['job_name']}")
 
-    # Experiments directory - set default if not specified
-    # This must be set early as many functions depend on it
-    if not exp_args.get("experiments_dir"):
-        exp_args["experiments_dir"] = os.path.join("experiments", exp_args["job_name"])
+    # Experiments directory - always append job_name as a subdirectory.
+    # --experiments_dir sets the base; defaults to "experiments" when not specified.
+    experiments_base = exp_args.get("experiments_dir") or "experiments"
+    exp_args["experiments_dir"] = os.path.join(experiments_base, exp_args["job_name"])
 
     if job_type == JobType.CONSOLIDATE.value:
         launch_consolidate_job(

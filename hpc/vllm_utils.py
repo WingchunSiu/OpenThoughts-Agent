@@ -42,6 +42,11 @@ _OUR_FIELDS = {
     "time_limit",
     "endpoint_json_path",
     "model_path",
+    # Parallelism fields — handled explicitly by VLLMServer.start() as positional args.
+    # Must be excluded here to avoid double-emission (last value wins with argparse).
+    "tensor_parallel_size",
+    "pipeline_parallel_size",
+    "data_parallel_size",
     # Harbor/Daytona engine-specific fields (not vLLM args)
     "type",                   # engine type (e.g., "vllm_local")
     "max_output_tokens",      # Harbor config, not vLLM
@@ -213,6 +218,16 @@ class VLLMServer:
         print(f"  Ray Address: {self.ray_cluster.address}")
         print(f"============================")
 
+        # NOTE: We intentionally do NOT call apply_numa_affinity(gpu_id=0) here.
+        # The orchestrator process may already be pinned (by ray_utils.py), but the
+        # vLLM API server + EngineCore should NOT inherit that restriction:
+        # - The API server handles HTTP, tokenization, and scheduling across all GPUs
+        # - EngineCore communicates with Ray workers via compiled DAGs (network), not
+        #   shared memory, so GPU 0 locality provides no benefit
+        # - Pinning to one NUMA node's CPUs (e.g., 72/288 on GH200) wastes 75% of
+        #   available CPU capacity for tokenization and I/O handling
+        # Instead, we reset affinity before spawning so the child gets all CPUs.
+
         # Open log file if path provided (line-buffered for real-time tail access)
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,11 +273,31 @@ class VLLMServer:
         env = os.environ.copy()
         env["VLLM_MODEL_PATH"] = self.config.model_path
         env["PYTHONUNBUFFERED"] = "1"  # Ensure real-time log output
+        # Set VLLM_HOST_IP so vLLM's internal get_ip() returns the real node IP.
+        # This is used for Ray placement group node constraints and NCCL communication,
+        # NOT for the API server bind address (that's --host above).
+        # Without this, vLLM auto-detects 0.0.0.0 on some HPC nodes, causing:
+        #   "No available node types can fulfill resource request {'node:0.0.0.0': ...}"
+        env["VLLM_HOST_IP"] = self.ray_cluster.head_ip
         if self.config.server_config:
             env.update(extra_env_vars)
         # Merge extra env vars from caller (e.g., TIKTOKEN_ENCODINGS_BASE for GPT-OSS)
         if self.extra_env_vars:
             env.update(self.extra_env_vars)
+
+        # Reset CPU affinity before spawning the vLLM server so it can use all CPUs.
+        # The parent may be pinned to one NUMA node's CPUs (e.g., CPUs 0-71 on GH200)
+        # by apply_numa_affinity() in ray_utils.py. The child inherits this restriction,
+        # but the vLLM server needs all CPUs for tokenization and scheduling.
+        _saved_affinity = None
+        try:
+            _saved_affinity = os.sched_getaffinity(0)
+            all_cpus = set(range(os.cpu_count() or 1))
+            if _saved_affinity != all_cpus:
+                os.sched_setaffinity(0, all_cpus)
+                print(f"  Reset CPU affinity: {len(_saved_affinity)} → {len(all_cpus)} CPUs for vLLM server")
+        except (OSError, AttributeError):
+            pass
 
         # Start the server process
         self._process = subprocess.Popen(
@@ -271,6 +306,13 @@ class VLLMServer:
             stderr=stderr_dest,
             env=env,
         )
+
+        # Restore the parent's original NUMA affinity (keep orchestrator pinned)
+        if _saved_affinity is not None:
+            try:
+                os.sched_setaffinity(0, _saved_affinity)
+            except (OSError, AttributeError):
+                pass
 
         print(f"  Started vLLM controller (PID: {self._process.pid})")
         if self.log_path:

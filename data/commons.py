@@ -588,12 +588,20 @@ def upload_traces_to_hf(
     dataset: Dataset,
     repo_id: str,
     dataset_type: str,
+    *,
+    max_shard_size: Optional[str] = None,
+    num_shards: Optional[int] = None,
 ) -> None:
     """
     Upload traces to Hugging Face Hub.
     """
     dataset = clean_empty_structs(dataset)
-    dataset.push_to_hub(repo_id)
+    push_kwargs: Dict[str, Any] = {}
+    if max_shard_size:
+        push_kwargs["max_shard_size"] = max_shard_size
+    if num_shards:
+        push_kwargs["num_shards"] = num_shards
+    dataset.push_to_hub(repo_id, **push_kwargs)
     _sync_hf_dataset_card_metadata(dataset, repo_id)
     register_hf_dataset(
         repo_name=repo_id,

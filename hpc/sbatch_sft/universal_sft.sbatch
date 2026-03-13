@@ -18,7 +18,7 @@
 # Usage: The launcher writes a JSON config file and substitutes {config_path}
 # ==============================================================================
 
-set -euo pipefail
+set -eo pipefail
 ml purge
 ulimit -c 0  # Disable core dumps to avoid filling disk space
 
@@ -30,14 +30,11 @@ fi
 # --- Clean up /tmp to prevent state pollution from previous jobs ---
 # Some HPC systems retain /tmp contents across job allocations on the same node.
 # This can cause issues with tmux sessions, container state, and other temporary files.
-# Wrapped in set +u/set -u in case some clusters error out on these commands.
-set +u
 rm -rf /tmp/tmux-* 2>/dev/null || true
 rm -rf /tmp/ray 2>/dev/null || true
 rm -rf /tmp/hf_home 2>/dev/null || true
 rm -rf /tmp/containers 2>/dev/null || true
 rm -rf /tmp/podman-* 2>/dev/null || true
-set -u
 
 # Guard conda deactivate scripts from set -u complaints
 export CONDA_BACKUP_CXX="${CONDA_BACKUP_CXX:-}"
@@ -45,9 +42,6 @@ export CONDA_BACKUP_CC="${CONDA_BACKUP_CC:-}"
 export CONDA_BACKUP_FC="${CONDA_BACKUP_FC:-}"
 
 # --- Module and Conda Setup ---
-# Disable unbound variable check for module loading and conda activation.
-# Module reloads can trigger conda deactivation scripts that reference unset variables.
-set +u
 
 # --- Module loading (cluster-specific, substituted by launcher) ---
 {module_commands}
@@ -81,9 +75,6 @@ fi
 if [ -n "${DCFT_ACTIVATE_ENV:-}" ]; then
   eval "$DCFT_ACTIVATE_ENV"
 fi
-
-# Re-enable strict unbound variable checking after all env setup is complete
-set -u
 
 # --- CUDA path detection (Perlmutter and similar) ---
 {cuda_setup}

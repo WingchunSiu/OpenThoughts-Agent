@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Count unique Dockerfiles (snapshots) from a task dataset.
+"""Count unique environment snapshots from a task dataset.
 
 This script answers the question: "If I run a Harbor job on this dataset with
 the Daytona backend and auto_snapshot=True, how many container snapshots would
 be created?"
 
-Harbor's Daytona backend uses content-based hashing of Dockerfiles to determine
-snapshot identity. Tasks with identical Dockerfile content share a snapshot,
-while tasks with different Dockerfiles each require a separate snapshot build.
+Harbor's Daytona backend uses content-based hashing of the full environment
+directory (Dockerfile + fixture files) to determine snapshot identity. Tasks
+with identical environment directories share a snapshot, while tasks with
+different environments each require a separate snapshot build.
 
 Usage:
     # From a local dataset directory
@@ -38,6 +39,34 @@ from harbor.utils.container_cache import (
     DockerfileStats,
     analyze_task_dockerfiles,
 )
+
+
+def discover_task_dirs(data_paths: list[str | Path]) -> list[Path]:
+    """Find all task subdirs (containing instruction.md) within dataset root dirs."""
+    task_dirs = []
+    for data_path in data_paths:
+        root = Path(data_path)
+        if not root.is_dir():
+            continue
+        for subdir in sorted(root.iterdir()):
+            if subdir.is_dir() and (subdir / "instruction.md").exists():
+                task_dirs.append(subdir)
+    return task_dirs
+
+
+def get_snapshot_env_dirs(
+    task_dirs: list[Path], truncate: int = 12
+) -> dict[str, Path]:
+    """Map env hash -> representative environment dir (containing Dockerfile)."""
+    from harbor.utils.container_cache import get_task_environment_hash
+    from harbor.models.task.paths import TaskPaths
+
+    hash_to_env_dir: dict[str, Path] = {}
+    for task_dir in task_dirs:
+        env_hash = get_task_environment_hash(task_dir, truncate)
+        if env_hash and env_hash not in hash_to_env_dir:
+            hash_to_env_dir[env_hash] = TaskPaths(task_dir).environment_dir
+    return hash_to_env_dir
 
 
 def load_tasks_from_local_dataset(
@@ -100,21 +129,21 @@ def load_tasks_from_registry_dataset(
 
 
 def print_stats(stats: DockerfileStats, verbose: bool = False) -> None:
-    """Print Dockerfile statistics."""
+    """Print environment snapshot statistics."""
     print("\n" + "=" * 60)
-    print("DOCKERFILE / SNAPSHOT ANALYSIS")
+    print("ENVIRONMENT / SNAPSHOT ANALYSIS")
     print("=" * 60)
 
     print(f"\nTotal tasks:              {stats.total_tasks}")
-    print(f"Tasks with Dockerfile:    {stats.tasks_with_dockerfile}")
-    print(f"Tasks without Dockerfile: {stats.tasks_without_dockerfile}")
+    print(f"Tasks with environment:   {stats.tasks_with_dockerfile}")
+    print(f"Tasks without environment:{stats.tasks_without_dockerfile}")
 
     print(f"\n{'=' * 60}")
-    print(f"UNIQUE DOCKERFILES (SNAPSHOTS): {stats.unique_hashes}")
+    print(f"UNIQUE ENVIRONMENTS (SNAPSHOTS): {stats.unique_hashes}")
     print(f"{'=' * 60}")
 
     if stats.unique_hashes == 0:
-        print("\nNo Dockerfiles found in tasks.")
+        print("\nNo environment directories found in tasks.")
         return
 
     # Calculate reuse statistics
@@ -139,7 +168,7 @@ def print_stats(stats: DockerfileStats, verbose: bool = False) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Count unique Dockerfiles (snapshots) from a task dataset.",
+        description="Count unique environment snapshots from a task dataset.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -227,7 +256,7 @@ def main():
         print("No tasks found matching the specified criteria.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(task_dirs)} tasks. Analyzing Dockerfiles...")
+    print(f"Found {len(task_dirs)} tasks. Analyzing environments...")
 
     # Analyze Dockerfiles
     stats = analyze_task_dockerfiles(task_dirs)
@@ -242,7 +271,7 @@ def main():
     print(f"With auto_snapshot=True, this dataset would create {stats.unique_hashes} snapshot(s).")
 
     if stats.tasks_without_dockerfile > 0:
-        print(f"\nNote: {stats.tasks_without_dockerfile} task(s) have no Dockerfile and would use")
+        print(f"\nNote: {stats.tasks_without_dockerfile} task(s) have no environment directory and would use")
         print("      docker_image from task config or fail to start.")
 
 

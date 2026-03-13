@@ -17,5 +17,6 @@ DATA_ARGUMENT_KEYS: list[str] = [
     "content_tag",
     "user_tag",
     "assistant_tag",
+    # Tools column for ShareGPT-style datasets
+    "tools",
 ]
-

@@ -18,7 +18,7 @@
 # Usage: The launcher writes a JSON config file and substitutes {config_path}
 # ==============================================================================
 
-set -euo pipefail
+set -eo pipefail
 ulimit -c 0  # Disable core dumps to avoid filling disk space
 ulimit -n 65536 2>/dev/null || true  # Raise fd limit for high-concurrency Harbor trials
 
@@ -30,19 +30,13 @@ fi
 # --- Clean up /tmp to prevent state pollution from previous jobs ---
 # Some HPC systems retain /tmp contents across job allocations on the same node.
 # This can cause issues with tmux sessions, container state, and other temporary files.
-# Wrapped in set +u/set -u in case some clusters error out on these commands.
-set +u
 rm -rf /tmp/tmux-* 2>/dev/null || true
 rm -rf /tmp/ray 2>/dev/null || true
 rm -rf /tmp/hf_home 2>/dev/null || true
 rm -rf /tmp/containers 2>/dev/null || true
 rm -rf /tmp/podman-* 2>/dev/null || true
-set -u
 
 # --- Module and Conda Setup ---
-# Disable unbound variable check for module loading and conda activation.
-# Module reloads can trigger conda deactivation scripts that reference unset variables.
-set +u
 
 # --- Module loading (cluster-specific, substituted by launcher) ---
 {module_commands}
@@ -65,8 +59,6 @@ fi
 {conda_activate}
 
 # --- Source environment files (before RL env activation) ---
-# Keep set +u active - dotenv files and RL env activation may trigger module reloads
-# which can trigger conda deactivation scripts with unset variables
 # Source dotenv and secrets first, but NOT DCFT_ACTIVATE_ENV which would clobber RL env
 if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/{cluster_env_file}" ]; then
   source "$DCFT/hpc/dotenv/{cluster_env_file}"
@@ -75,6 +67,17 @@ if [ -n "${DC_AGENT_SECRET_ENV:-}" ] && [ -f "$DC_AGENT_SECRET_ENV" ]; then
   set -a
   source "$DC_AGENT_SECRET_ENV"
   set +a
+fi
+
+# --- Daytona API key override (from --daytona_api_key CLI argument) ---
+DAYTONA_API_KEY_OVERRIDE="{daytona_api_key_override}"
+if [ -n "$DAYTONA_API_KEY_OVERRIDE" ]; then
+  export DAYTONA_API_KEY="$DAYTONA_API_KEY_OVERRIDE"
+fi
+
+# --- Daytona target (tells Harbor this is an RL job) ---
+if [ "{harbor_env}" = "daytona" ]; then
+  export DAYTONA_TARGET="RL"
 fi
 
 # --- RL Environment Activation ---
@@ -94,9 +97,6 @@ fi
 
 # --- NCCL/Networking settings (cluster-specific) ---
 {nccl_exports}
-
-# Re-enable strict unbound variable checking after all env setup is complete
-set -u
 
 # --- Standard environment variables ---
 export PYTHONFAULTHANDLER=1

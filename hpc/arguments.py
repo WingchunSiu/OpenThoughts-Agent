@@ -145,6 +145,10 @@ class LlamaFactoryArgs:
     assistant_tag: Optional[str] = field(
         default="gpt", metadata={"help": "Assistant tag for the dataset"}
     )
+    tool_call_tag: Optional[str] = field(
+        default=None,
+        metadata={"help": "Tools column in ShareGPT datasets (maps to LlamaFactory 'tools' field)"},
+    )
     mix_strategy: Optional[str] = field(
         default=None,
         metadata={
@@ -431,6 +435,12 @@ class LaunchArgs:
             "help": "Enable Megatron Core Adapter integration (sets USE_MCA=1 for SFT jobs)",
             "store_true": True,
         },
+    )
+
+    # Daytona API key override (takes precedence over secrets.env)
+    daytona_api_key: Optional[str] = field(
+        default=None,
+        metadata={"help": "Override DAYTONA_API_KEY (takes precedence over secrets.env)"}
     )
 
 
@@ -727,6 +737,26 @@ class RLArgs:
             "help": "Create the HuggingFace Hub repo as private",
             "store_true": True,
         }
+    )
+    trace_upload_enabled: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Enable post-training trace upload to HuggingFace (overrides YAML config)"}
+    )
+    trace_upload_repo_org: Optional[str] = field(
+        default=None,
+        metadata={"help": "HuggingFace org for trace upload repo (default: DCAgent)"}
+    )
+    trace_upload_episodes: Optional[str] = field(
+        default=None,
+        metadata={"help": "Which episodes to upload: 'last' or 'all' (default: last)"}
+    )
+    trace_upload_dataset_type: Optional[str] = field(
+        default=None,
+        metadata={"help": "Dataset type for trace upload registration: 'SFT' or 'RL' (default: SFT)"}
+    )
+    trace_upload_cleanup: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Remove traces directory after successful upload to conserve inodes (default: true)"}
     )
 
 

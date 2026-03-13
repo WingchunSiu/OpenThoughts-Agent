@@ -111,6 +111,12 @@ class HPC(BaseModel):
     # When True, logs numastat and nvidia-smi output every 5 minutes during Ray jobs
     enable_numa_monitoring: bool = False
 
+    # Disable Ray's memory monitor (RAY_memory_monitor_refresh_ms=0) for all job types.
+    # Needed when either: (1) GH200 unified memory makes GPU HBM visible as system RAM,
+    # causing Ray to double-count GPU allocations toward the OOM threshold, or
+    # (2) cgroup memory reporting is broken (returns -1), causing spurious kills.
+    unified_gpu_memory: bool = False
+
     # Environment variables to unset after module loading (e.g., ROCR_VISIBLE_DEVICES on Frontier)
     # Modules may set these but they conflict with Ray/vLLM
     env_unsets: List[str] = []
@@ -167,12 +173,11 @@ class HPC(BaseModel):
         """
         if not self.modules and not self.env_unsets:
             return ""
-        lines = ["set +u"]
+        lines = []
         lines.extend(f"module load {m}" for m in self.modules)
         # Unset env vars that modules set but conflict with Ray/vLLM
         for var in self.env_unsets:
             lines.append(f"unset {var}")
-        lines.append("set -u")
         return "\n".join(lines)
 
     def get_env_exports(self) -> str:
@@ -289,6 +294,9 @@ class HPC(BaseModel):
         env_parts.append("LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}")
         env_parts.append("PYTHONPATH=${PYTHONPATH:-}")
         env_parts.append("HF_HOME=${HF_HOME:-}")
+        # Propagate CUDA_HOME so Triton can find ptxas on worker nodes
+        # (set by 'module load CUDA/...' but not always inherited by Ray workers)
+        env_parts.append("CUDA_HOME=${CUDA_HOME:-}")
         return " ".join(env_parts)
 
     def get_nccl_exports(self) -> str:
@@ -320,6 +328,17 @@ class HPC(BaseModel):
         lines = [
             "# --- Ray defaults ---",
             'export RAY_CGRAPH_get_timeout="${RAY_CGRAPH_get_timeout:-900}"',
+        ]
+
+        if self.unified_gpu_memory:
+            lines += [
+                "# GH200 unified memory: GPU HBM is part of system RAM, so Ray's",
+                "# memory monitor double-counts GPU allocations and kills workers",
+                "# during model loading.  Disable the monitor entirely.",
+                'export RAY_memory_monitor_refresh_ms=0',
+            ]
+
+        lines += [
             'if [ -z "${RAY_TMPDIR:-}" ]; then',
             tmpdir_base_line,
             '  RAY_TMPDIR="${RAY_TMPDIR_BASE}/ray_${SLURM_JOB_ID:-$$}"',
@@ -699,6 +718,8 @@ jureca = HPC(
     env_vars={
         "PYTHONFAULTHANDLER": "1",
         "WANDB_MODE": "offline",  # No internet on compute nodes
+        # Disable symmetric memory allreduce — send_fd fails in Singularity containers
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
     },
     # NCCL/networking settings for SFT training (InfiniBand, no internet)
     nccl_settings={
@@ -727,14 +748,17 @@ jupiter = HPC(
     # Matches login nodes like jpbl-s01-01 (jupiter booster login) and compute nodes
     hostname_pattern=r"jp(bl|cn|c)-.*",
     dotenv_filename="jupiter.env",
-    account="jureap59",
+    account="reformo",
     partition="booster",
     gpus_per_node=4,  # 4x GH200 superchips per node
     cpus_per_node=288,  # 4 Grace CPUs × 72 cores = 288 ARM cores per node
     internet_node=False,  # Compute nodes have no internet (like other JSC clusters)
     gpus_type="GH200 96GB (H100 + Grace)",
+    unified_gpu_memory=True,
     total_partition_nodes=6000,  # ~6000 booster nodes
     gpu_directive_format="--gres=gpu:{n}",
+    # CUDA module required for DeepSpeed (sets CUDA_HOME=/e/software/.../CUDA/13)
+    modules=["nvidia-compilers/25.9-CUDA-13"],
     env_vars={
         "WANDB_MODE": "offline",  # Compute nodes have no internet
         # Force GLOO and NCCL to use IPv4 (IPv6 doesn't work on Jupiter compute nodes)
@@ -749,6 +773,8 @@ jupiter = HPC(
         # acompletion() calls, the abandoned coroutine's aiohttp session gets GC'd,
         # closing the socket fd while uvloop's epoll still references it → EBADF → SIGABRT.
         "DISABLE_AIOHTTP_TRANSPORT": "True",
+        # Disable symmetric memory allreduce — send_fd fails in Singularity containers
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
     },
     # NOTE: Do NOT use master_addr_suffix="i" - the "i" suffixed hostname is not DNS-resolvable
     # InfiniBand routing is handled by NCCL_SOCKET_IFNAME=ib0 instead
@@ -797,6 +823,8 @@ juwels = HPC(
     gpu_directive_format="--gres=gpu:{n}",
     env_vars={
         "WANDB_MODE": "offline",  # No internet on compute nodes
+        # Disable symmetric memory allreduce — send_fd fails in Singularity containers
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
     },
     # NCCL/networking settings for SFT training (InfiniBand, no internet)
     nccl_settings={
@@ -876,12 +904,15 @@ capella = HPC(
     nccl_settings={
         "NCCL_DEBUG": "INFO",
         "NCCL_PROTO": "simple",
+        "NCCL_TIMEOUT": "1800",
         "NCCL_IB_TIMEOUT": "23",
+        "NCCL_IB_RETRY_CNT": "13",
         "FI_EFA_FORK_SAFE": "1",
         "FI_LOG_LEVEL": "1",
         "FI_EFA_USE_DEVICE_RDMA": "1",
         "NCCL_NET_GDR_LEVEL": "SYS",
         "NCCL_NET_GDR_READ": "1",
+        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
     },
     training_launcher="torchrun",
     # Job scaling (from zih_capella.env)
@@ -889,6 +920,8 @@ capella = HPC(
     num_nodes_slow=1,
     num_nodes_default=1,
     num_nodes_fast=4,
+    # Exclude flaky nodes: c69,c76,c144 have hanging SLURM prologs; c63,c108 have IB transport errors; c77 has rendezvous errors
+    node_exclusion_list="c63,c69,c76,c77,c108,c144",
     # ZIH license requirements
     extra_sbatch_directives=["#SBATCH --licenses=walrus:1,octopus:1,narwhal:1,cat:1"],
 )
@@ -910,12 +943,15 @@ alpha = HPC(
     nccl_settings={
         "NCCL_DEBUG": "INFO",
         "NCCL_PROTO": "simple",
+        "NCCL_TIMEOUT": "1800",
         "NCCL_IB_TIMEOUT": "23",
+        "NCCL_IB_RETRY_CNT": "13",
         "FI_EFA_FORK_SAFE": "1",
         "FI_LOG_LEVEL": "1",
         "FI_EFA_USE_DEVICE_RDMA": "1",
         "NCCL_NET_GDR_LEVEL": "SYS",
         "NCCL_NET_GDR_READ": "1",
+        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
     },
     training_launcher="torchrun",
     # Job scaling (same as Capella, ZIH cluster)
@@ -965,6 +1001,7 @@ vista = HPC(
     cpus_per_node=72,
     internet_node=True,
     gpus_type="GH200 96GB",
+    unified_gpu_memory=True,
     total_partition_nodes=552,
     pretok_time_limit="4:00:00",
     pretok_partition="gh",
@@ -1062,7 +1099,7 @@ nyugreene = HPC(
 nyutorch = HPC(
     name="nyutorch",
     # hostname_pattern=r"gh\d+\.hpc\.nyu\.edu",
-    hostname_pattern=r"torch-login.*\.hpc\.nyu\.edu",
+    hostname_pattern=r"torch-login.*\.(hpc\.nyu\.edu|hpc-infra\.svc\.cluster\.local)",
     dotenv_filename="nyutorch.env",
     account="torch_pr_40_tandon_advanced",
     partition="",
@@ -1091,6 +1128,9 @@ nyutorch = HPC(
     library_paths={
         "TRITON_CC": "/usr/bin/gcc",
     },
+    # Ray memory monitor is broken on Torch — cgroup returns -1, triggering
+    # spurious OOM kills during model weight loading.
+    unified_gpu_memory=True,
     # Job scaling (from nyutorch.env)
     default_time_limit="24:00:00",
     max_time_limit="47:59:00",

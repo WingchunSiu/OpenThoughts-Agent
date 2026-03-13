@@ -345,7 +345,27 @@ def start_vllm_controller(
 
     stdout, stderr, log_file = _open_log_file(log_path)
 
+    # Reset CPU affinity before spawning the vLLM server so it can use all CPUs.
+    # The parent may be pinned to one NUMA node (e.g., CPUs 0-71 on GH200) by
+    # apply_numa_affinity(). The vLLM server needs all CPUs for tokenization/scheduling.
+    _saved_affinity = None
+    try:
+        _saved_affinity = os.sched_getaffinity(0)
+        all_cpus = set(range(os.cpu_count() or 1))
+        if _saved_affinity != all_cpus:
+            os.sched_setaffinity(0, all_cpus)
+    except (OSError, AttributeError):
+        pass
+
     popen = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, env=env)
+
+    # Restore the parent's original NUMA affinity
+    if _saved_affinity is not None:
+        try:
+            os.sched_setaffinity(0, _saved_affinity)
+        except (OSError, AttributeError):
+            pass
+
     process = ManagedProcess(name="vllm_controller", proc=popen, _log_handle=log_file)
     return process
 
@@ -773,6 +793,12 @@ class LocalHarborRunner:
         if fd_interval > 0:
             self._fd_monitor = FileDescriptorMonitor(interval_seconds=fd_interval)
             self._fd_monitor.start()
+
+        # Set NUMA affinity for the orchestrator process (binds to GPU 0's NUMA node).
+        # On GH200 (Jupiter), this ensures Ray/vLLM subprocesses inherit optimal
+        # CPU-GPU locality. No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
+        from hpc.numa_utils import apply_numa_affinity
+        apply_numa_affinity(gpu_id=0)
 
         # Start Ray and vLLM only if needed (local vLLM engine)
         if needs_local_vllm:

@@ -18,7 +18,7 @@
 # Usage: The launcher writes a JSON config file and substitutes {config_path}
 # ==============================================================================
 
-set -euo pipefail
+set -eo pipefail
 ulimit -c 0  # Disable core dumps to avoid filling disk space
 
 # Handle bash completion scripts that use BASH_COMPLETION_DEBUG
@@ -29,26 +29,16 @@ fi
 # --- Clean up /tmp to prevent state pollution from previous jobs ---
 # Some HPC systems retain /tmp contents across job allocations on the same node.
 # This can cause issues with tmux sessions, container state, and other temporary files.
-# Wrapped in set +u/set -u in case some clusters error out on these commands.
-set +u
 rm -rf /tmp/tmux-* 2>/dev/null || true
 rm -rf /tmp/ray 2>/dev/null || true
 rm -rf /tmp/hf_home 2>/dev/null || true
 rm -rf /tmp/containers 2>/dev/null || true
 rm -rf /tmp/podman-* 2>/dev/null || true
-set -u
 
 # --- Module and Conda Setup ---
-# Disable unbound variable check for module loading and conda activation.
-# Module reloads can trigger conda deactivation scripts that reference unset variables.
-set +u
 
 # --- Module loading (cluster-specific, substituted by launcher) ---
 {module_commands}
-
-# Some module command templates toggle set -u; ensure we stay in +u mode
-# through conda activation and env sourcing to avoid unbound variable errors.
-set +u
 
 # --- Environment setup ---
 if [ -n "${DCFT_PRIVATE:-}" ]; then
@@ -68,8 +58,6 @@ fi
 {conda_activate}
 
 # --- Source environment files ---
-# Keep set +u active - dotenv files and DCFT_ACTIVATE_ENV may trigger module reloads
-# which can trigger conda deactivation scripts with unset variables
 if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/{cluster_env_file}" ]; then
   source "$DCFT/hpc/dotenv/{cluster_env_file}"
 fi
@@ -80,8 +68,11 @@ if [ -n "${DCFT_ACTIVATE_ENV:-}" ]; then
   eval "$DCFT_ACTIVATE_ENV"
 fi
 
-# Re-enable strict unbound variable checking after all env setup is complete
-set -u
+# --- Daytona API key override (from --daytona_api_key CLI argument) ---
+DAYTONA_API_KEY_OVERRIDE="{daytona_api_key_override}"
+if [ -n "$DAYTONA_API_KEY_OVERRIDE" ]; then
+  export DAYTONA_API_KEY="$DAYTONA_API_KEY_OVERRIDE"
+fi
 
 # --- Standard environment variables ---
 export HF_HOME="/tmp/hf_home"
@@ -100,6 +91,9 @@ export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
 export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 export RAY_NOSET_CUDA_VISIBLE_DEVICES=1
 
+# --- Cluster-specific environment variables ---
+{env_exports}
+
 # --- Ray defaults ---
 {ray_env_exports}
 
@@ -112,6 +106,12 @@ source "$WORKDIR/hpc/shell_utils/triton_cache.sh"
 mkdir -p "{experiments_dir}"
 mkdir -p "{experiments_dir}/logs"
 mkdir -p "{experiments_dir}/ray_logs"
+
+# --- SSH Tunneling (JSC clusters only) ---
+{ssh_tunnel_setup}
+
+# --- SOCKS5 Proxy Setup (JSC clusters - alternative to SSH tunnel) ---
+{proxy_setup}
 
 # --- Cleanup trap to preserve Ray logs ---
 # Ray uses /tmp by default for logs/sockets. This trap copies them to the

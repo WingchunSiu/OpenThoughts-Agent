@@ -288,7 +288,7 @@ def _install_inline_subagent_merger() -> None:
         return conv
 
     def patched_extract_conversations_from_trajectory(
-        trajectory_file: Path, run_metadata: Dict[str, Any]
+        trajectory_file: Path, run_metadata: Dict[str, Any], embed_tools_in_conversation: bool = True,
     ) -> List[Dict[str, Any]]:
         try:
             trajectory_data = json.loads(trajectory_file.read_text())
@@ -408,11 +408,13 @@ def main() -> None:
         to_sharegpt=bool(args.to_sharegpt),
         repo_id=None,
         push=False,
-        verbose=True,
+        verbose=False,
         success_filter=success_filter,
         export_subagents=False,
         include_instruction=True,
         include_verifier_output=True,
+        chunk_size=1000,
+        use_rich_progress=True,
     )
     try:
         from scripts.harbor.run_and_export_traces import _finalize_trace_dataset  # type: ignore
@@ -431,8 +433,20 @@ def main() -> None:
             f"are installed. Import error: {exc}"
         )
 
+    max_shard_size = "100MB"
+    num_shards = None
+    print(
+        f"[trace-export] Using chunked upload: max_shard_size={max_shard_size}."
+    )
+
     # upload_traces_to_hf handles cleaning empty struct columns and push_to_hub
-    upload_traces_to_hf(ds, args.repo_id, args.dataset_type)
+    upload_traces_to_hf(
+        ds,
+        args.repo_id,
+        args.dataset_type,
+        max_shard_size=max_shard_size,
+        num_shards=num_shards,
+    )
     print(f"[trace-export] Upload complete: https://huggingface.co/datasets/{args.repo_id}")
 
     if args.skip_register:

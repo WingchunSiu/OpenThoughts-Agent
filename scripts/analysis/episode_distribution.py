@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-from datasets import load_dataset
 
-try:
-    import tiktoken
-except ImportError:  # pragma: no cover - optional dependency
-    tiktoken = None
-
-
-_EPISODE_PATTERN = re.compile(r"(\d+)")
+from scripts.analysis.utils import (
+    extract_episode_numbers,
+    count_tokens as _count_tokens,
+    get_tiktoken_encoder as _get_token_encoder,
+    load_hf_trace_dataset,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -70,44 +67,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _extract_episode_numbers(values: Iterable) -> List[int]:
-    episodes: List[int] = []
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, (int, float)):
-            episodes.append(int(value))
-            continue
-        if isinstance(value, str):
-            cleaned = value.replace("-", " ").replace("_", " ")
-            match = _EPISODE_PATTERN.search(cleaned)
-            if match:
-                episodes.append(int(match.group(1)))
-            continue
-        # Fallback: try to interpret as dict with 'episode' key or skip silently
-        if isinstance(value, dict):
-            inner = value.get("episode")
-            if isinstance(inner, (int, float)):
-                episodes.append(int(inner))
-            elif isinstance(inner, str):
-                cleaned_inner = inner.replace("-", " ").replace("_", " ")
-                match = _EPISODE_PATTERN.search(cleaned_inner)
-                if match:
-                    episodes.append(int(match.group(1)))
-    return episodes
-
-
-def _get_token_encoder():
-    if tiktoken is None:
-        return None
-    return tiktoken.get_encoding("cl100k_base")
-
-
-def _count_tokens(text: str, encoder) -> int:
-    if not text:
-        return 0
-    if encoder is not None:
-        return len(encoder.encode(text))
-    return len(text.split())
+    """Thin wrapper preserved for internal call-sites."""
+    return extract_episode_numbers(values)
 
 
 def _extract_token_counts(conversations_col: Iterable, encoder) -> List[int]:
@@ -155,7 +116,7 @@ def _prepare_series(episodes: Sequence[int], sigma: float) -> Tuple[np.ndarray, 
 
 
 def _load_dataset(repo_id: str, split: str):
-    return load_dataset(repo_id, split=split)
+    return load_hf_trace_dataset(repo_id, split=split)
 
 
 def main() -> None:

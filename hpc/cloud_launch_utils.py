@@ -38,9 +38,40 @@ from hpc.launch_utils import PROJECT_ROOT, repo_relative
 from hpc.cli_utils import parse_comma_separated
 
 # Re-export HuggingFace utilities for backwards compatibility
-from hpc.hf_utils import is_hf_dataset_path
+from hpc.hf_utils import is_hf_dataset_path, is_raw_tasks_directory
 
 DEFAULT_LOG_SYNC_INTERVAL = 120  # 2 minutes
+
+
+def _ensure_sky_api_server(timeout: int = 30) -> None:
+    """Ensure the SkyPilot API server is running, starting it if needed."""
+    import urllib.request
+
+    try:
+        urllib.request.urlopen("http://127.0.0.1:46580/api/health", timeout=3)
+        return
+    except Exception:
+        pass
+
+    print("[cloud] SkyPilot API server not running — starting it via 'sky api start'...")
+    result = subprocess.run(
+        [sys.executable, "-m", "sky", "api", "start"],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to start SkyPilot API server:\n{result.stderr or result.stdout}"
+        )
+
+    # Verify it's actually reachable
+    try:
+        urllib.request.urlopen("http://127.0.0.1:46580/api/health", timeout=5)
+        print("[cloud] SkyPilot API server is ready.")
+    except Exception as exc:
+        raise RuntimeError(
+            f"SkyPilot API server started but health check failed: {exc}\n"
+            "Check ~/.sky/api_server/server.log for details."
+        ) from exc
 DEFAULT_CLOUD_OUTPUT_PREFIX = "trace_runs"  # Default output subdir prefix for cloud jobs
 
 # Harbor git URL for cloud reinstalls (always fetch latest from branch)
@@ -55,8 +86,8 @@ HARBOR_GIT_URL = "git+https://github.com/laude-institute/harbor.git@penfever/tem
 def derive_cloud_job_name(args: "argparse.Namespace", task_prefix: str = "cloud") -> str:
     """Construct a fallback job name for cloud launches.
 
-    Pattern: {task_prefix}_{cloud_provider}_{model}_{dataset}
-    Example: tracegen_gcp_qwen2.5-7b-instruct_swebench-verified
+    Pattern: {task_prefix}__{dataset}__{model}__{cloud_provider}
+    Example: tracegen__swebench-verified__qwen2.5-7b-instruct__gcp
 
     Args:
         args: Parsed argparse namespace
@@ -66,6 +97,7 @@ def derive_cloud_job_name(args: "argparse.Namespace", task_prefix: str = "cloud"
         Derived job name (max 63 chars for SkyPilot cluster naming)
     """
     import re
+    from hpc.launch_utils import shorten_model_name, JOB_NAME_SEP, truncate_for_cloud
 
     def _sanitize_component(value: str) -> str:
         """Sanitize a string for use in job names."""
@@ -76,18 +108,7 @@ def derive_cloud_job_name(args: "argparse.Namespace", task_prefix: str = "cloud"
 
     parts: list[str] = [task_prefix]
 
-    # Include cloud provider (use first if comma-separated)
-    cloud_provider = getattr(args, "cloud_provider", None)
-    if cloud_provider:
-        first_provider = cloud_provider.split(",")[0].strip()
-        parts.append(_sanitize_component(first_provider))
-
-    # Model component
-    model = getattr(args, "model", None)
-    if model:
-        parts.append(_sanitize_component(str(model)))
-
-    # Dataset component (tasks_input_path, harbor_dataset, dataset, or dataset_path)
+    # Dataset first
     dataset_value = (
         getattr(args, "tasks_input_path", None)
         or getattr(args, "harbor_dataset", None)
@@ -97,10 +118,20 @@ def derive_cloud_job_name(args: "argparse.Namespace", task_prefix: str = "cloud"
     if dataset_value:
         parts.append(_sanitize_component(str(dataset_value)))
 
-    job_name = "_".join(filter(None, parts))
+    # Model (truncated)
+    model = getattr(args, "model", None)
+    if model:
+        parts.append(shorten_model_name(str(model)))
+
+    # Cloud provider last
+    cloud_provider = getattr(args, "cloud_provider", None)
+    if cloud_provider:
+        first_provider = cloud_provider.split(",")[0].strip()
+        parts.append(_sanitize_component(first_provider))
+
+    job_name = JOB_NAME_SEP.join(filter(None, parts))
 
     # SkyPilot cluster names must be valid DNS labels (<= 63 chars, lowercase)
-    from hpc.launch_utils import truncate_for_cloud
     job_name = truncate_for_cloud(job_name).lower()
     return job_name
 
@@ -546,14 +577,36 @@ def prepare_hf_dataset_for_sync(
         print(f"[hf-prep] Downloaded to: {snapshot_dir}")
 
     # Check format: raw files vs parquet
-    task_dirs = list(snapshot_dir.glob("task-*"))
     parquet_files = list(snapshot_dir.rglob("*.parquet"))
 
-    if task_dirs:
-        # Raw files format - use directly
+    if is_raw_tasks_directory(snapshot_dir):
+        # Raw files format — but the HF cache uses symlinks to a blob store
+        # (e.g. instruction.md -> ../../../blobs/<hash>).  These relative
+        # symlinks break when SkyPilot rsyncs only the snapshot directory to
+        # the VM.  Copy with dereferencing so the VM gets real files.
         if verbose:
-            print(f"[hf-prep] Found {len(task_dirs)} task directories (raw format)")
-        return snapshot_dir
+            print(f"[hf-prep] Detected raw task directories (format has instruction.md files)")
+
+        import shutil
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            if verbose:
+                print(f"[hf-prep] Reusing cached copy at {output_path}")
+            return output_path
+
+        if verbose:
+            print(f"[hf-prep] Copying with symlink dereferencing to {output_path}")
+        shutil.copytree(
+            str(snapshot_dir),
+            str(output_path),
+            symlinks=False,          # dereference symlinks → real files
+            dirs_exist_ok=False,
+        )
+        if verbose:
+            task_count = sum(1 for d in output_path.iterdir() if d.is_dir() and not d.name.startswith('.'))
+            print(f"[hf-prep] Copied {task_count} task directories")
+        return output_path
 
     elif parquet_files:
         # Parquet format - extract first
@@ -1016,6 +1069,8 @@ class CloudLauncher:
         """Launch SkyPilot task and return (job_id, cluster_name)."""
         import sky
         from typing import Sequence
+
+        _ensure_sky_api_server()
 
         launch_kwargs = {"cluster_name": args.cluster_name}
         if args.autostop > 0:

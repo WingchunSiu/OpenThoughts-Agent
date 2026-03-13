@@ -47,6 +47,27 @@ _HOSTED_VLLM_DUMMY_API_KEY = "EMPTY"
 CLOUD_JOB_NAME_MAX_LENGTH = 63
 """Maximum job name length for cloud runs (SkyPilot/Kubernetes DNS label limit)."""
 
+# Job-name field separator (two characters for visual clarity in dashboards).
+JOB_NAME_SEP = "__"
+
+# Maximum characters kept for the model component in auto-generated job names.
+MODEL_NAME_MAX_LENGTH = 20
+
+
+def shorten_model_name(raw: str, max_len: int = MODEL_NAME_MAX_LENGTH) -> str:
+    """Return a short, filesystem-safe model label for job names.
+
+    Strips the org/ prefix, replaces non-alphanumeric chars with hyphens,
+    and hard-truncates to *max_len* characters.
+    """
+    name = raw.strip().rstrip("/")
+    if "/" in name:
+        name = name.split("/")[-1]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-_")
+    if len(name) > max_len:
+        name = name[:max_len].rstrip("-_")
+    return name or "model"
+
 
 def truncate_for_cloud(job_name: str) -> str:
     """Truncate a job name to be compatible with cloud/SkyPilot runs.
@@ -393,6 +414,19 @@ def normalize_cli_args(args_spec: Any) -> list[str]:
         f"Unsupported CLI args specification of type {type(args_spec).__name__}; "
         "expected string, list/tuple, or mapping."
     )
+
+
+# =============================================================================
+# Environment Override Utilities
+# =============================================================================
+
+def get_daytona_api_key_override(exp_args: Dict[str, Any]) -> str:
+    """Return the Daytona API key override for sbatch template substitution.
+
+    Priority: --daytona_api_key CLI arg > DAYTONA_API_KEY env var at launch time.
+    Returns empty string when no override is specified (secrets.env wins).
+    """
+    return exp_args.get("daytona_api_key") or os.environ.get("DAYTONA_API_KEY", "")
 
 
 # =============================================================================
@@ -875,7 +909,10 @@ def sanitize_repo_component(value: Optional[str]) -> Optional[str]:
 
 
 def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
-    """Construct a fallback job name for datagen/trace launches."""
+    """Construct a fallback job name for datagen/trace launches.
+
+    Order: prefix__dataset__model__harbor_config
+    """
 
     def _sanitize_component(value: str) -> str:
         value = value.strip().rstrip("/")
@@ -886,11 +923,9 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
     def _extract_harbor_config_label(config_path: str) -> str:
         """Extract a short label from harbor config path (e.g., '16concurrency_eval')."""
         filename = Path(config_path).stem  # Remove .yaml extension
-        # Remove common prefixes like 'trace_'
         for prefix in ("trace_", "harbor_"):
             if filename.startswith(prefix):
                 filename = filename[len(prefix):]
-        # Truncate if too long (keep first 30 chars)
         if len(filename) > 30:
             filename = filename[:30].rstrip("-_")
         return filename
@@ -899,34 +934,34 @@ def derive_datagen_job_name(cli_args: Mapping[str, Any]) -> str:
     prefix = "eval" if job_type_hint == JobType.EVAL.value else "datagen"
     parts: list[str] = [prefix]
 
+    # --- dataset first ---
+    dataset_slug = cli_args.get("harbor_dataset")
+    dataset_path = cli_args.get("tasks_input_path") or cli_args.get("eval_dataset_path")
+    if dataset_slug:
+        parts.append(_sanitize_component(str(dataset_slug)))
+    elif dataset_path:
+        parts.append(_sanitize_component(str(dataset_path)))
+
+    # --- then model (truncated) ---
     repo_candidate = cli_args.get("datagen_target_repo") or cli_args.get("trace_target_repo")
     model_candidate = cli_args.get("datagen_model") or cli_args.get("trace_model")
     if model_candidate:
-        parts.append(_sanitize_component(str(model_candidate)))
+        parts.append(shorten_model_name(str(model_candidate)))
     elif repo_candidate:
         parts.append(_sanitize_component(str(repo_candidate)))
 
-    # Include harbor config label for better job identification
+    # --- harbor config label last ---
     harbor_config = cli_args.get("trace_harbor_config")
     if harbor_config:
         config_label = _extract_harbor_config_label(str(harbor_config))
         if config_label:
             parts.append(config_label)
 
-    dataset_component = None
-    dataset_slug = cli_args.get("harbor_dataset")
-    dataset_path = cli_args.get("tasks_input_path") or cli_args.get("eval_dataset_path")
-    if dataset_slug:
-        dataset_component = _sanitize_component(str(dataset_slug))
-    elif dataset_path:
-        dataset_component = _sanitize_component(str(dataset_path))
-    if dataset_component:
-        parts.append(dataset_component)
-
-    job_name = "_".join(filter(None, parts))
+    job_name = JOB_NAME_SEP.join(filter(None, parts))
     if job_type_hint == JobType.EVAL.value:
-        if job_name.startswith("eval_"):
-            job_name = "eval-" + job_name[len("eval_"):]
+        eval_prefix = f"eval{JOB_NAME_SEP}"
+        if job_name.startswith(eval_prefix):
+            job_name = "eval-" + job_name[len(eval_prefix):]
         elif job_name == "eval":
             job_name = "eval-run"
         elif not job_name.startswith("eval-"):
@@ -944,71 +979,102 @@ def derive_consolidate_job_name(cli_args: Mapping[str, Any]) -> str:
         or "consolidate"
     )
     identifier = sanitize_repo_for_job(str(identifier_raw))
-    suffix = "_consolidate"
+    suffix = f"{JOB_NAME_SEP}consolidate"
     max_prefix_len = max(1, 96 - len(suffix))
     if len(identifier) > max_prefix_len:
         identifier = identifier[:max_prefix_len]
     return f"{identifier}{suffix}"
 
 
+def _strip_yaml_ext(value: str) -> str:
+    """Remove .yaml / .yml extensions from a value string."""
+    for ext in (".yaml", ".yml"):
+        if value.endswith(ext):
+            return value[: -len(ext)]
+    return value
+
+
+# Keys that identify the dataset across different job types.
+_DATASET_KEYS = {"dataset", "train_data"}
+# Keys that identify the model across different job types.
+_MODEL_KEYS = {"model_name_or_path", "model_path"}
+# Keys that carry a config file path (include stem only, no extension).
+_CONFIG_KEYS = {"rl_config"}
+
+
 def derive_default_job_name(cli_args: Mapping[str, Any]) -> str:
-    """Construct job names for non-datagen, non-consolidate workloads."""
+    """Construct job names for SFT / RL / SFT-MCA workloads.
 
-    job_name_components: list[str] = []
-    job_name_suffix: Optional[str] = None
+    Order: config__dataset__model[__extras]
+    The model component is hard-truncated to MODEL_NAME_MAX_LENGTH characters.
+    """
 
+    # ---- extract primary components ------------------------------------
+    # Dataset: first non-empty value across dataset key aliases
+    dataset_raw = ""
+    for dk in _DATASET_KEYS:
+        dataset_raw = cli_args.get(dk) or dataset_raw
+    # Dataset: may be comma-separated or JSON list (multi-dataset)
+    dataset_parts: list[str] = []
+    for ds in str(dataset_raw).replace("[", "").replace("]", "").replace('"', "").split(","):
+        ds_name = ds.strip().split("/")[-1]
+        if ds_name and ds_name != "None":
+            dataset_parts.append(ds_name)
+    dataset_component = "-".join(dataset_parts) if dataset_parts else ""
+
+    # Model: first non-empty value across model key aliases, shortened
+    model_raw = ""
+    for mk in _MODEL_KEYS:
+        model_raw = cli_args.get(mk) or model_raw
+    model_component = shorten_model_name(str(model_raw)) if model_raw and str(model_raw) != "None" else ""
+
+    # Config: stem only (no .yaml/.yml extension)
+    config_component = ""
+    for ck in _CONFIG_KEYS:
+        cfg_val = cli_args.get(ck) or ""
+        if cfg_val and str(cfg_val) != "None":
+            config_component = _strip_yaml_ext(Path(str(cfg_val)).stem)
+            break
+
+    # ---- collect remaining meaningful args (extras) --------------------
+    skip_keys = _DATASET_KEYS | _MODEL_KEYS | _CONFIG_KEYS
+    extras: list[str] = []
     for key, value in cli_args.items():
         if not isinstance(value, (str, int, float)):
             continue
         if value == "None" or key in JOB_NAME_IGNORE_KEYS:
             continue
-
+        if key in skip_keys:
+            continue
         if key == "seed":
             try:
                 if float(value) == 42:
                     continue
             except (TypeError, ValueError):
                 pass
+        value_str = _strip_yaml_ext(str(value).split("/")[-1])
+        extras.append(value_str)
 
-        if key not in {"dataset", "model_name_or_path"}:
-            job_name_components.append(str(key).replace("_", "-"))
+    # ---- assemble: config, dataset, model, extras ----------------------
+    parts: list[str] = []
+    if config_component:
+        parts.append(config_component)
+    if dataset_component:
+        parts.append(dataset_component)
+    if model_component:
+        parts.append(model_component)
+    if extras:
+        parts.append("-".join(extras))
 
-        value_str = str(value)
-        if value_str == "Qwen/Qwen2.5-32B-Instruct":
-            job_name_suffix = "_32B"
-        elif value_str == "Qwen/Qwen2.5-14B-Instruct":
-            job_name_suffix = "_14B"
-        elif value_str == "Qwen/Qwen2.5-3B-Instruct":
-            job_name_suffix = "_3B"
-        elif value_str == "Qwen/Qwen2.5-1.5B-Instruct":
-            job_name_suffix = "_1.5B"
-        elif key == "dataset" and "," in value_str:
-            # Multi-dataset: include all dataset names in the job name
-            for ds in value_str.split(","):
-                ds_name = ds.strip().split("/")[-1]
-                if ds_name:
-                    job_name_components.append(ds_name)
-        else:
-            job_name_components.append(value_str.split("/")[-1])
-
-    job_name = "_".join(job_name_components)
+    job_name = JOB_NAME_SEP.join(parts)
     job_name = sanitize_repo_for_job(job_name, keep_periods=False)
-    if job_name_suffix:
-        job_name += job_name_suffix
 
     if len(job_name) > 96:
-        print("Truncating job name to less than HF limit of 96 characters...")
-        job_name = "_".join(
-            "-".join(segment[:4] for segment in chunk.split("-"))
-            for chunk in job_name.split("_")
+        print(
+            f"Warning: Job name {len(job_name)} chars, "
+            f"hard truncating to 96 chars: {job_name[:96]}"
         )
-        if len(job_name) > 96:
-            # Hard truncate to 96 chars with warning instead of failing
-            print(
-                f"Warning: Job name still {len(job_name)} chars after smart truncation, "
-                f"hard truncating to 96 chars: {job_name[:96]}"
-            )
-            job_name = job_name[:96]
+        job_name = job_name[:96].rstrip("-_")
 
     return job_name or "ot_agent_job"
 
@@ -1022,17 +1088,16 @@ def get_job_name(cli_args: Mapping[str, Any]) -> str:
     if job_type in (JobType.DATAGEN.value, JobType.EVAL.value):
         return derive_datagen_job_name(cli_args)
 
-    # SFT, RL, and other job types use derive_default_job_name which includes
-    # all CLI args (learning_rate, batch_size, etc.) except those in JOB_NAME_IGNORE_KEYS
+    # SFT, RL, and other job types
     base_name = derive_default_job_name(cli_args)
 
     # Add job type prefix
     if job_type == JobType.RL.value:
-        return f"rl_{base_name}"
+        return f"rl{JOB_NAME_SEP}{base_name}"
     if job_type == JobType.SFT.value:
-        return f"sft_{base_name}"
+        return f"sft{JOB_NAME_SEP}{base_name}"
     if job_type == JobType.SFT_MCA.value:
-        return f"sft_mca_{base_name}"
+        return f"sft-mca{JOB_NAME_SEP}{base_name}"
     return base_name
 
 def _parse_optional_int(value: Any, label: Optional[str] = None) -> Optional[int]:
@@ -1556,6 +1621,58 @@ def derive_benchmark_from_job_dir(job_dir: PathInput) -> str:
         return parts[0]
 
     return name
+
+
+def convert_parquet_to_tasks(
+    snapshot_dir: str,
+    dataset_identifier: str,
+    datasets_dir: Optional[str] = None,
+) -> str:
+    """Convert a parquet-based HF dataset to Harbor task directories.
+
+    Used by both eval and datagen/trace flows when the downloaded HF snapshot
+    contains parquet files with a ``task_binary`` column rather than raw task
+    directories.
+
+    Args:
+        snapshot_dir: Resolved local path to the HF snapshot.
+        dataset_identifier: Original dataset identifier (e.g. "DCAgent/my-dataset"),
+            used to derive the output directory name.
+        datasets_dir: Base directory for converted tasks. Defaults to
+            ``$DATASETS_DIR`` or ``<cwd>/datasets``.
+
+    Returns:
+        Path to the directory containing the extracted task folders.
+    """
+    parquet_files: list[str] = []
+    for root, _, files in os.walk(snapshot_dir):
+        for fname in files:
+            if fname.endswith(".parquet"):
+                parquet_files.append(os.path.join(root, fname))
+        if parquet_files:
+            break
+    if not parquet_files:
+        raise FileNotFoundError(
+            f"Dataset at {snapshot_dir} has no raw task directories and no parquet files. "
+            "Harbor expects task directories with task.toml, environment/, instruction.md, tests/test.sh."
+        )
+
+    parquet_file_path = parquet_files[0]
+    print(f"[convert_parquet_to_tasks] Found parquet file: {parquet_file_path}")
+
+    if datasets_dir is None:
+        datasets_dir = os.environ.get("DATASETS_DIR", os.path.join(os.getcwd(), "datasets"))
+    tasks_base_dir = os.path.join(datasets_dir, "tasks_from_parquet")
+    os.makedirs(tasks_base_dir, exist_ok=True)
+    dataset_name = dataset_identifier.split("/")[-1]
+    tasks_output_dir = os.path.join(tasks_base_dir, dataset_name)
+
+    print(f"[convert_parquet_to_tasks] Converting parquet to tasks folder at {tasks_output_dir}")
+    # Lazy import to avoid torch dependency at module load time
+    from scripts.harbor.tasks_parquet_converter import from_parquet
+    from_parquet(parquet_file_path, tasks_output_dir, on_exist="skip")
+    print(f"[convert_parquet_to_tasks] Converted parquet to tasks folder: {tasks_output_dir}")
+    return tasks_output_dir
 
 
 # =============================================================================

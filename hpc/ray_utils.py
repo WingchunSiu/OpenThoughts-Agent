@@ -331,6 +331,13 @@ class RayCluster:
         print(f"  Ray port: {self.config.ray_port}", flush=True)
         print(f"============================", flush=True)
 
+        # Set NUMA affinity for the Ray orchestrator process (binds to GPU 0's NUMA node).
+        # On GH200 (Jupiter), this ensures the Python process managing the Ray cluster
+        # runs on CPUs local to GPU 0. Ray workers spawned via srun handle their own
+        # binding. No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
+        from hpc.numa_utils import apply_numa_affinity
+        apply_numa_affinity(gpu_id=0)
+
         # Start head node
         self._start_node(self.node_list[0], is_head=True)
         print(f"  Started Ray head on {self.node_list[0]}", flush=True)

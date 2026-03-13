@@ -514,13 +514,27 @@ def build_skyrl_hydra_args(
     if hf_hub_private:
         trainer["hf_hub_private"] = True
 
+    # Trace upload CLI overrides (apply to terminal_bench.trace_upload)
+    if parsed.terminal_bench is not None:
+        trace_upload = parsed.terminal_bench.setdefault("trace_upload", {})
+        if exp_args.get("trace_upload_enabled") is not None:
+            trace_upload["enabled"] = exp_args["trace_upload_enabled"]
+        if exp_args.get("trace_upload_repo_org"):
+            trace_upload["repo_org"] = exp_args["trace_upload_repo_org"]
+        if exp_args.get("trace_upload_episodes"):
+            trace_upload["episodes"] = exp_args["trace_upload_episodes"]
+        if exp_args.get("trace_upload_dataset_type"):
+            trace_upload["dataset_type"] = exp_args["trace_upload_dataset_type"]
+        if exp_args.get("trace_upload_cleanup") is not None:
+            trace_upload["cleanup"] = exp_args["trace_upload_cleanup"]
+
     # Build args for each section
     # Keys under engine_init_kwargs need ++ prefix (add or override) since some keys
     # Patterns for keys that may not exist in SkyRL's base config
     # - engine_init_kwargs: vLLM engine settings vary by config
     # - hf_hub_*: HuggingFace upload settings not in base config
     # - enable_db_registration: database registration setting
-    optional_patterns = {".engine_init_kwargs.", ".hf_hub_", ".enable_db_registration", ".optimizer_kwargs"}
+    optional_patterns = {".engine_init_kwargs", ".hf_hub_", ".enable_db_registration", ".optimizer_kwargs"}
 
     for section, values in [("trainer", trainer), ("generator", generator), ("data", data)]:
         for key, val in _flatten_dict(values, section).items():

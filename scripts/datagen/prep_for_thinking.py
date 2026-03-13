@@ -118,10 +118,20 @@ def reformat_assistant_content(content: str) -> Tuple[str, str]:
     if stripped.startswith("{"):
         return f"{THINK_OPEN}{THINK_CLOSE}{stripped}", "no_think_json"
 
-    # 6. Fallback: strip everything before first {
+    # 6. Free-text reasoning before JSON: wrap prefix as thinking content
+    # Traces from some pipelines (nl2bash, stackexchange) produce a reasoning
+    # paragraph followed by the JSON action block, without <think> tags.
+    # Preserve the reasoning as thinking content instead of discarding it.
     json_pos = stripped.find("{")
     if json_pos >= 0:
-        return f"{THINK_OPEN}{THINK_CLOSE}{stripped[json_pos:]}", "fallback_strip_to_json"
+        prefix = stripped[:json_pos].strip()
+        json_part = stripped[json_pos:]
+        # Only treat prefix as thinking if it's substantial (>=20 chars).
+        # Very short prefixes (stray punctuation, single words) are noise.
+        if len(prefix) >= 20:
+            return _build_output(prefix, json_part), "freetext_reasoning_to_think"
+        # Short/empty prefix — discard it, wrap JSON with empty thinking
+        return f"{THINK_OPEN}{THINK_CLOSE}{json_part}", "fallback_strip_to_json"
 
     # 7. No JSON found at all - return unchanged
     return content, "no_json_unchanged"

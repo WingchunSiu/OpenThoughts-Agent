@@ -42,6 +42,7 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "user_tag",
     "content_tag",
     "assistant_tag",
+    "tool_call_tag",
     "messages",
     "system",
     "mix_strategy",
@@ -100,6 +101,7 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "vllm_enable_auto_tool_choice",
     "vllm_tool_call_parser",
     "vllm_reasoning_parser",
+    "daytona_api_key",
     "sandbox_cpu",
     "sandbox_memory_gb",
     "sandbox_disk_gb",
@@ -148,4 +150,9 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     # RL environment toggles
     "rl_use_conda",
     "rl_conda_env",
+    # Trace upload toggles
+    "trace_upload_enabled",
+    "trace_upload_repo_org",
+    "trace_upload_episodes",
+    "trace_upload_dataset_type",
 ]
