@@ -51,8 +51,8 @@ class LlamaFactoryArgs:
         default=None, metadata={"help": "Finetuning type: full, lora, qlora"}
     )
     deepspeed: Optional[str] = field(
-        default="sft/llamafactory/examples/deepspeed/ds_z3_config.json",
-        metadata={"help": "Path to deepspeed config file"},
+        default=None,
+        metadata={"help": "Path to deepspeed config file. If None, uses FSDP via accelerate."},
     )
     packing: Optional[bool] = field(
         default=None,
@@ -63,6 +63,9 @@ class LlamaFactoryArgs:
     )
     enable_liger_kernel: Optional[bool] = field(
         default=None, metadata={"help": "Whether to use liger kernel"}
+    )
+    use_cce: Optional[bool] = field(
+        default=None, metadata={"help": "Whether to use Cut Cross-Entropy for memory-efficient loss computation"}
     )
 
     # Attention implementation
@@ -347,6 +350,22 @@ class LaunchArgs:
             "Defaults to ./experiments/<job_name> when not specified."
         },
     )
+    force_mutate: bool = field(
+        default=False,
+        metadata={
+            "help": "[datagen/eval] Allow the resume manager to patch an existing job dir "
+            "to reconcile mutable config drift (synthetic vLLM IDs, api_base, timeout "
+            "multipliers, retry settings). Ignored for SFT / RL / consolidate."
+        },
+    )
+    allow_overwrite: bool = field(
+        default=False,
+        metadata={
+            "help": "[datagen/eval] When resume mutation is not possible (fatal drift "
+            "or --force_mutate off), wipe the existing job dir and start fresh instead "
+            "of bailing. Ignored for SFT / RL / consolidate."
+        },
+    )
     image: Optional[str] = field(
         default=None, metadata={"help": "Container image to use"}
     )
@@ -378,6 +397,10 @@ class LaunchArgs:
         default=None,
         metadata={"help": "SLURM dependency expression to include with submissions (e.g., 'afterany:12345')"},
     )
+    reservation: Optional[str] = field(
+        default=None,
+        metadata={"help": "SLURM reservation name to submit into (adds #SBATCH --reservation=<name>)"},
+    )
 
     # Pretokenize
     pretokenize: bool = field(
@@ -401,6 +424,15 @@ class LaunchArgs:
         metadata={
             "help": "When present, the job will not be submitted",
             "store_true": True,
+        },
+    )
+
+    conda_env: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Override the conda environment name for this job. "
+            "Generates 'source <conda.sh> && conda activate <name>' in the sbatch. "
+            "Useful for models requiring a different env (e.g. Qwen3.5 needs transformers 5.3+)."
         },
     )
 
@@ -543,7 +575,7 @@ class DataGenArgs:
     )
     trace_model: Optional[str] = field(
         default=None,
-        metadata={"help": "Override Harbor agent model for trace generation"}
+        metadata={"help": "DEPRECATED: use --model instead. Alias for model."}
     )
     trace_agent_name: Optional[str] = field(
         default=None,
@@ -556,6 +588,10 @@ class DataGenArgs:
     trace_n_concurrent: Optional[int] = field(
         default=None,
         metadata={"help": "Override Harbor orchestrator concurrency for trace generation"}
+    )
+    trace_n_attempts: Optional[int] = field(
+        default=None,
+        metadata={"help": "Override Harbor n_attempts (samples per task) for trace generation. Falls back to harbor YAML's top-level n_attempts, then 1."}
     )
     trace_env: Optional[str] = field(
         default=None,
@@ -668,7 +704,7 @@ class RLArgs:
     )
     model_path: Optional[str] = field(
         default=None,
-        metadata={"help": "Model path for RL training (e.g., Qwen/Qwen2.5-7B-Instruct)"}
+        metadata={"help": "DEPRECATED: use --model instead. Alias for model."}
     )
     train_data: Optional[str] = field(
         default=None,
@@ -875,11 +911,13 @@ def parse_args():
         help=argparse.SUPPRESS,  # Hidden alias
     )
 
-    # Add --model as alias for --trace_model (more concise for eval jobs)
+    # --model is the canonical flag for specifying the model to serve/evaluate/train.
+    # --model_path and --trace_model are deprecated aliases that map to the same dest.
     launch_group.add_argument(
         "--model",
         dest="trace_model",
-        help=argparse.SUPPRESS,  # Hidden alias
+        help="Model to serve/evaluate (e.g. laion/100k_baseline__Qwen3-8B). "
+             "Overrides datagen config model_path for vLLM serving.",
     )
 
     # Add DataGenArgs arguments
@@ -918,15 +956,28 @@ def parse_args():
             help=f"HPC {field}" if field != "gpu_type" else "GPU type override (e.g., h200, l40s) for clusters with multiple GPU types",
         )
 
+    # Ray object store size (applies to RL, eval, datagen job types)
+    hpc_group.add_argument(
+        "--ray_object_store_gb", "--ray-object-store-gb",
+        type=float,
+        default=40.0,
+        help="Ray object store (plasma) size in GB (default: 40).",
+    )
+
     # Add LlamaFactoryArgs arguments
     _add_dataclass_arguments(train_group, LlamaFactoryArgs, bool_fields=bool_keys)
 
     args = parser.parse_args()
 
-    # --model is an alias for --trace_model (eval/datagen) but also doubles as
-    # shorthand for --model_name_or_path (SFT) when the latter is unset.
-    if getattr(args, "trace_model", None) and not getattr(args, "model_name_or_path", None):
-        args.model_name_or_path = args.trace_model
+    # Unify --model, --model_path, --trace_model into a single "model" key.
+    # Priority: --model (via trace_model dest) > --model_path > None
+    _model = getattr(args, "trace_model", None) or getattr(args, "model_path", None)
+    if _model:
+        args.trace_model = _model
+        args.model_path = _model
+    # Also set model_name_or_path for SFT compatibility
+    if _model and not getattr(args, "model_name_or_path", None):
+        args.model_name_or_path = _model
 
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     args_dict["_explicit_cli_keys"] = explicit_cli_keys

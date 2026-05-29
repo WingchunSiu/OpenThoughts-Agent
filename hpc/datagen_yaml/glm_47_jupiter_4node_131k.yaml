@@ -25,11 +25,27 @@ vllm_server:
   gpu_memory_utilization: 0.9
   swap_space: 32
   enable_expert_parallel: true
+  # FlashInfer 0.6.11.post2 on the current Jupiter wheel produces sampling
+  # kernels whose mangled symbol _Z25top_p_sampling_from_probsN3tvm3ffi10
+  # TensorViewES1_S1_NS0_8OptionalIS1_vEES3_dbS3_mS3_m can't be resolved
+  # by the running tvm/torch combo. Killed v3 (491902) and v4 (493261)
+  # within ~5 min of starting to serve. Bypass via env var → vLLM's
+  # native top_p sampling path instead of FlashInfer's.
+  use_flashinfer_sampler: false
+  # CUDA graph capture profile_cudagraph_memory() hits "CUDA error: an
+  # illegal memory access" inside GLM4 MoE forward (glm4_moe.py:691 →
+  # AOT-compiled submod) on v5 (493284). Suspect cross-node MoE all-to-all
+  # inside FULL_AND_PIECEWISE cudagraph capture on the current Jupiter
+  # wheel; Perlmutter's older wheel handled the same config with CUDA
+  # graphs on. --enforce-eager (via extra_args below) skips graph capture.
+  # NOTE: enforce_eager is NOT in VLLMServerConfig schema, must go in
+  # extra_args as the raw CLI flag.
   enable_auto_tool_choice: true
   tool_call_parser: glm45
   reasoning_parser: deepseek_v3
   trust_remote_code: true
   extra_args:
+  - --enforce-eager
   - --dtype
   - bfloat16
   - --kv-cache-dtype

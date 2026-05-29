@@ -66,9 +66,18 @@ def _release_torch_memory() -> None:
 def _discover_cli_flags() -> set[str]:
     cmd = [sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--help"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        # Subprocess timeout: vllm-tpu's --help import path triggers libtpu /
+        # XLA bring-up which can hang for minutes on a cold worker. 60s is
+        # generous for the GPU vLLM (~5-10s warm) and lets us fall back to
+        # the assume-supported path before the TPU import deadlocks the
+        # whole controller.
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
     except Exception as exc:  # pragma: no cover - best effort
-        print(f"[start_vllm_ray_controller] Warning: unable to inspect vLLM CLI flags: {exc}")
+        print(
+            f"[start_vllm_ray_controller] Warning: unable to inspect vLLM CLI flags ({exc}); "
+            "falling back to assume-supported for all flags we emit.",
+            flush=True,
+        )
         return set()
 
     flags = set(_CLI_FLAG_PATTERN.findall(result.stdout or ""))
@@ -78,10 +87,55 @@ def _discover_cli_flags() -> set[str]:
 
 @functools.lru_cache(maxsize=1)
 def _supported_flags() -> set[str]:
+    # ``VLLM_SKIP_FLAG_DISCOVERY=1`` short-circuits the ``vllm --help`` probe.
+    # The iris+TPU path sets this because importing vllm-tpu cold-bootstraps
+    # libtpu inside a subprocess.run, which can hang for >5 min on the first
+    # invocation and (worse) deadlock the parent controller with no diagnostic
+    # output. The fallback "empty set" means our launcher assumes every flag
+    # is supported and emits it unconditionally. That's the right behavior
+    # for vLLM 0.20.0 (TPU) and current GPU builds — every flag the launcher
+    # emits has been in the OpenAI API server for many releases.
+    if os.environ.get("VLLM_SKIP_FLAG_DISCOVERY") == "1":
+        return set()
     return _discover_cli_flags()
 
 
+# Flags that the CUDA vLLM api_server accepts but the vLLM-TPU api_server
+# rejects with "unrecognized arguments". When VLLM_SKIP_FLAG_DISCOVERY=1 we
+# can't probe the real argparse, so we have to know these statically.
+# Verified against vllm-tpu==0.20.0 (Stage-C smoke logs, 2026-05-21).
+_TPU_UNSUPPORTED_API_SERVER_FLAGS = frozenset({
+    "--ray-address",
+    "--swap-space",
+})
+
+
+def _is_tpu_env() -> bool:
+    """True when this process is running on a Cloud TPU host.
+
+    Iris's TPU workers set TPU_ACCELERATOR_TYPE / TPU_TYPE. Our task image
+    also sets JAX_PLATFORMS=tpu. Either signal counts.
+    """
+    return bool(
+        os.environ.get("JAX_PLATFORMS", "").startswith("tpu")
+        or os.environ.get("TPU_ACCELERATOR_TYPE")
+        or os.environ.get("TPU_TYPE")
+    )
+
+
 def _flag_supported(flag: str) -> bool:
+    # On TPU we cannot run the vllm --help probe (libtpu cold-bootstrap
+    # deadlocks the subprocess). We still need to filter out the few flags
+    # that the CUDA vLLM api_server accepts but the TPU one rejects — otherwise
+    # the api_server child process exits immediately with "unrecognized
+    # arguments".
+    if _is_tpu_env() and flag in _TPU_UNSUPPORTED_API_SERVER_FLAGS:
+        return False
+    if os.environ.get("VLLM_SKIP_FLAG_DISCOVERY") == "1":
+        # Assume yes for everything else: every flag the launcher emits has
+        # been a stable vLLM API for several releases. See _supported_flags()
+        # docstring.
+        return True
     return flag in _supported_flags()
 
 
@@ -137,14 +191,20 @@ def build_vllm_command(args: argparse.Namespace, extra_args: List[str]) -> List[
                 file=sys.stderr,
             )
 
-    # Ray address
+    # Ray address: vllm-tpu 0.20.0 dropped the --ray-address CLI flag — the
+    # entrypoint only accepts RAY_ADDRESS via env var. Caller must set the
+    # env var BEFORE invoking subprocess.Popen; see main() below.
     if args.ray_address:
-        if _flag_supported("--ray-address"):
+        if os.environ.get("VLLM_SKIP_FLAG_DISCOVERY") == "1":
+            # main() has already mirrored args.ray_address into env["RAY_ADDRESS"].
+            pass
+        elif _flag_supported("--ray-address"):
             _append_flag(cmd, "--ray-address", args.ray_address)
         else:
             print(
                 "[start_vllm_ray_controller] --ray-address flag unsupported; relying on RAY_ADDRESS env",
                 file=sys.stderr,
+                flush=True,
             )
 
     # Served model name
@@ -231,6 +291,37 @@ def main() -> None:
     if args.verbose:
         env.setdefault("VLLM_LOG_LEVEL", "INFO")
 
+    # Mirror --ray-address into RAY_ADDRESS env so vllm-tpu (which dropped
+    # the CLI flag in 0.20.0) and modern CUDA vllm (which honors the env)
+    # both pick it up. Must happen before build_vllm_command() so the env
+    # we hand to subprocess.Popen has it.
+    if args.ray_address and os.environ.get("VLLM_SKIP_FLAG_DISCOVERY") == "1":
+        env["RAY_ADDRESS"] = args.ray_address
+
+    # Strip extra_args that aren't accepted by vllm-tpu 0.20.0 when the
+    # iris/TPU shortcut is in effect. ``--swap-space 0`` is the prime
+    # offender: CUDA vLLM accepts swap_space=0 to mean "disable CPU swap"
+    # but vllm-tpu doesn't model swap at all and the CLI parser refuses
+    # the unknown flag. Same idea applies to any future TPU-incompatible
+    # knobs we might add to the GPU YAML schema.
+    if os.environ.get("VLLM_SKIP_FLAG_DISCOVERY") == "1":
+        _TPU_UNACCEPTED = {"--swap-space"}
+        filtered: List[str] = []
+        skip_next = False
+        for arg in extra_args:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg in _TPU_UNACCEPTED:
+                skip_next = True
+                print(
+                    f"[start_vllm_ray_controller] Dropping TPU-incompatible flag: {arg}",
+                    flush=True,
+                )
+                continue
+            filtered.append(arg)
+        extra_args = filtered
+
     # NOTE: RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES and RAY_NOSET_CUDA_VISIBLE_DEVICES
     # must be set BEFORE the Ray cluster is started (in the sbatch template), not here.
     # Setting them here is too late - Ray actors have already been spawned with modified
@@ -253,32 +344,75 @@ def main() -> None:
     sys.stdout.flush()
 
     ray_address = env.get("RAY_ADDRESS") or args.ray_address
-    if ray is not None and ray_address:
+    # Skip the Ray-probe sanity check when running in iris/TPU mode — every
+    # ray.init / ray.shutdown roundtrip costs ~3-5s and isn't load-bearing
+    # (vLLM connects to Ray itself with its own ray.init). Set
+    # VLLM_SKIP_RAY_PROBE=1 (iris launcher sets it automatically) to skip.
+    if (
+        ray is not None
+        and ray_address
+        and os.environ.get("VLLM_SKIP_RAY_PROBE") != "1"
+    ):
         try:
-            print(f"[start_vllm_ray_controller] Inspecting Ray resources at {ray_address} before placement.")
+            print(f"[start_vllm_ray_controller] Inspecting Ray resources at {ray_address} before placement.", flush=True)
             ray.init(address=ray_address, ignore_reinit_error=True)
             cluster_resources = ray.cluster_resources()
             nodes = ray.nodes()
-            print(f"[start_vllm_ray_controller] Ray cluster resources: {cluster_resources}")
+            print(f"[start_vllm_ray_controller] Ray cluster resources: {cluster_resources}", flush=True)
             print(
                 f"[start_vllm_ray_controller] Ray nodes ({len(nodes)}): "
-                f"{[node.get('NodeID') for node in nodes]}"
+                f"{[node.get('NodeID') for node in nodes]}",
+                flush=True,
             )
         except Exception as exc:  # pragma: no cover - best effort logging
-            print(f"[start_vllm_ray_controller] Warning: unable to query Ray cluster resources: {exc}")
+            print(f"[start_vllm_ray_controller] Warning: unable to query Ray cluster resources: {exc}", flush=True)
         finally:
             try:
                 ray.shutdown()
             except Exception:
                 pass
+    else:
+        print(
+            f"[start_vllm_ray_controller] Skipping Ray probe (ray_address={ray_address!r}, "
+            f"VLLM_SKIP_RAY_PROBE={os.environ.get('VLLM_SKIP_RAY_PROBE')!r}).",
+            flush=True,
+        )
 
     cmd = build_vllm_command(args, extra_args)
     print("Launching vLLM controller:")
     print("  " + " ".join(cmd))
     if extra_args:
         print(f"  (pass-through args: {' '.join(extra_args)})")
+    # Flush before Popen so the launch line lands in iris logs even if the
+    # child segfaults during startup (e.g. libtpu / XLA C++ aborts before
+    # Python has a chance to write a traceback).
+    sys.stdout.flush()
+    sys.stderr.flush()
 
-    process = subprocess.Popen(cmd, env=env)
+    # Capture stderr to a pipe so quick startup failures get surfaced even
+    # when the parent's stdout is buffered. We tee both streams to the
+    # parent in a background thread; if Popen survives, the thread keeps
+    # streaming until the child exits.
+    process = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        text=True,
+    )
+
+    def _tee_child_output():
+        assert process.stdout is not None
+        try:
+            for line in process.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        except Exception as exc:  # pragma: no cover
+            print(f"[start_vllm_ray_controller] tee error: {exc}", file=sys.stderr, flush=True)
+
+    tee_thread = threading.Thread(target=_tee_child_output, daemon=True)
+    tee_thread.start()
 
     def _flush_loop():
         try:

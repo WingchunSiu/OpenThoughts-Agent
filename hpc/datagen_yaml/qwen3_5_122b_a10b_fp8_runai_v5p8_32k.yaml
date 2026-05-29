@@ -1,0 +1,95 @@
+# Qwen3.5-122B-A10B-FP8 — diagnostic smoke for Jülich libstreamer "Unknown Error".
+#
+# Goal: determine whether the libstreamer failure observed on 397B FP8
+# (v5p-32 TP=8) is scale-driven (94 files / 406 GB → many parallel range
+# requests) or fundamental (Jülich MinIO / AWS C SDK edge case). The 122B
+# FP8 variant is the smallest Qwen3.5 family member with the same
+# quantization scheme and same shard layout, so it isolates "model size"
+# from "loader compatibility".
+#
+# Model: Qwen/Qwen3.5-122B-A10B-FP8 — 127 GB across 39 safetensors files,
+# moe_intermediate_size=1024, num_kv_heads=2, head_dim=256, FP8 with
+# weight_block_size [128,128], vision tower kept bf16.
+#
+# Hardware: v5p-8 = 8 cores = 4 chips, single host. 95 GB HBM/chip × 4 =
+# 380 GB. 127/4 = 32 GB/chip of weights → ~63 GB free per chip for KV +
+# activations.
+#
+# TP=4 vs TP=8: FP8 [128,128] tolerates up to TP = moe_intermediate/128 =
+# 8. KV-heads = 2 < TP; vLLM replicates KV heads across TP > kv_heads. TP=4
+# is the natural fit for v5p-8 (one chip per shard, no idle).
+#
+# **DEBUG ENVS**: RUNAI_STREAMER_LOG_LEVEL=DEBUG +
+# RUNAI_STREAMER_LOG_TO_STDERR=1 + RUNAI_STREAMER_S3_TRACE=1 surface the
+# underlying AWS C SDK error code instead of libstreamer's wrapped
+# "Unknown Error". See GitHub run-ai/runai-model-streamer#81 for a similar
+# case where the wrapped error masked
+# AWS_ERROR_S3_INVALID_CONTENT_RANGE_HEADER from an S3-compatible
+# storage. Concurrency capped at 4 (default 8 for object storage) so
+# fewer parallel range requests during metadata fetch — narrows the
+# search if the issue is connection-count-driven.
+#
+# Prerequisites:
+#   1. HF→GCS mirror submitted 2026-05-24T16:26 (qwen122b-fp8-hf-mirror-20260524-162600)
+#   2. After (1) completes: chain GCS→Jülich via scripts/iris/launch_gcs_to_s3.py
+
+env_vars:
+  RUNAI_STREAMER_LOG_LEVEL: DEBUG
+  RUNAI_STREAMER_LOG_TO_STDERR: '1'
+  RUNAI_STREAMER_S3_TRACE: '1'
+  RUNAI_STREAMER_CONCURRENCY: '4'
+  MODEL_IMPL_TYPE: vllm
+  # v6 (2026-05-26): gs:// URI to force libstreamer's GCS native code
+  # path. v1/v2/v3/v4 all reproduced the AWS-CRT thread-bootstrap bug
+  # (s3.cc:94, Failed to create S3 client in worker threads) regardless
+  # of endpoint. Marin's lib/marin/src/marin/inference/vllm_server.py:97
+  # uses gs:// + runai_streamer successfully.
+  #
+  # Pre-set AWS_ENDPOINT_URL to GCS so:
+  #   (a) if libstreamer dispatches by URI scheme, the gs:// path takes
+  #       over and AWS_ENDPOINT_URL is ignored — fine
+  #   (b) if it falls back to the S3-CRT path for any reason, at least
+  #       the endpoint is GCS S3-interop (not the LAION-aliased Jülich
+  #       endpoint), and MARIN_HMAC_* creds are routed correctly via the
+  #       launcher's HMAC aliasing block.
+  # Either way the LAION confounder is removed and v6 actually exercises
+  # the gs:// code path cleanly.
+  AWS_ENDPOINT_URL: https://storage.googleapis.com
+
+engine:
+  type: vllm_local
+  model: gs://marin-eu-west4/ot-agent/models/Qwen/Qwen3.5-122B-A10B-FP8/
+  max_output_tokens: 8192
+  healthcheck_interval: 1800
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: gs://marin-eu-west4/ot-agent/models/Qwen/Qwen3.5-122B-A10B-FP8/
+  num_replicas: 1
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  max_num_seqs: 8
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  trust_remote_code: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --load-format
+  - runai_streamer
+  - --block-size
+  - '2096'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  - --max-num-batched-tokens
+  - '32768'

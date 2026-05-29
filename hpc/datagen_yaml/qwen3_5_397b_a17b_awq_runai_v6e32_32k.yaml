@@ -1,0 +1,99 @@
+# Qwen3.5-397B-A17B-AWQ on v6e-32 TPU — translated from the Jupiter
+# GH200 reference at hpc/datagen_yaml/qwen3_5_397b_a17b_awq_jupiter_1node_32k.yaml.
+#
+# Model:      QuantTrio/Qwen3.5-397B-A17B-AWQ (~200 GB AWQ-4-bit weights,
+#             397B total / 17B active MoE, hybrid GDN attention)
+# Slice:      v6e-32 = 32 chips on 8 hosts (4 chips/host).
+# HBM math:   200 GB weights / 32 chips = ~6.25 GB/chip for weights.
+#             ~16 GB HBM/chip × 0.85 util = ~13.6 GB usable/chip.
+#             → ~7.3 GB/chip for KV cache + activations + XLA scratch.
+#             With max_num_seqs=4 and 32k context, KV ≈ 2.5 GB/chip;
+#             leaves ~4.5 GB/chip for compile/activations. Tight but OK.
+# Arch path:  Per the user's note, Qwen3.5-397B-A17B passes tpu-inference's
+#             performance test — JAX-native fast path expected. (NOT in
+#             the qwen3_moe.py implementation; whatever Qwen3.5-hybrid
+#             port exists in their support matrix as of 2026-05-22.)
+#
+# !! Prerequisites BEFORE this YAML can be used !!
+#
+#   1. Mirror weights to GCS via scripts/iris/launch_hf_mirror.py:
+#        python scripts/iris/launch_hf_mirror.py \
+#          --repo QuantTrio/Qwen3.5-397B-A17B-AWQ \
+#          --gcs-prefix gs://marin-eu-west4/ot-agent/models/
+#      Mirror time projected ~3.5 h at ~4 min/4-GB-shard.
+#
+#   2. HMAC keys for GCS S3-compatibility (see header of
+#      gemma4_31b_runai_v6e8_32k.yaml for the exact gsutil hmac create
+#      command + secrets.env additions). Without these, runai_streamer
+#      fails at weight-load with an S3 auth error.
+#
+# Dropped from the Jupiter reference (CUDA-specific knobs):
+#   --enforce-eager        (CUDA graphs; no-op on TPU's XLA path)
+#   --kv-cache-dtype fp8   (TPU FP8 KV cache support is spotty;
+#                          stay at bf16 default)
+#   --quantization awq_marlin (Marlin is a CUDA kernel; tpu-inference's
+#                          VllmAWQConfig override handles AWQ natively
+#                          when --load-format auto-detects from
+#                          config.json's quantization_config block)
+#   use_deep_gemm / use_flashinfer_sampler / use_flashinfer_moe_fp16
+#                          (CUDA/Triton-only env flags)
+#
+# Kept from the Jupiter reference:
+#   --block-size 2096      (mamba/GDN page-size calibration. Hybrid GDN
+#                          layers need attention page size >= mamba
+#                          page size; 2096 explicitly skips the auto-
+#                          calibration step that historically deadlocked
+#                          cross-rank coordination on GLM-5.1 / Qwen3.5
+#                          on Jupiter. On TPU we don't share the same
+#                          deadlock class, but setting it explicitly
+#                          avoids the calibration latency.)
+
+engine:
+  type: vllm_local
+  # s3:// (not gs://) — runai_streamer speaks AWS S3 protocol.
+  # AWS_ENDPOINT_URL=https://storage.googleapis.com (auto-injected by
+  # hpc/iris_launch_utils.py) routes to GCS.
+  model: s3://mmlaion/ot-agent/models/QuantTrio/Qwen3.5-397B-A17B-AWQ/
+  max_output_tokens: 8192
+  healthcheck_interval: 1800   # large model + streaming load + XLA compile
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: s3://mmlaion/ot-agent/models/QuantTrio/Qwen3.5-397B-A17B-AWQ/
+  num_replicas: 1
+  tensor_parallel_size: 32
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  # Start conservative; Qwen3.5-4B v6e-8 ran max_num_seqs=2 successfully.
+  # 397B-A17B at TP=32 has more aggregate HBM but per-chip headroom is
+  # ~4.5 GB. Raise once first run shows comfortable scratch.
+  max_num_seqs: 4
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  trust_remote_code: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  # Stream AWQ shards from gs:// (via S3-compat); required at 200 GB
+  # weight scale on 100 GB-disk v6e workers.
+  - --load-format
+  - runai_streamer
+  # Hybrid GDN page-size calibration (see header notes).
+  - --block-size
+  - '2096'
+  - --max-num-partial-prefills
+  - '1'
+  # Multimodal hybrid Qwen3.5; cap MM inputs for text-only eval workload.
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  # vllm-tpu force-disables chunked prefill; with that off,
+  # max_num_batched_tokens must be >= max_model_len.
+  - --max-num-batched-tokens
+  - '32768'

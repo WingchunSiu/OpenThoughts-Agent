@@ -32,8 +32,9 @@ import sys
 from pathlib import Path
 
 from harbor.constants import TASK_CACHE_DIR
-from harbor.models.job.config import LocalDatasetConfig, RegistryDatasetConfig
 from harbor.models.registry import RemoteRegistryInfo
+
+from scripts.harbor._harbor_compat import LocalDatasetConfig, RegistryDatasetConfig
 from harbor.tasks.client import TaskClient
 from harbor.utils.container_cache import (
     DockerfileStats,

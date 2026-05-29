@@ -80,7 +80,13 @@ class VLLMServerConfig:
     endpoint_json_path: Optional[str] = None
     time_limit: str = "48:00:00"
     hf_overrides: Optional[str] = None
-    use_deep_gemm: bool = False
+    # use_deep_gemm + FlashInfer flags use Optional[bool] = None so YAMLs
+    # that omit the key leave the env var unset → vLLM picks its own default
+    # (DEEP_GEMM=True, SAMPLER=True, MOE_FP16=False per vllm/envs.py).
+    # Explicit true/false in YAML forces the env var to 1/0.
+    use_deep_gemm: Optional[bool] = None
+    use_flashinfer_sampler: Optional[bool] = None
+    use_flashinfer_moe_fp16: Optional[bool] = None
     max_num_seqs: Optional[int] = None
     gpu_memory_utilization: Optional[float] = None
     enable_expert_parallel: bool = False
@@ -96,6 +102,17 @@ class VLLMServerConfig:
     tool_call_parser: Optional[str] = None
     reasoning_parser: Optional[str] = None
     logging_level: Optional[str] = None
+    # Periodic pynccl trace-buffer flush interval (seconds). 0/None disables.
+    # See vllm_utils._NUMERIC_ENV_VAR_FIELDS for the env var plumbing.
+    pynccl_trace_flush_interval_sec: Optional[int] = None
+    # py-spy-on-SIGUSR1: if true, the pynccl SIGUSR1 handler also forks
+    # py-spy --pid <self> --native and writes the stack snapshot next to the
+    # pynccl trace dump. Default off.
+    pynccl_pyspy_on_sigusr1: Optional[bool] = None
+    # faulthandler.dump_traceback_later interval (seconds). 0/None disables.
+    # In-process periodic Python stack dump for ALL threads — replacement
+    # for py-spy on clusters where ptrace_scope=2 blocks external attach.
+    pynccl_faulthandler_interval_sec: Optional[int] = None
     extra_args: Any = None
 
 
@@ -106,6 +123,12 @@ class DataGenerationConfig:
     extra_agent_kwargs: Dict[str, Any] = field(default_factory=dict)
     chunk_array_max: Optional[int] = None
     vllm_server: Optional[VLLMServerConfig] = None
+    # Optional per-config env var overrides — lifted by launchers (e.g.
+    # data/cloud/launch_tracegen_iris.py:TracegenIrisLauncher.build_env) and
+    # injected into the iris task's env_vars BEFORE the launcher-wide
+    # setdefaults run, so per-config values win. Ignored on the worker
+    # side (the env vars are already in the process environment by then).
+    env_vars: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

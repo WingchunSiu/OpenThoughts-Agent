@@ -2,9 +2,17 @@
 """
 Delete Daytona sandboxes in the RL org that have not had an event in over an hour.
 
-Uses the Daytona REST API directly (paginated endpoint) to list all active
-sandboxes, then deletes any whose `updatedAt` timestamp is older than the
-configured threshold.
+Uses the Daytona REST API directly to list all active sandboxes, then deletes
+any whose `updatedAt` timestamp is older than the configured threshold.
+
+Migrated 2026-05-18 for the upcoming Daytona API breaking change (May 24,
+2026): switched from the deprecated GET /api/sandbox/paginated + offset
+pagination (`page=N`) to GET /api/sandbox + cursor pagination
+(`cursor=<token>`). The legacy /api/sandbox/paginated endpoint is being
+retired on 2026-06-10; the new /api/sandbox endpoint returns a paginated
+response object with `nextCursor` for forward iteration. The script
+auto-detects the response shape so it works against both pre- and post-
+cutover servers.
 
 Usage:
     # Dry run (default) — shows what would be deleted
@@ -75,33 +83,57 @@ def headers(api_key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def list_started_sandboxes(api_key: str) -> list[dict]:
-    """Fetch all sandboxes in 'started' state, sorted by updatedAt desc."""
+    """Fetch all sandboxes in 'started' state, sorted by updatedAt desc.
+
+    Uses cursor-based pagination on GET /api/sandbox (the post-2026-05-24
+    breaking-change endpoint). Falls back to interpreting a flat-list
+    response in case we hit a pre-cutover server — that path will be dead
+    after 2026-05-24 but keeps the script working through the cutover
+    window.
+    """
     sandboxes: list[dict] = []
-    page = 1
+    cursor: str | None = None
 
     while True:
+        params: dict[str, object] = {
+            "states": "started",
+            "sort": "updatedAt",
+            "order": "desc",
+            "limit": PAGE_LIMIT,
+        }
+        if cursor:
+            params["cursor"] = cursor
+
         resp = requests.get(
-            f"{API_BASE}/sandbox/paginated",
+            f"{API_BASE}/sandbox",
             headers=headers(api_key),
-            params={
-                "states": "started",
-                "sort": "updatedAt",
-                "order": "desc",
-                "limit": PAGE_LIMIT,
-                "page": page,
-            },
+            params=params,
             timeout=30,
         )
         resp.raise_for_status()
         data = resp.json()
+
+        # Post-2026-05-24 shape: paginated response object with `items` +
+        # `nextCursor`. Pre-cutover shape: bare list. Handle both.
+        if isinstance(data, list):
+            sandboxes.extend(data)
+            break  # flat list = no pagination available; one shot only
+
         items = data.get("items", [])
         if not items:
             break
         sandboxes.extend(items)
-        total = data.get("total", 0)
-        if len(sandboxes) >= total:
+
+        # Accept either `nextCursor` (per the migration doc) or a few
+        # plausible variants in case Daytona ships a slightly different
+        # field name. Stop when no cursor is returned.
+        cursor = (
+            data.get("nextCursor")
+            or data.get("next_cursor")
+            or data.get("cursor")
+        )
+        if not cursor:
             break
-        page += 1
 
     return sandboxes
 

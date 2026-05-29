@@ -38,6 +38,10 @@ from scripts.harbor.job_config_utils import (
     set_local_dataset,
     update_agent_kwargs,
 )
+from scripts.harbor._harbor_compat import (
+    get_orchestrator_field,
+    set_orchestrator_field,
+)
 
 
 MODEL_INFO_DEFAULT_COST_PER_TOKEN = 1e-6
@@ -917,7 +921,9 @@ class BaseDataGenerator(ABC):
             or getattr(args, "trace_n_concurrent", None)
         )
         if trace_n_concurrent is None:
-            trace_n_concurrent = trace_config_template.orchestrator.n_concurrent_trials
+            trace_n_concurrent = get_orchestrator_field(
+                trace_config_template, "n_concurrent_trials"
+            )
         if trace_n_concurrent is None:
             trace_n_concurrent = 8
             if isinstance(engine, GenericOpenAIEngine):
@@ -1037,7 +1043,7 @@ class BaseDataGenerator(ABC):
         )
         job_config_for_run = update_agent_kwargs(job_config_for_run, agent_kwargs)
         if derived_metrics_endpoint:
-            ac = job_config_for_run.orchestrator.adaptive_concurrency
+            ac = get_orchestrator_field(job_config_for_run, "adaptive_concurrency")
             if ac and ac.enabled and (
                 not ac.metrics_endpoint
                 or "replace-with" in str(ac.metrics_endpoint)
@@ -1045,7 +1051,9 @@ class BaseDataGenerator(ABC):
             ):
                 ac.metrics_endpoint = derived_metrics_endpoint
         job_config_for_run.environment.type = env_enum
-        job_config_for_run.orchestrator.n_concurrent_trials = int(trace_n_concurrent)
+        set_orchestrator_field(
+            job_config_for_run, "n_concurrent_trials", int(trace_n_concurrent)
+        )
         agent_preview = job_config_for_run.agents[0] if job_config_for_run.agents else None
         if agent_preview is not None:
             self.logger.info(

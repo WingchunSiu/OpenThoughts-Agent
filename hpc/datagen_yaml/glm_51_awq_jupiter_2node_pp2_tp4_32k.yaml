@@ -1,0 +1,86 @@
+# GLM-5.1-AWQ - AWQ 4-bit quantized (~754B params, ~392GB weights)
+# https://huggingface.co/QuantTrio/GLM-5.1-AWQ
+#
+# 32K context variant, Jupiter GH200 multi-node — PP=2 / TP=4 / 2-node variant.
+#
+# Hardware: 2 nodes × 4x GH200 96GB = 8 GPUs (~768GB VRAM total)
+#   - AWQ 4-bit weights ~392GB split across 2 pipeline stages → ~196GB / stage
+#   - Within each stage, TP=4 across the 4 local GPUs → ~49GB/GPU
+#     (same per-GPU memory math as the TP=8/2-node layout)
+#   - PP=2 splits layers across nodes: stage 0 = layers [0..N/2),
+#     stage 1 = layers [N/2..N).
+#   - Crucially: **sampling happens at the last pipeline stage** (node 1).
+#     The `sample_tokens` RPC stays entirely within that one node's TP=4
+#     group, eliminating the cross-node shm_broadcast / RPC stall that
+#     killed every TP=8/2-node attempt of GLM-5.1-AWQ (iterations 0-10
+#     with progressively heavier mitigations in the launcher and warmup
+#     paths, all still tripping `EngineDeadError`).
+#   - Cross-node traffic is now ONLY pipeline-stage activations, not
+#     all-reduce — different (and lighter) topology than TP cross-node.
+#
+# Bug C diagnostic value: this is the experimental control for "is the
+# residual sample_tokens stall actually about cross-node TP=8 vs.
+# in-node sampling?" If GLM-5.1-AWQ runs cleanly here while still
+# spanning 2 nodes, the cross-node sample_tokens hypothesis is
+# confirmed and the single-node-or-PP-only pattern becomes the
+# canonical layout for big models on Jupiter.
+
+engine:
+  type: vllm_local
+  model: QuantTrio/GLM-5.1-AWQ
+  max_output_tokens: 16384
+  healthcheck_interval: 300
+  request_params:
+    temperature: 0.7
+    top_p: 0.95
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+  ray_cgraph_max_inflight_executions: 16
+  healthcheck_max_attempts: 160
+  healthcheck_retry_delay: 15
+vllm_server:
+  model_path: QuantTrio/GLM-5.1-AWQ
+  num_replicas: 1
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 2
+  data_parallel_size: 1
+  time_limit: '11:59:00'
+  max_model_len: 32768
+  max_num_seqs: 32
+  gpu_memory_utilization: 0.9
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: glm47
+  reasoning_parser: glm45
+  trust_remote_code: true
+  # Canonical zai-org / QuantTrio recommended env-var bundle for GLM-5.1.
+  # Disable DEEP_GEMM and the FlashInfer sampler (the sampler owns the
+  # _topk_topp_kernel JIT path that historically deadlocked cross-rank
+  # coordination). Enable FLASHINFER_MOE_FP16 which the AWQ recipe
+  # explicitly turns on.
+  use_deep_gemm: false
+  use_flashinfer_sampler: false
+  use_flashinfer_moe_fp16: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --kv-cache-dtype
+  - fp8
+  # JIT-deadlock protector. enforce_eager disables CUDA graphs + Inductor
+  # so Triton kernels JIT in plain eager dispatch — keeps the GH200 stack
+  # consistent with the working single-node configs and the previous
+  # TP=8/2-node attempts.
+  - --enforce-eager
+  # Force string-form content rendering through the chat template; zai-org's
+  # official vLLM recipe sets this — GLM-5.1's template doesn't handle the
+  # OpenAI list-of-dict content form that vLLM's `auto` mode may auto-select.
+  - --chat-template-content-format
+  - string
+  # Prefill / caching: BOTH default-OFF via hpc/vllm_utils.py's
+  # `_DEFAULT_OFF_BOOLEAN_FLAGS`. The launcher injects --no-enable-... .
+  # With chunked prefill OFF, vLLM requires max_num_batched_tokens >=
+  # max_model_len, so set to 32768.
+  - --max-num-batched-tokens
+  - '32768'

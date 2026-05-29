@@ -29,130 +29,39 @@ from hpc.launch_utils import get_daytona_api_key_override
 def prebuild_daytona_snapshots(
     resolved_train_data: List[str],
     max_new_snapshots: int = 10,
-    max_org_snapshots: int = 40,
+    max_org_snapshots: int = 60,
     build_region: str = "us",
-    target_region: str = "RL",
+    target_region: str = "",
     build_timeout: float = 600.0,
 ) -> None:
-    """Pre-build Daytona snapshots for RL region from the login node.
+    """DEPRECATED shim: prefer ``hpc.snapshot_manager.ensure_snapshots``.
 
-    The RL region lacks build runners, so snapshots must be built using the
-    ``us`` region's build infrastructure and registered for the RL region.
-    This function:
-    1. Discovers task directories from resolved train_data paths
-    2. Analyzes unique Dockerfile environments
-    3. Creates missing snapshots via Daytona SDK
-
-    Args:
-        resolved_train_data: List of local task dataset root directories.
-        max_new_snapshots: Max unique snapshots allowed per launch (safety gate).
-        max_org_snapshots: Max total snapshots allowed in the org.
-        build_region: Region with build runners (used to init Daytona client).
-        target_region: Region where snapshots should be registered.
-        build_timeout: Timeout in seconds for each snapshot build.
+    Backward-compat wrapper around the new unified snapshot manager.
+    Resolves a single org from ``DAYTONA_API_KEY`` (matching prior behavior),
+    then delegates to ``ensure_snapshots``. Any direct callers (e.g. external
+    scripts) keep working unchanged.
     """
-    from scripts.harbor.count_snapshots_from_tasks import (
-        discover_task_dirs,
-        get_snapshot_env_dirs,
-    )
-    from harbor.utils.container_cache import analyze_task_dockerfiles
+    from hpc.snapshot_manager import ensure_snapshots, load_orgs_from_env, SnapshotCapExceeded
 
-    print("\n=== Pre-building Daytona snapshots for RL region ===")
-
-    # 1. Discover tasks
-    task_dirs = discover_task_dirs(resolved_train_data)
-    if not task_dirs:
-        print("No task directories found; skipping snapshot pre-build.")
-        return
-
-    # 2. Analyze environments
-    stats = analyze_task_dockerfiles(task_dirs)
-    print(f"Found {stats.total_tasks} tasks with {stats.unique_hashes} unique environment(s)")
-
-    if stats.unique_hashes == 0:
-        print("No environments to snapshot; skipping.")
-        return
-
-    if stats.unique_hashes > max_new_snapshots:
-        raise ValueError(
-            f"Dataset requires {stats.unique_hashes} unique snapshots, "
-            f"exceeding the safety limit of {max_new_snapshots}. "
-            f"Increase max_new_snapshots if this is intentional."
-        )
-
-    # 3. Get hash -> env_dir mapping
-    hash_to_env_dir = get_snapshot_env_dirs(task_dirs)
-
-    # 4. Init Daytona client (build in us, register for RL)
-    from daytona import Daytona, DaytonaConfig, CreateSnapshotParams
-    from daytona.common.image import Image
-    from daytona.common.errors import DaytonaNotFoundError
-
-    api_key = os.environ.get("DAYTONA_API_KEY", "")
-    api_url = os.environ.get("DAYTONA_API_URL", "")
-    if not api_key:
+    if not os.environ.get("DAYTONA_API_KEY", ""):
         print("WARNING: DAYTONA_API_KEY not set; skipping snapshot pre-build.")
         return
+    orgs = load_orgs_from_env(["default"])
+    for org in orgs:
+        org.target = build_region
 
-    config_kwargs: dict = {"api_key": api_key, "target": build_region}
-    if api_url:
-        config_kwargs["api_url"] = api_url
-    daytona = Daytona(DaytonaConfig(**config_kwargs))
-
-    # 5. Check org capacity
-    existing = daytona.snapshot.list(limit=1)
-    total_existing = existing.total
-    new_needed = stats.unique_hashes
-    if total_existing + new_needed > max_org_snapshots:
-        raise ValueError(
-            f"Org has {total_existing} snapshots; adding {new_needed} would "
-            f"exceed the limit of {max_org_snapshots}. Delete unused snapshots first."
+    try:
+        ensure_snapshots(
+            resolved_train_data,
+            orgs,
+            max_new_snapshots=max_new_snapshots,
+            max_org_snapshots=max_org_snapshots,
+            target_region=target_region,
+            build_timeout=build_timeout,
         )
-
-    # 6. Build missing snapshots
-    built = 0
-    skipped = 0
-    for hash_val, env_dir in hash_to_env_dir.items():
-        snapshot_name = f"harbor__{hash_val}__{target_region}__snapshot"
-        # Check if snapshot already exists and is usable
-        try:
-            snap = daytona.snapshot.get(snapshot_name)
-            state = getattr(snap, 'state', None)
-            if state is not None and str(state).upper() in ("ACTIVE", "SNAPSHOTSTATE.ACTIVE"):
-                print(f"  {snapshot_name}: already ACTIVE, skipping")
-                skipped += 1
-                continue
-            # Snapshot exists but is not ACTIVE (PENDING/ERROR/BUILD_FAILED) —
-            # delete and rebuild so we don't get stuck with a broken snapshot.
-            print(f"  {snapshot_name}: exists but state={state}, deleting and rebuilding")
-            try:
-                daytona.snapshot.delete(snap)
-            except Exception as del_err:
-                print(f"  {snapshot_name}: WARNING failed to delete: {del_err}")
-        except DaytonaNotFoundError:
-            pass
-
-        # Build the snapshot
-        dockerfile_path = env_dir / "Dockerfile"
-        if not dockerfile_path.exists():
-            print(f"  {snapshot_name}: WARNING no Dockerfile at {dockerfile_path}, skipping")
-            skipped += 1
-            continue
-
-        print(f"  {snapshot_name}: building from {dockerfile_path} ...")
-        daytona.snapshot.create(
-            CreateSnapshotParams(
-                name=snapshot_name,
-                image=Image.from_dockerfile(str(dockerfile_path)),
-                region_id=target_region,
-            ),
-            on_logs=print,
-            timeout=build_timeout,
-        )
-        built += 1
-        print(f"  {snapshot_name}: built successfully")
-
-    print(f"\nSnapshot pre-build complete: {built} built, {skipped} already existed")
+    except SnapshotCapExceeded as exc:
+        # Preserve the prior ValueError contract for any caller that catches it.
+        raise ValueError(str(exc)) from exc
 
 
 def resolve_rl_train_data(
@@ -586,6 +495,9 @@ class RLJobConfig:
 
     proxychains_binary: Optional[str] = None
 
+    # Ray object store size in GB (default: 40)
+    ray_object_store_gb: float = 40.0
+
     # Post-training trace upload settings
     trace_upload_enabled: bool = False
     trace_upload_repo_org: str = "DCAgent"
@@ -626,6 +538,7 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         resolve_job_and_paths,
         substitute_template,
         build_sbatch_directives,
+        resolve_conda_activate,
     )
     from hpc.rl_config_utils import parse_rl_config, build_skyrl_hydra_args, extract_terminal_bench_agent_env
 
@@ -666,11 +579,23 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         print(f"Resolved train_data: {resolved_train_data}")
 
         # Pre-build Daytona snapshots for RL region (train_data only; val_data
-        # snapshots are not pre-built due to capacity constraints)
-        if (os.environ.get("DAYTONA_API_KEY")
-                and harbor_env == "daytona"
-                and resolved_train_data):
-            prebuild_daytona_snapshots(resolved_train_data)
+        # snapshots are not pre-built due to capacity constraints). Routes
+        # through the unified hook in hpc.launch_utils; the caller assembles
+        # `orgs` explicitly (no magical job_type defaults).
+        if os.environ.get("DAYTONA_API_KEY") and resolved_train_data:
+            from hpc.launch_utils import maybe_prebuild_daytona_snapshots
+            from hpc.snapshot_manager import OrgConfig, load_orgs_from_env
+
+            api_key_override = get_daytona_api_key_override(exp_args)
+            if api_key_override and api_key_override != os.environ.get("DAYTONA_API_KEY", ""):
+                orgs = [OrgConfig(name="cli", api_key=api_key_override)]
+            else:
+                orgs = load_orgs_from_env(["default"])
+            maybe_prebuild_daytona_snapshots(
+                resolved_train_data,
+                harbor_env=harbor_env,
+                orgs=orgs,
+            )
 
     # Resolve val_data similarly (eval datasets may also be HF repos)
     # Check CLI first, then fall back to YAML config default
@@ -754,6 +679,7 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         pinggy_token=exp_args.get("pinggy_token"),
         agent_name=agent_name,
         harbor_env=harbor_env,
+        ray_object_store_gb=float(exp_args.get("ray_object_store_gb", 40.0)),
     )
 
     # Populate trace upload settings from parsed terminal_bench config
@@ -808,7 +734,7 @@ fi"""
         "job_name": job_name,
         "sbatch_extra_directives": "\n".join(sbatch_directives),
         "module_commands": hpc.get_module_commands(),
-        "conda_activate": hpc.conda_activate or "# No conda activation configured",
+        "conda_activate": resolve_conda_activate(hpc, exp_args),
         "cluster_env_file": hpc.dotenv_filename,
         "cuda_setup": cuda_setup,
         "nccl_exports": hpc.get_nccl_exports(),
@@ -1088,6 +1014,9 @@ class RLJobRunner:
             os.environ["SKYRL_EXPORT_PATH"] = self.config.export_path
 
         # vLLM settings
+        # RL uses its own conda env (dcagent-rl/otagent-rl) pinned to an older
+        # vLLM wheel that still uses the V1 engine. The eval/datagen path
+        # (hpc/vllm_utils.py) uses the newer wheel and opts into V2.
         os.environ["VLLM_USE_V1"] = "1"
 
         # Ensure WandB directory is writable
@@ -1160,7 +1089,7 @@ class RLJobRunner:
             srun_export_env=hpc.get_srun_export_env(),
             ray_env_vars=hpc.get_ray_env_vars(),
             memory_per_node=ray_memory,
-            object_store_memory=DEFAULT_OBJECT_STORE_MEMORY_BYTES,
+            object_store_memory=int(self.config.ray_object_store_gb * 1024 * 1024 * 1024),
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
             proxychains_binary=getattr(hpc, "proxychains_binary", None),

@@ -38,13 +38,25 @@ ORG="open-thoughts"
 IMAGE_NAME="openthoughts-agent"
 IMAGE_BASE="${REGISTRY}/${ORG}/${IMAGE_NAME}"
 
-# Target platforms (amd64 for x86, arm64 for GH200/ARM)
+# Default target platforms (amd64 for x86, arm64 for GH200/ARM).
+# Overridden per-variant by platforms_for_variant() below.
 PLATFORMS="linux/amd64,linux/arm64"
 
 # Available image variants
 # gpu-Nx: Standard images with N GPUs configured
 # gpu-rl: RL training image with SkyRL and separate RL environment
-VARIANTS=("gpu-1x" "gpu-4x" "gpu-8x" "gpu-rl")
+# tpu:    Cloud TPU image (vLLM-TPU 0.20.0 + Harbor[daytona]); slice size is a
+#         submit-time argument so we don't fan out to {1x,4x,8x}.
+VARIANTS=("gpu-1x" "gpu-4x" "gpu-8x" "gpu-rl" "tpu")
+
+# Per-variant platform override. Cloud TPU host VMs are all linux/amd64,
+# so the tpu image is built single-arch (avoids a wasted arm64 QEMU pass).
+platforms_for_variant() {
+    case "$1" in
+        tpu) echo "linux/amd64" ;;
+        *)   echo "$PLATFORMS" ;;
+    esac
+}
 
 # Parse arguments
 BUILD=true
@@ -78,7 +90,7 @@ while [[ $# -gt 0 ]]; do
             echo "Platforms: ${PLATFORMS}"
             exit 0
             ;;
-        gpu-*)
+        gpu-*|tpu)
             SELECTED_VARIANTS+=("$1")
             shift
             ;;
@@ -130,20 +142,21 @@ for variant in "${SELECTED_VARIANTS[@]}"; do
 
     image_tag="${IMAGE_BASE}:${variant}"
     image_tag_sha="${IMAGE_BASE}:${variant}-${GIT_SHA}"
+    variant_platforms=$(platforms_for_variant "$variant")
 
     echo ""
-    echo ">>> Building ${variant}..."
+    echo ">>> Building ${variant} (platforms: ${variant_platforms})..."
 
     if [[ "$PUSH" == "true" ]]; then
         # Multi-platform build and push (buildx requires --push for multi-platform)
         docker buildx build \
-            --platform "$PLATFORMS" \
+            --platform "$variant_platforms" \
             -f "$dockerfile" \
             -t "$image_tag" \
             -t "$image_tag_sha" \
             --push \
             .
-        echo ">>> Built and pushed: ${image_tag} (platforms: ${PLATFORMS})"
+        echo ">>> Built and pushed: ${image_tag} (platforms: ${variant_platforms})"
     else
         # Local build only (single platform - current machine's architecture)
         echo ">>> Building for local platform only (multi-platform requires --push)"
@@ -163,10 +176,6 @@ echo "Done!"
 echo ""
 echo "Images available:"
 for variant in "${SELECTED_VARIANTS[@]}"; do
-    echo "  ${IMAGE_BASE}:${variant}"
+    echo "  ${IMAGE_BASE}:${variant}  ($(platforms_for_variant "$variant"))"
 done
-if [[ "$PUSH" == "true" ]]; then
-    echo ""
-    echo "Platforms: ${PLATFORMS}"
-fi
 echo "============================================"

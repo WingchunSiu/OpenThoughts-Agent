@@ -1,0 +1,79 @@
+# Qwen3.5-397B-A17B-AWQ on v5p-32 TPU — capacity-pivot from v5p-16.
+#
+# Why v5p-32 over v5p-16:
+#   v5p-16 in us-east5-a (the only zone with v5p-16 capacity right now)
+#   churned 5× from preemption in 75 min, never finishing a 200 GB
+#   weight stream + XLA compile. v5p-32 has 52 workers / 208 chips
+#   currently warm across both zones (us-central1-a + us-east5-a) vs.
+#   v5p-16's 8 workers / 32 chips — more ambient demand, less
+#   per-slice preemption pressure relative to the autoscaler's buffer.
+#   See [[iris-capacity-first]] memory for the capacity-first heuristic.
+#
+# Why v5p-32 over v5p-128:
+#   v5p-128 = 128 chips. Qwen3.5-397B-A17B has 96 attention heads;
+#   TP must divide 96 cleanly. TP=128 doesn't (96/128 = 0.75), and
+#   running TP=96 on a v5p-128 slice wastes 32 chips. v5p-32 with
+#   TP=32 matches the v6e-32 reference config exactly (96/32 = 3
+#   heads/shard).
+#
+# Hardware: v5p-32 = 32 chips on 8 hosts (4 chips/host). Each v5p chip
+# has ~95 GB HBM (vs v6e's 16 GB), so aggregate HBM is ~3 TB —
+# 12× the per-chip headroom of v6e-32 at the same chip count.
+#
+# HBM math: 200 GB AWQ weights / 32 chips = ~6.25 GB/chip for weights.
+#   95 GB × 0.85 util = ~80 GB usable/chip → ~74 GB free for KV cache
+#   + activations + XLA scratch. Plenty; can comfortably raise
+#   max_num_seqs after first run shows healthy throughput.
+#
+# Coscheduling: 8 hosts (same as v6e-32); hbm_usage_bytes patch from
+# scripts/iris/patch_tpu_inference.py applies (multi-host slice).
+#
+# Quantization dispatch: same JAX-native fast path as v6e-32 config —
+# Qwen3.5-hybrid is in tpu-inference's perf-test list, so AWQ goes
+# through the JAX VllmAWQConfig override (not the compressed-tensors
+# path that blocked cyankiwi/MiniMax).
+
+engine:
+  type: vllm_local
+  # s3:// (not gs://) — runai_streamer speaks AWS S3 protocol.
+  model: s3://mmlaion/ot-agent/models/QuantTrio/Qwen3.5-397B-A17B-AWQ/
+  max_output_tokens: 8192
+  healthcheck_interval: 1800   # large model + streaming load + XLA compile
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: s3://mmlaion/ot-agent/models/QuantTrio/Qwen3.5-397B-A17B-AWQ/
+  num_replicas: 1
+  tensor_parallel_size: 16
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  # v5p has ~6× the per-chip HBM of v6e at TP=32; could raise to 8 or
+  # 16 once first run shows healthy throughput. Conservative on first
+  # pass to avoid OOM during XLA compile of larger batched shapes.
+  max_num_seqs: 4
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  trust_remote_code: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --load-format
+  - runai_streamer
+  # Hybrid GDN page-size calibration; same as v6e-32 config.
+  - --block-size
+  - '2096'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  # vllm-tpu force-disables chunked prefill; with that off,
+  # max_num_batched_tokens must be >= max_model_len.
+  - --max-num-batched-tokens
+  - '32768'

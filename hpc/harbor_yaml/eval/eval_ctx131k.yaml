@@ -1,11 +1,8 @@
-# Harbor eval configuration (16 concurrency, generic agent, 131k context).
-
 job_name: default-eval-job
 jobs_dir: trace_jobs
 n_attempts: 3
 timeout_multiplier: 8.0
 debug: false
-
 orchestrator:
   type: local
   n_concurrent_trials: 16
@@ -14,17 +11,17 @@ orchestrator:
   adaptive_concurrency:
     enabled: false
     algorithm: gradient2
-    min_limit:
-    max_limit:
-    metrics_endpoint:
+    min_limit: null
+    max_limit: null
+    metrics_endpoint: null
     metrics_timeout_sec: 10.0
     poll_interval_sec: 120.0
     window_size: 5
-    queue_p95_drop_threshold:
+    queue_p95_drop_threshold: null
     algorithm_kwargs: {}
   retry:
     max_retries: 10
-    include_exceptions:
+    include_exceptions: null
     exclude_exceptions:
     - AgentTimeoutError
     - VerifierTimeoutError
@@ -33,36 +30,35 @@ orchestrator:
     - VerifierOutputParseError
     - SandboxBuildFailedError
     - VerifierRuntimeError
+    - SummarizationTimeoutError
+    - ContextLengthExceededError
     wait_multiplier: 2.0
     min_wait_sec: 1.0
     max_wait_sec: 90.0
   kwargs: {}
-
 environment:
   type: daytona
   force_build: true
   delete: true
-  override_cpus: 1
-  override_memory_mb: 2048
-  override_storage_mb: 2048
-  kwargs: {}
-
+  override_cpus: 2
+  override_memory_mb: 4096
+  override_storage_mb: 4096
+  kwargs:
+    auto_snapshot: true
 verifier:
-  override_timeout_sec:
-  max_timeout_sec:
+  override_timeout_sec: null
+  max_timeout_sec: null
   disable: false
-
 metrics:
-  - type: mean-drop-ei
-    kwargs: {}
-  - type: accuracy-drop-ei
-    kwargs: {}
-
+- type: mean-drop-ei
+  kwargs: {}
+- type: accuracy-drop-ei
+  kwargs: {}
 agents:
 - name: terminus-2
-  import_path:
+  import_path: null
   model_name: placeholder/override-at-runtime
-  max_timeout_sec:
+  max_timeout_sec: null
   kwargs:
     record_terminal_session: false
     enable_episode_logging: false
@@ -76,12 +72,11 @@ agents:
       max_output_tokens: 16384
       input_cost_per_token: 0
       output_cost_per_token: 0
-
     trajectory_config:
       raw_content: true
       linear_history: true
     enable_summarize: true
-    proactive_summarization_threshold: 8192
+    proactive_summarization_threshold: 4096
     interleaved_thinking: true
     parser_name: json
     tmux_pane_width: 160
@@ -91,5 +86,4 @@ agents:
         enable_thinking: true
 datasets:
 - path: /replace/with/tasks/path
-
 tasks: []

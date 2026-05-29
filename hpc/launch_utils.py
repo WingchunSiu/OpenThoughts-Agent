@@ -37,6 +37,36 @@ _VALID_TRACE_BACKENDS = {"vllm", "ray", "vllm_local", "none"}
 """Valid backend options for trace generation."""
 
 _HOSTED_VLLM_PREFIX = "hosted_vllm/"
+
+
+def resolve_conda_activate(hpc, exp_args: dict) -> str:
+    """Resolve the conda activation command for an sbatch script.
+
+    If --conda_env is set in exp_args, generates a conda activation
+    command using that env name (extracting the conda.sh path from
+    the HPC config). Otherwise falls back to hpc.conda_activate.
+
+    Args:
+        hpc: HPC cluster configuration object.
+        exp_args: Experiment arguments dict (from CLI).
+
+    Returns:
+        Shell command string for conda activation, or a comment if none configured.
+    """
+    conda_env_override = exp_args.get("conda_env")
+    if conda_env_override:
+        # Extract conda.sh path from the HPC config's existing activate command
+        if hpc.conda_activate and "conda.sh" in hpc.conda_activate:
+            conda_sh = hpc.conda_activate.split("&&")[0].strip()
+            return f"{conda_sh} && conda activate {conda_env_override}"
+        # Fallback: try common conda paths
+        conda_prefix = os.environ.get("CONDA_PREFIX", "")
+        if conda_prefix:
+            import re as _re
+            base = _re.sub(r"/envs/[^/]+$", "", conda_prefix)
+            return f"source {base}/etc/profile.d/conda.sh && conda activate {conda_env_override}"
+        return f"conda activate {conda_env_override}"
+    return hpc.conda_activate or "# No conda activation configured"
 """Provider prefix expected by LiteLLM when routing to managed vLLM endpoints."""
 
 # Placeholder API key for local vLLM endpoints (Harbor agents require this to be set)
@@ -255,8 +285,29 @@ def validate_time_limit_for_nodes(
     return time_limit
 
 
-def generate_served_model_id() -> str:
-    """Return a unique identifier for a hosted vLLM model."""
+def generate_served_model_id(job_name: Optional[str] = None) -> str:
+    """Return a unique identifier for a hosted vLLM model.
+
+    When ``job_name`` is provided, returns a **deterministic** 16-digit ID
+    derived from ``sha256(job_name)`` — every launch of the same job produces
+    the same synthetic ID. This is essential for Harbor's auto-resume:
+    Harbor's ``_maybe_init_existing_job`` compares the freshly-loaded
+    ``JobConfig`` (which has ``model_name=hosted_vllm/<id>`` from the
+    materialized YAML) against the on-disk ``config.json``; if the two
+    synthetic IDs diverge, Harbor raises ``FileExistsError``. A
+    deterministic-per-job ID makes the YAML stable across launches so the
+    equality check passes on resume.
+
+    When ``job_name`` is omitted, falls back to a microsecond timestamp
+    (legacy behavior; used by ad-hoc paths like
+    ``hpc/local_runner_utils.py`` that don't have a job name in hand).
+    """
+    if job_name:
+        import hashlib
+        digest_hex = hashlib.sha256(job_name.encode("utf-8")).hexdigest()
+        # Take the top 64 bits, convert to decimal, truncate to 16 chars.
+        # 64 bits → up to 20 decimal digits; truncate for vLLM-friendly length.
+        return str(int(digest_hex[:16], 16))[:16]
     return str(int(time.time() * 1_000_000))
 
 
@@ -429,6 +480,52 @@ def get_daytona_api_key_override(exp_args: Dict[str, Any]) -> str:
     return exp_args.get("daytona_api_key") or os.environ.get("DAYTONA_API_KEY", "")
 
 
+def maybe_prebuild_daytona_snapshots(
+    resolved_data_paths,
+    *,
+    harbor_env,
+    orgs,
+    **passthrough,
+):
+    """Single hook used by RL/datagen/eval to pre-build Daytona snapshots.
+
+    Gates:
+      - harbor_env != "daytona"      -> return None
+      - empty resolved_data_paths    -> return None
+      - empty orgs                   -> return None
+    Otherwise delegates to ``hpc.snapshot_manager.ensure_snapshots``.
+
+    Callers compute their own ``harbor_env`` and ``orgs`` and pass them
+    explicitly — this hook does not introspect job_type or env-var
+    conventions on its own (per the unified-design decision in
+    ``~/.claude/plans/starry-percolating-journal.md``).
+
+    ``**passthrough`` is forwarded to ``ensure_snapshots`` so callers can
+    set ``max_new_snapshots``, ``target_region``, ``build_timeout``, etc.
+
+    Args:
+        resolved_data_paths: List of local task-dataset root directories.
+        harbor_env: The resolved Harbor environment string (``"daytona"``,
+            ``"docker"``, ``"modal"``, ...). The hook is a no-op when not
+            ``"daytona"``.
+        orgs: Pre-constructed list of ``OrgConfig`` objects. If empty, the
+            hook returns None (caller chose to skip Daytona pre-build).
+
+    Returns:
+        ``SnapshotPlanResult`` on success, ``None`` when gated out.
+    """
+    if harbor_env != "daytona":
+        return None
+    if not resolved_data_paths:
+        return None
+    if not orgs:
+        return None
+    # Import lazily so test environments without the daytona SDK can still
+    # import hpc.launch_utils.
+    from hpc.snapshot_manager import ensure_snapshots
+    return ensure_snapshots(resolved_data_paths, orgs, **passthrough)
+
+
 # =============================================================================
 # Dict Utilities
 # =============================================================================
@@ -507,6 +604,7 @@ def setup_experiments_dir(
     job_name: Optional[str] = None,
     create_dirs: bool = True,
     sbatch_subdir: str = "sbatch",
+    disable_dedup: bool = False,
 ) -> ExperimentsPaths:
     """Resolve experiments directory and create standard subdirectories.
 
@@ -521,6 +619,11 @@ def setup_experiments_dir(
         create_dirs: Whether to create directories (default True).
         sbatch_subdir: Name of sbatch subdirectory (default "sbatch",
                        use "sbatch_scripts" for backwards compat where needed).
+        disable_dedup: If True, skip the ``experiments/<job_name>_2`` collision
+                       dedup logic and target the original path even when prior
+                       config artifacts exist. Set by the resume manager when
+                       it has decided to engage (clean resume, post-mutate
+                       resume, or post-wipe fresh start).
 
     Returns:
         ExperimentsPaths with root, sbatch, configs, and logs paths.
@@ -536,6 +639,28 @@ def setup_experiments_dir(
         # Fallback to just "experiments" (legacy behavior)
         experiments_subdir = "experiments"
     experiments_abs = resolve_workspace_path(experiments_subdir)
+
+    # Deduplicate: if experiments dir already exists with configs from a different
+    # run, append a numeric suffix to avoid collisions. This prevents a new job
+    # from silently reusing (and potentially overwriting) an existing experiment.
+    # Skipped when ``disable_dedup`` is set (the resume manager has already
+    # decided how to handle the existing dir and wants the launcher to land
+    # at the same path).
+    if create_dirs and not disable_dedup and experiments_abs.exists() and (experiments_abs / "configs").exists():
+        existing_configs = list((experiments_abs / "configs").glob("*.json")) + list(
+            (experiments_abs / "configs").glob("*.yaml")
+        )
+        if existing_configs:
+            base = experiments_abs
+            suffix = 2
+            while experiments_abs.exists() and list(
+                (experiments_abs / "configs").glob("*.json")
+                if (experiments_abs / "configs").exists()
+                else []
+            ):
+                experiments_abs = base.parent / f"{base.name}_{suffix}"
+                suffix += 1
+            print(f"[launch_utils] Experiment dir collision detected. Using {experiments_abs} instead of {base}")
 
     paths = ExperimentsPaths(
         root=experiments_abs,
@@ -593,7 +718,30 @@ def resolve_job_and_paths(
         else:
             raise ValueError(f"{job_type_label} jobs require a --job_name.")
 
-    paths = setup_experiments_dir(exp_args, job_name=job_name, sbatch_subdir=sbatch_subdir)
+    # Harbor-backed job types (datagen, eval) go through the resume manager
+    # before path resolution. The manager decides whether to (a) clean-resume
+    # at the original path, (b) mutate the prior dir in place, (c) wipe it,
+    # or (d) bail with a diff for the operator. When it engages, dedup is
+    # suppressed so the launcher lands at the same path the manager prepared.
+    disable_dedup = False
+    job_type = exp_args.get("job_type")
+    if str(job_type or "").lower() in {"datagen", "eval"}:
+        try:
+            from hpc.resume_manager import resolve_resume_policy_for_launch
+            policy = resolve_resume_policy_for_launch(exp_args, job_name=job_name)
+            if policy is not None:
+                disable_dedup = True
+        except Exception:
+            # ResumeBail is intentionally allowed to propagate so the
+            # top-level launcher can render the operator message and exit.
+            raise
+
+    paths = setup_experiments_dir(
+        exp_args,
+        job_name=job_name,
+        sbatch_subdir=sbatch_subdir,
+        disable_dedup=disable_dedup,
+    )
 
     return JobSetupResult(job_name=job_name, paths=paths)
 
@@ -744,6 +892,10 @@ def build_sbatch_directives(
 
     if mem_directive:
         directives.append(mem_directive)
+    # Add reservation directive if specified
+    reservation = exp_args.get("reservation")
+    if reservation:
+        directives.append(f"#SBATCH --reservation={reservation}")
     if hpc.node_exclusion_list:
         directives.append(f"#SBATCH --exclude={hpc.node_exclusion_list}")
     # Add constraint directive based on GPU type (e.g., Perlmutter A100 variants)
@@ -1052,7 +1204,11 @@ def derive_default_job_name(cli_args: Mapping[str, Any]) -> str:
                     continue
             except (TypeError, ValueError):
                 pass
-        value_str = _strip_yaml_ext(str(value).split("/")[-1])
+        # Strip JSON-list framing the same way the dataset loop does — keeps
+        # `val_data=["OpenThoughts-TB-dev"]` from leaving a stray leading `-`
+        # in the assembled name after sanitize.
+        cleaned = str(value).replace("[", "").replace("]", "").replace('"', "")
+        value_str = _strip_yaml_ext(cleaned.split("/")[-1])
         extras.append(value_str)
 
     # ---- assemble: config, dataset, model, extras ----------------------

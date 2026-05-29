@@ -1,0 +1,51 @@
+# A5: gpu_memory_utilization 0.85 → 0.95
+#
+# v6e-8 (8 chips, 1 core/chip, 2 hosts × 4 chips/host).
+# Re-based on the 2026-05-23 00:03:52 working v3 gemma4-31B run that
+# served at 49 tok/s gen / 215-397 tok/s prompt on flax_nnx with this
+# exact baseline. Earlier v5p-8/131k attempts diverged on too many
+# axes; this grid sweeps only one knob at a time off the known-good
+# starting point.
+#
+# env_vars override sets MODEL_IMPL_TYPE=auto (lets tpu_inference
+# resolve to flax_nnx — gemma4 IS supported there). The launcher's
+# repo-wide default is `vllm` (PyTorch-XLA) for AWQ workloads, but
+# gemma4-31B is bf16 with no quant and runs faster on flax_nnx.
+env_vars:
+  MODEL_IMPL_TYPE: auto
+
+engine:
+  type: vllm_local
+  model: google/gemma-4-31B-it
+  max_output_tokens: 4096
+  healthcheck_interval: 900
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: google/gemma-4-31B-it
+  num_replicas: 1
+  tensor_parallel_size: 8
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  max_num_seqs: 2
+  gpu_memory_utilization: 0.95
+  enable_expert_parallel: false
+  enable_auto_tool_choice: true
+  tool_call_parser: hermes
+  reasoning_parser: gemma4
+  trust_remote_code: false
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --block-size
+  - '64'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  - --max-num-batched-tokens
+  - '32768'

@@ -1,0 +1,67 @@
+# MiniMax-M2.7-AWQ-4bit on v6e-16 TPU — RESEARCH BET, AWQ on TPU is unproven
+# on this stack. tpu-inference 0.20.0 registers VllmAWQConfig but actual
+# AWQ matmul kernels for MiniMax-M2 family on TPU haven't been validated.
+# Possible failure modes: weight-loader rejection, OOM during XLA compile,
+# or extremely slow per-token throughput.
+#
+# Translated from hpc/datagen_yaml/minimax_m27_awq_jupiter_1node_32k.yaml.
+# Dropped on TPU port: --enforce-eager, --kv-cache-dtype fp8,
+# use_deep_gemm / use_flashinfer_sampler / use_flashinfer_moe_fp16
+# (all CUDA/Triton-only env flags; no-ops or counterproductive on TPU).
+#
+# Hardware: v6e-16 = 16 chips on 4 hosts (4 chips/host), ~250 GB total
+# HBM. AWQ 4-bit weights for ~229B params ≈ 115 GB → TP=16 → ~7.2 GB/chip,
+# leaves ~8.6 GB/chip at gpu_memory_utilization=0.85 for KV + activations.
+engine:
+  type: vllm_local
+  # s3:// (not gs://) because the streamer speaks AWS-style. See the
+  # HMAC-key prerequisite in gemma4_31b_runai_v6e8_32k.yaml's header.
+  model: s3://mmlaion/ot-agent/models/QuantTrio/MiniMax-M2.7-AWQ/
+  max_output_tokens: 4096
+  healthcheck_interval: 900
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: s3://mmlaion/ot-agent/models/QuantTrio/MiniMax-M2.7-AWQ/
+  num_replicas: 1
+  tensor_parallel_size: 16
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  max_num_seqs: 8
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: minimax_m2
+  reasoning_parser: minimax_m2
+  trust_remote_code: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  # Run:AI Model Streamer: stream weights from gs:// (via S3-compat
+  # endpoint). Bypasses the 100 GB worker disk cap. Tpu-inference's
+  # RunaiIncrementalModelLoader override picks up automatically when
+  # this load-format is set.
+  - --load-format
+  - runai_streamer
+  - --block-size
+  - '64'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  # Force string-form content rendering — MiniMax templates generally
+  # don't handle the OpenAI list-of-dict content form that vLLM's
+  # `auto` mode picks. Kept from the Jupiter reference; drop if the
+  # MiniMax-M2.7 chat template handles list-of-dict natively.
+  - --chat-template-content-format
+  - string
+  # Chunked prefill / prefix caching omitted (vllm-tpu force-disables
+  # chunked prefill; prefix caching is incompatible with the TPU
+  # compile path for many architectures). With chunked prefill OFF,
+  # max_num_batched_tokens must be >= max_model_len.
+  - --max-num-batched-tokens
+  - '32768'

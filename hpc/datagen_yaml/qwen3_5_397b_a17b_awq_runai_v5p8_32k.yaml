@@ -1,0 +1,75 @@
+# Qwen3.5-397B-A17B-AWQ on v5p-8 TPU — parallel attempt to the v6e-32
+# launch (hpc/datagen_yaml/qwen3_5_397b_a17b_awq_runai_v6e32_32k.yaml).
+# Whichever slice allocates first wins; the v6e-32 attempt is heavily
+# preempted in us-east1-d so this v5p path is the hedge.
+#
+# Hardware: v5p-8 = 16 chips on 4 hosts (4 chips/host). Each v5p chip
+# has ~95 GB HBM (vs v6e's 16 GB), so aggregate HBM is ~1.52 TB —
+# 7× the per-chip headroom of v6e-32 at half the chip count.
+#
+# HBM math: 200 GB AWQ weights / 16 chips = ~12.5 GB/chip for weights.
+#   95 GB × 0.85 util = ~80 GB usable/chip → ~67 GB free for KV cache
+#   + activations + XLA scratch. Roomy; can raise max_num_seqs once
+#   the first run looks healthy.
+#
+# Coscheduling: 4 hosts (vs v6e-32's 8) → smaller cosched group,
+# faster to satisfy; the hbm_usage_bytes patch in
+# scripts/iris/patch_tpu_inference.py still applies (multi-host).
+#
+# Quantization dispatch: same JAX-native fast path as the v6e-32
+# config — Qwen3.5-hybrid is in tpu-inference's perf-test list per
+# the user note, so AWQ is handled by the JAX VllmAWQConfig override
+# (not the compressed-tensors path that blocked cyankiwi/MiniMax).
+#
+# Only deltas from the v6e-32 config:
+#   tensor_parallel_size: 8 (v5p-8 = 16 cores = 8 chips; TP=8 fully uses
+#   the slice. TP=16 fails AWQ alignment — see v5p-32 v8 attempt
+#   2026-05-23 which got `ValueError: input size not aligned with quantized
+#   weight shape ... can be caused by too large tensor parallel size`).
+#   header / HBM math comment block
+
+engine:
+  type: vllm_local
+  # s3:// (not gs://) — runai_streamer speaks AWS S3 protocol.
+  # AWS_ENDPOINT_URL=https://storage.googleapis.com (auto-injected by
+  # hpc/iris_launch_utils.py) routes to GCS.
+  model: s3://mmlaion/ot-agent/models/QuantTrio/Qwen3.5-397B-A17B-AWQ/
+  max_output_tokens: 8192
+  healthcheck_interval: 1800   # large model + streaming load + XLA compile
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: s3://mmlaion/ot-agent/models/QuantTrio/Qwen3.5-397B-A17B-AWQ/
+  num_replicas: 1
+  tensor_parallel_size: 2
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  # Conservative for the first v5p attempt; per-chip HBM is 6× v6e so
+  # we have plenty of headroom to raise later if throughput is acceptable.
+  max_num_seqs: 4
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  trust_remote_code: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --load-format
+  - runai_streamer
+  # Hybrid GDN page-size calibration; same as v6e-32 config.
+  - --block-size
+  - '2096'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  # vllm-tpu force-disables chunked prefill; with that off,
+  # max_num_batched_tokens must be >= max_model_len.
+  - --max-num-batched-tokens
+  - '32768'

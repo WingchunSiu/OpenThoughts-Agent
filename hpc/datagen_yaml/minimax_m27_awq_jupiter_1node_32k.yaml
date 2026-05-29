@@ -1,0 +1,82 @@
+# MiniMax-M2.7-AWQ-4bit — AWQ 4-bit quantized (~229B params)
+# https://huggingface.co/cyankiwi/MiniMax-M2.7-AWQ-4bit
+#
+# 32K context variant, Jupiter GH200 single-node — TP=4 / 1-node variant.
+#
+# Hardware: 1 node × 4x GH200 96GB = 4 GPUs (~384GB VRAM total)
+#   - AWQ 4-bit weights ~115GB → TP=4 within node → ~29GB/GPU
+#   - 96GB - 29GB ≈ 67GB per GPU for KV cache + activations (very roomy)
+#   - DP=1, no cross-node anything — sample_tokens RPC stays entirely
+#     within the node, which is the primary motivation for picking
+#     this layout (Bug C iter 4-10 on GLM-5.1-AWQ keeps tripping the
+#     cross-node sample_tokens RPC timeout even with all mitigations).
+#
+# Designed as a fallback to GLM-5.1-AWQ if the warmup-batched-sampling
+# patch (Bug C iter 10 = hpc/vllm_utils.py:_warmup_serving phase 2) doesn't
+# finally settle the cross-node JIT stall on the bigger model.
+
+engine:
+  type: vllm_local
+  model: cyankiwi/MiniMax-M2.7-AWQ-4bit
+  max_output_tokens: 8192
+  healthcheck_interval: 300
+  request_params:
+    temperature: 0.7
+    top_p: 0.95
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+  ray_cgraph_max_inflight_executions: 16
+  healthcheck_max_attempts: 160
+  healthcheck_retry_delay: 15
+vllm_server:
+  model_path: cyankiwi/MiniMax-M2.7-AWQ-4bit
+  num_replicas: 1
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '11:59:00'
+  max_model_len: 32768
+  max_num_seqs: 32
+  gpu_memory_utilization: 0.9
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  # Parser settings cribbed from MiniMax-M2 config (same family); verify
+  # against the model's HF README + vLLM tool/reasoning-parser registry
+  # if first launch hits a "no such parser" error.
+  tool_call_parser: minimax_m2
+  reasoning_parser: minimax_m2
+  trust_remote_code: true
+  # Disable DEEP_GEMM and the FlashInfer sampler — the sampler owns the
+  # _topk_topp_kernel JIT path that historically deadlocked cross-rank
+  # coordination on GLM-5.1-AWQ. Keep FLASHINFER_MOE_FP16 ON (MoE recipe
+  # for both MiniMax and Qwen-MoE family).
+  use_deep_gemm: false
+  use_flashinfer_sampler: false
+  use_flashinfer_moe_fp16: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --kv-cache-dtype
+  - fp8
+  # Disables CUDA graphs + Inductor; Triton kernels still JIT but in eager
+  # dispatch, avoiding the cross-rank deadlock. Matched to the GLM-5.1
+  # 2-node recipe.
+  - --enforce-eager
+  # Force string-form content rendering through the chat template; MiniMax
+  # variants generally don't handle the OpenAI list-of-dict content form
+  # that vLLM's `auto` mode picks. (Drop this line if the MiniMax-M2.7
+  # chat template handles list-of-dict natively.)
+  - --chat-template-content-format
+  - string
+  # Prefill / caching are default-OFF via hpc/vllm_utils.py's
+  # `_DEFAULT_OFF_BOOLEAN_FLAGS` — the launcher injects --no-enable-... .
+  # With chunked prefill OFF, vLLM requires
+  # max_num_batched_tokens >= max_model_len, so set to 32768 to match
+  # max_model_len. To re-enable chunked prefill / prefix caching for this
+  # YAML, add the `--enable-...` flag back here or set
+  # `enable_chunked_prefill: true` / `enable_prefix_caching: true` at the
+  # top level.
+  - --max-num-batched-tokens
+  - '32768'

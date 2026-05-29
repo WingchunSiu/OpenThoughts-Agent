@@ -1,0 +1,87 @@
+# Gemma-4-31B-it (Google, dense, 31B params, ~62 GB bf16 weights) on v6e-8
+# with the Run:AI Model Streamer to bypass the marin worker's 100 GB disk cap.
+#
+# Architecture:    Gemma4ForConditionalGeneration   (JAX-NATIVE in tpu-inference)
+#                  → see tpu_inference/models/jax/gemma4.py
+#                  → no PyTorch-on-XLA fallback penalty
+#
+# Streaming load:  Run:AI Model Streamer ("--load-format runai_streamer")
+#                  reads safetensors directly from object storage without
+#                  caching the full model to local disk. Required for any
+#                  model whose weights exceed ~50 GB on marin's 100 GB-disk
+#                  v6e workers.
+#
+# !! Prerequisites BEFORE this YAML can be used !!
+#
+#   1. Mirror weights to GCS via scripts/iris/launch_hf_mirror.py:
+#        python scripts/iris/launch_hf_mirror.py \
+#          --repo google/gemma-4-31B-it \
+#          --gcs-prefix gs://marin-eu-west4/ot-agent/models/
+#
+#   2. HMAC keys for GCS S3-compatibility on the iris-worker service account.
+#      The runai_streamer uses boto3's S3 protocol; AWS_ENDPOINT_URL pointing
+#      at storage.googleapis.com gives it GCS access but it still needs
+#      AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (HMAC credentials, NOT a
+#      JSON service-account key). Create once with:
+#        gcloud auth login          # if not authed against hai-gcp-models
+#        gcloud iam service-accounts keys list \
+#          --iam-account=iris-worker@hai-gcp-models.iam.gserviceaccount.com
+#        gsutil hmac create iris-worker@hai-gcp-models.iam.gserviceaccount.com
+#      Then add the resulting AccessKeyId / Secret to ~/Documents/secrets.env
+#      so the launcher forwards them as env vars.
+#
+#      AWS_ENDPOINT_URL / RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING /
+#      AWS_EC2_METADATA_DISABLED are already auto-injected by
+#      hpc/iris_launch_utils.py.
+engine:
+  type: vllm_local
+  # s3:// (not gs://) because the loader speaks AWS-style. AWS_ENDPOINT_URL
+  # routes the request to storage.googleapis.com. Trailing slash required.
+  model: s3://mmlaion/ot-agent/models/google/gemma-4-31B-it/
+  max_output_tokens: 4096
+  healthcheck_interval: 900   # bigger model, longer init grace
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: s3://mmlaion/ot-agent/models/google/gemma-4-31B-it/
+  num_replicas: 1
+  # v6e-8 = 8 chips on 2 hosts (4 chips/host); tp=8 spans the full slice.
+  # 31B bf16 → ~62 GB weights → tp=8 → ~7.75 GB/chip; v6e-8 has ~16 GB
+  # HBM/chip → ~8 GB/chip for KV + activations at gpu_memory_utilization=0.85.
+  tensor_parallel_size: 8
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  max_num_seqs: 2
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: false
+  enable_auto_tool_choice: true
+  # Gemma 4 has built-in reasoning mode; matching vLLM's gemma reasoning
+  # parser name. tool_call_parser TBD — Gemma 4's tool schema may need a
+  # dedicated parser; fall back to a generic one if vLLM rejects "gemma".
+  tool_call_parser: hermes
+  reasoning_parser: gemma4
+  trust_remote_code: false       # Gemma is canonical; no remote code needed
+  extra_args:
+  - --dtype
+  - bfloat16
+  # Run:AI Model Streamer: read safetensors shards from --model URI without
+  # disk-caching the full model. tpu-inference's RunaiIncrementalModelLoader
+  # override adds natural-sort + per-module weight processing hooks but
+  # does NOT change the URI scheme handling — still S3 via boto3.
+  - --load-format
+  - runai_streamer
+  # vllm-tpu prefers larger KV blocks than the CUDA backend's default-16.
+  - --block-size
+  - '64'
+  - --max-num-partial-prefills
+  - '1'
+  # Gemma 4 is multimodal (text + vision). Zero out MM inputs for our
+  # text-only eval workload to avoid compiling MM tower kernels.
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  # See qwen3_8b_vllm_serve_32k_v6e8.yaml for why chunked prefill /
+  # prefix caching are omitted on TPU.

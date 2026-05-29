@@ -6,16 +6,18 @@ successfully back to the Hub.
 
 Workflow:
 1) Download HF dataset and extract task directories to a local path
-2) For each task, attempt to build its environment/Dockerfile in Daytona
-   - up to 5 retries with exponential backoff (2,4,8,16,32s) on failure
-   - success if any attempt completes without raising
-   - runs up to 32 validations in parallel (configurable)
-3) Run surviving tasks through a Harbor smoke test (terminus-2, gpt-5-nano, max_episodes=1)
-   - use --filter_successful to swap in GPT-5-Codex with 160 episodes and require reward > 0.0
-   - treats any Harbor exception as a failure
-4) Copy successful tasks into a temporary directory and push to HF as a dataset
+2) Optionally take a random subset (--sample_size N [--sample_seed S]) and/or
+   a deterministic prefix (--limit N) of the discovered tasks
+3) Run any subset of these stages, in order, via --stages (default: 'daytona,harbor'):
+   - 'daytona': build each task's environment/Dockerfile in Daytona
+       up to 5 retries with exponential backoff (2,4,8,16,32s) on failure;
+       runs up to 32 validations in parallel (configurable)
+   - 'harbor': Harbor smoke test (terminus-2, gpt-5-nano, max_episodes=1).
+       --filter_successful swaps in GPT-5-Codex with 160 episodes and requires reward > 0.0
+   - 'oracle': run the oracle agent against solution/solve.sh, requiring reward=1.0
+4) Copy surviving tasks into a staging directory, then either upload to HF or
+   skip the upload (--skip_upload) and just leave them on disk
    - use --final_output_dir to relocate the staged successes directory after upload
-   - treats any Harbor exception as a failure
 
 Notes:
 - Requires 'daytona' to be importable and a working Daytona backend.
@@ -49,6 +51,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import random
 import shutil
 import sys
 import tempfile
@@ -56,7 +59,7 @@ import time
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from rich.console import Console
 from rich.progress import (
@@ -80,6 +83,11 @@ from scripts.harbor import tasks_parquet_converter as tpc
 from data.commons import upload_tasks_to_hf
 
 CONSOLE = Console()
+
+STAGE_DAYTONA = "daytona"
+STAGE_HARBOR = "harbor"
+STAGE_ORACLE = "oracle"
+ALL_STAGES = (STAGE_DAYTONA, STAGE_HARBOR, STAGE_ORACLE)
 
 PROGRESS_COLUMNS = (
     SpinnerColumn(),
@@ -106,6 +114,13 @@ def _extract_hf_dataset(repo_id: str, revision: Optional[str], base_dir: Path) -
     Writes a temporary parquet snapshot and uses the shared converter to extract
     directories preserving the 'path' column.
     """
+    # Skip extraction if tasks already exist in target directory
+    base_dir.mkdir(parents=True, exist_ok=True)
+    existing_tasks = [d for d in base_dir.iterdir() if d.is_dir() and (d / "environment" / "Dockerfile").exists()]
+    if existing_tasks:
+        CONSOLE.print(f"[cyan][extract][/cyan] Found {len(existing_tasks)} existing tasks in {base_dir}; skipping extraction")
+        return base_dir
+    
     ds = load_dataset(repo_id, revision=revision)
     # Pick a split (prefer train)
     if hasattr(ds, "keys"):
@@ -118,7 +133,6 @@ def _extract_hf_dataset(repo_id: str, revision: Optional[str], base_dir: Path) -
     parquet_path = tmp_dir / "tasks.parquet"
     split.to_parquet(str(parquet_path))
 
-    base_dir.mkdir(parents=True, exist_ok=True)
     tpc.from_parquet(str(parquet_path), base=str(base_dir), on_exist="overwrite")
     return base_dir
 
@@ -281,11 +295,16 @@ def _import_harbor_components():
             AgentConfig,
             EnvironmentConfig,
             JobConfig,
-            LocalDatasetConfig,
             RetryConfig,
             VerifierConfig,
         )
-        from harbor.orchestrators.base import OrchestratorEvent
+        from scripts.harbor._harbor_compat import (
+            LocalDatasetConfig,
+            OrchestratorEvent,
+            add_trial_completed_hook,
+            create_job,
+            set_orchestrator_field,
+        )
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise SystemExit(
             "Harbor is required for stage 2 validation. Install it (e.g. pip install -e ../harbor) "
@@ -303,6 +322,9 @@ def _import_harbor_components():
         "RetryConfig": RetryConfig,
         "VerifierConfig": VerifierConfig,
         "OrchestratorEvent": OrchestratorEvent,
+        "add_trial_completed_hook": add_trial_completed_hook,
+        "set_orchestrator_field": set_orchestrator_field,
+        "create_job": create_job,
     }
 
 
@@ -340,10 +362,10 @@ def _run_harbor_smoke_test(
     disk_gb: int,
     concurrency: int,
     filter_successful: bool,
-) -> Tuple[List[Path], List[Path], Optional[Path]]:
+) -> Tuple[List[Path], List[Path], Optional[Path], Dict[str, int]]:
     tasks = _discover_tasks(dataset_root)
     if not tasks:
-        return [], [], None
+        return [], [], None, {"total": 0, "infra_ok": 0, "solved": 0}
 
     components = _import_harbor_components()
     Job = components["Job"]
@@ -355,6 +377,9 @@ def _run_harbor_smoke_test(
     LocalDatasetConfig = components["LocalDatasetConfig"]
     VerifierConfig = components["VerifierConfig"]
     OrchestratorEvent = components["OrchestratorEvent"]
+    add_trial_completed_hook = components["add_trial_completed_hook"]
+    set_orchestrator_field = components["set_orchestrator_field"]
+    create_job = components["create_job"]
 
     name_to_path: Dict[str, Path] = {task.name: task for task in tasks}
     jobs_root = Path(tempfile.mkdtemp(prefix="harbor_jobs_"))
@@ -366,9 +391,9 @@ def _run_harbor_smoke_test(
     effective_concurrency = (
         len(tasks) if concurrency is None or concurrency <= 0 else min(concurrency, len(tasks))
     )
-    job_config.orchestrator.n_concurrent_trials = max(1, effective_concurrency)
-    job_config.orchestrator.quiet = True
-    job_config.orchestrator.retry = _make_retry_config(components)
+    set_orchestrator_field(job_config, "n_concurrent_trials", max(1, effective_concurrency))
+    set_orchestrator_field(job_config, "quiet", True)
+    set_orchestrator_field(job_config, "retry", _make_retry_config(components))
     agent_model = "gpt-5-codex" if filter_successful else "gpt-5-nano"
     agent_kwargs = {"max_episodes": 160} if filter_successful else {"max_episodes": 1}
     agent_kwargs.setdefault("reasoning_effort", "medium")
@@ -391,7 +416,7 @@ def _run_harbor_smoke_test(
     job_config.verifier = VerifierConfig(override_timeout_sec=verifier_timeout)
     job_config.datasets = [LocalDatasetConfig(path=dataset_root)]
 
-    job = Job(job_config)
+    job = create_job(Job, job_config)
     job_dir = job.job_dir
 
     job_label = "Harbor filter" if filter_successful else "Harbor smoke test"
@@ -402,6 +427,8 @@ def _run_harbor_smoke_test(
     stage_status: Dict[str, bool] = {}
     success_count = 0
     failure_count = 0
+    infra_ok_count = 0
+    solved_count = 0
     total = len(tasks)
     start = time.perf_counter()
 
@@ -429,14 +456,18 @@ def _run_harbor_smoke_test(
         )
 
         async def _progress_hook(hook_event):
-            nonlocal success_count, failure_count
+            nonlocal success_count, failure_count, infra_ok_count, solved_count
             trial_result = hook_event.result
             rewards = None
             if trial_result is not None and trial_result.verifier_result is not None:
                 rewards = trial_result.verifier_result.rewards
-            is_success = trial_result is not None and trial_result.exception_info is None
-            if is_success and filter_successful:
-                is_success = _reward_positive(rewards)
+            is_infra_ok = trial_result is not None and trial_result.exception_info is None
+            is_solved = is_infra_ok and _reward_positive(rewards)
+            if is_infra_ok:
+                infra_ok_count += 1
+            if is_solved:
+                solved_count += 1
+            is_success = is_solved if filter_successful else is_infra_ok
             stage_status[hook_event.task_name] = bool(is_success)
             if is_success:
                 success_count += 1
@@ -455,7 +486,7 @@ def _run_harbor_smoke_test(
                 rate=rate,
             )
 
-        job._orchestrator.add_hook(OrchestratorEvent.TRIAL_COMPLETED, _progress_hook)
+        add_trial_completed_hook(job, _progress_hook)
 
         try:
             asyncio.run(job.run())
@@ -474,7 +505,8 @@ def _run_harbor_smoke_test(
         else:
             failed.append(path)
 
-    return passed, failed, job_dir
+    stats = {"total": total, "infra_ok": infra_ok_count, "solved": solved_count}
+    return passed, failed, job_dir, stats
 
 
 def _run_oracle_solution_check(
@@ -501,6 +533,9 @@ def _run_oracle_solution_check(
     LocalDatasetConfig = components["LocalDatasetConfig"]
     VerifierConfig = components["VerifierConfig"]
     OrchestratorEvent = components["OrchestratorEvent"]
+    add_trial_completed_hook = components["add_trial_completed_hook"]
+    set_orchestrator_field = components["set_orchestrator_field"]
+    create_job = components["create_job"]
 
     missing_solution: List[Path] = []
     candidates: List[Path] = []
@@ -523,9 +558,9 @@ def _run_oracle_solution_check(
     effective_concurrency = (
         len(candidates) if concurrency is None or concurrency <= 0 else min(concurrency, len(candidates))
     )
-    job_config.orchestrator.n_concurrent_trials = max(1, effective_concurrency)
-    job_config.orchestrator.quiet = True
-    job_config.orchestrator.retry = _make_retry_config(components)
+    set_orchestrator_field(job_config, "n_concurrent_trials", max(1, effective_concurrency))
+    set_orchestrator_field(job_config, "quiet", True)
+    set_orchestrator_field(job_config, "retry", _make_retry_config(components))
     job_config.agents = [
         AgentConfig(
             name=AgentName.ORACLE.value,
@@ -548,7 +583,7 @@ def _run_oracle_solution_check(
         )
     ]
 
-    job = Job(job_config)
+    job = create_job(Job, job_config)
     job_dir = job.job_dir
 
     CONSOLE.print(
@@ -613,7 +648,7 @@ def _run_oracle_solution_check(
                 rate=rate,
             )
 
-        job._orchestrator.add_hook(OrchestratorEvent.TRIAL_COMPLETED, _progress_hook)
+        add_trial_completed_hook(job, _progress_hook)
 
         try:
             asyncio.run(job.run())
@@ -667,46 +702,123 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Use GPT-5-Codex (160 episodes) in stage 2 and filter on reward > 0.0",
     )
+    p.add_argument(
+        "--stages",
+        default=None,
+        help=(
+            "Comma-separated stages to run, in order. Choices: "
+            f"{','.join(ALL_STAGES)}. Default: 'daytona,harbor' (plus 'oracle' "
+            "if --oracle_check is set). Overrides --oracle_check / --oracle_check_only."
+        ),
+    )
+    p.add_argument(
+        "--skip_upload",
+        action="store_true",
+        help="Skip the final HF upload (staged successes are kept on disk)",
+    )
+    p.add_argument(
+        "--sample_size",
+        type=int,
+        default=None,
+        help="If set, take a random sample of N tasks from the input dataset before any stage runs",
+    )
+    p.add_argument(
+        "--sample_seed",
+        type=int,
+        default=None,
+        help="Seed for --sample_size (default: nondeterministic)",
+    )
     oracle_group = p.add_mutually_exclusive_group()
     oracle_group.add_argument(
         "--oracle_check",
         action="store_true",
-        help="Run oracle agent validation requiring reward=1.0 at solution/solve.sh",
+        help="(Back-compat) Append oracle stage to the default stages",
     )
     oracle_group.add_argument(
         "--oracle_check_only",
         action="store_true",
-        help="Skip Daytona and smoke tests; run only the oracle solution check",
+        help="(Back-compat) Equivalent to --stages oracle",
     )
     return p.parse_args(list(argv) if argv is not None else None)
 
 
+def _resolve_stages(args: argparse.Namespace) -> List[str]:
+    if args.stages:
+        requested = [s.strip().lower() for s in args.stages.split(",") if s.strip()]
+        invalid = [s for s in requested if s not in ALL_STAGES]
+        if invalid:
+            raise SystemExit(
+                f"Unknown stage(s): {invalid}. Valid choices: {list(ALL_STAGES)}"
+            )
+        # Preserve user order; drop dupes.
+        seen: Set[str] = set()
+        ordered = []
+        for s in requested:
+            if s not in seen:
+                ordered.append(s)
+                seen.add(s)
+        return ordered
+    if args.oracle_check_only:
+        return [STAGE_ORACLE]
+    if args.oracle_check:
+        return [STAGE_DAYTONA, STAGE_HARBOR, STAGE_ORACLE]
+    return [STAGE_DAYTONA, STAGE_HARBOR]
+
+
+def _save_failures_for_inspection(
+    failures: Iterable[Path],
+    keep_failed_dir: Optional[str],
+    stage_name: str,
+    fallback_source_root: Optional[Path] = None,
+) -> None:
+    failures = list(failures)
+    if not keep_failed_dir or not failures:
+        return
+    dest_root = Path(keep_failed_dir) / stage_name
+    dest_root.mkdir(parents=True, exist_ok=True)
+    for task_dir in failures:
+        source = task_dir
+        if fallback_source_root is not None:
+            candidate = fallback_source_root / task_dir.name
+            if candidate.exists():
+                source = candidate
+        shutil.copytree(source, dest_root / task_dir.name, dirs_exist_ok=True)
+    CONSOLE.print(f"[{stage_name}] Copied failures to {dest_root}")
+
+
 def main(argv: Optional[Iterable[str]] = None) -> None:
     args = parse_args(argv)
+    stages = _resolve_stages(args)
     extract_dir = Path(args.extract_dir) if args.extract_dir else Path(tempfile.mkdtemp(prefix="tasks_extracted_"))
-    oracle_only = bool(args.oracle_check_only)
-    oracle_enabled = bool(args.oracle_check or oracle_only)
 
     CONSOLE.print(f"[bold cyan][extract][/bold cyan] Repo: {args.repo_id} rev={args.revision or '<latest>'}")
     CONSOLE.print(f"[bold cyan][extract][/bold cyan] Target directory: {extract_dir}")
+    CONSOLE.print(f"[bold cyan][stages][/bold cyan] Running: {', '.join(stages) if stages else '(none — upload-only)'}")
     _extract_hf_dataset(args.repo_id, args.revision, extract_dir)
 
     tasks = _discover_tasks(extract_dir)
+    CONSOLE.print(f"[cyan][validate][/cyan] Found {len(tasks)} candidate tasks")
+
+    if args.sample_size is not None and args.sample_size > 0 and args.sample_size < len(tasks):
+        rng = random.Random(args.sample_seed)
+        tasks = sorted(rng.sample(tasks, args.sample_size), key=lambda p: p.name)
+        seed_note = f" (seed={args.sample_seed})" if args.sample_seed is not None else ""
+        CONSOLE.print(f"[cyan][validate][/cyan] Random sample: {len(tasks)} tasks{seed_note}")
+
     if args.limit is not None:
         tasks = tasks[: max(0, int(args.limit))]
-    CONSOLE.print(f"[cyan][validate][/cyan] Found {len(tasks)} candidate tasks")
+        CONSOLE.print(f"[cyan][validate][/cyan] After --limit: {len(tasks)} tasks")
+
     if not tasks:
         CONSOLE.print("[yellow][validate] No tasks found; exiting[/yellow]")
         return
 
-    if oracle_only:
-        stage1_successes = tasks
-        stage1_failures: List[Path] = []
-        CONSOLE.print(
-            f"[bold][stage1][/bold] Skipped Daytona validation (--oracle-check-only); carrying {len(stage1_successes)} tasks forward"
-        )
-    else:
-        stage1_successes, stage1_failures = _run_daytona_validation(
+    # Stage 1 (Daytona) is special: it works directly on extract_dir, then we
+    # copy survivors into staged. If stage 1 is not requested, we copy all
+    # selected tasks into staged so downstream stages and upload have a single
+    # working directory.
+    if STAGE_DAYTONA in stages:
+        successes, failures = _run_daytona_validation(
             tasks,
             base_dir=extract_dir,
             cpu=args.cpu,
@@ -717,33 +829,22 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             processes=max(1, int(args.processes)),
         )
         CONSOLE.print(
-            f"[bold][stage1][/bold] Success: [green]{len(stage1_successes)}[/green]  Fail: [red]{len(stage1_failures)}[/red]"
+            f"[bold][daytona][/bold] Success: [green]{len(successes)}[/green]  Fail: [red]{len(failures)}[/red]"
         )
+        _save_failures_for_inspection(failures, args.keep_failed_dir, "daytona")
+        survivors = successes
+    else:
+        survivors = list(tasks)
 
-    if args.keep_failed_dir and stage1_failures:
-        failed_root = Path(args.keep_failed_dir) / "stage1"
-        failed_root.mkdir(parents=True, exist_ok=True)
-        for task_dir in stage1_failures:
-            shutil.copytree(task_dir, failed_root / task_dir.name, dirs_exist_ok=True)
-        CONSOLE.print(f"[stage1] Copied Daytona failures to {failed_root}")
-
-    if not stage1_successes:
-        CONSOLE.print("[yellow][stage1] No successful tasks to upload; exiting[/yellow]")
+    if not survivors:
+        CONSOLE.print("[yellow][daytona] No survivors; exiting[/yellow]")
         return
 
-    # Stage successes into a temp dir and push
     staged = Path(tempfile.mkdtemp(prefix="tasks_success_"))
-    _copy_successes(stage1_successes, staged)
+    _copy_successes(survivors, staged)
 
-    if oracle_only:
-        stage2_successes = _discover_tasks(staged)
-        stage2_failures: List[Path] = []
-        harbor_job_dir: Optional[Path] = None
-        CONSOLE.print(
-            f"[bold][stage2][/bold] Skipped Harbor smoke test (--oracle-check-only); {len(stage2_successes)} tasks remain"
-        )
-    else:
-        stage2_successes, stage2_failures, harbor_job_dir = _run_harbor_smoke_test(
+    if STAGE_HARBOR in stages:
+        successes, failures, harbor_job_dir, harbor_stats = _run_harbor_smoke_test(
             staged,
             agent_timeout=args.timeout,
             verifier_timeout=args.timeout,
@@ -753,44 +854,33 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             concurrency=args.harbor_concurrency,
             filter_successful=bool(args.filter_successful),
         )
-        stage2_mode = "filter" if args.filter_successful else "smoke test"
+        mode_label = "filter" if args.filter_successful else "smoke test"
+        n = max(1, harbor_stats["total"])
+        infra_rate = harbor_stats["infra_ok"] / n
+        solved_rate = harbor_stats["solved"] / n
         CONSOLE.print(
-            f"[bold][stage2][/bold] Harbor {stage2_mode}: Success: [green]{len(stage2_successes)}[/green]  Fail: [red]{len(stage2_failures)}[/red]"
+            f"[bold][harbor][/bold] {mode_label}: "
+            f"Success: [green]{len(successes)}[/green]  Fail: [red]{len(failures)}[/red]  "
+            f"infra_ok: {harbor_stats['infra_ok']}/{harbor_stats['total']} ({infra_rate:.3f})  "
+            f"solved: {harbor_stats['solved']}/{harbor_stats['total']} ({solved_rate:.3f})"
         )
-
-    if not oracle_only:
-        if args.keep_failed_dir and stage2_failures:
-            stage2_root = Path(args.keep_failed_dir) / "stage2"
-            stage2_root.mkdir(parents=True, exist_ok=True)
-            for task_dir in stage2_failures:
-                source = extract_dir / task_dir.name
-                shutil.copytree(
-                    source if source.exists() else task_dir,
-                    stage2_root / task_dir.name,
-                    dirs_exist_ok=True,
-                )
-            CONSOLE.print(f"[stage2] Copied Harbor failures to {stage2_root}")
-
-        for task_dir in stage2_failures:
+        _save_failures_for_inspection(failures, args.keep_failed_dir, "harbor", fallback_source_root=extract_dir)
+        for task_dir in failures:
             shutil.rmtree(task_dir, ignore_errors=True)
+        if harbor_job_dir is not None:
+            # Always retain the Harbor job dir (per-trial agent trajectories + verifier outputs).
+            # batch_validate_from_md.sh greps this path from the log to sync the traces into
+            # the per-dataset output dir. Never auto-delete on success — those traces are the
+            # whole point of running the smoke test.
+            CONSOLE.print(
+                f"[harbor] Harbor job logs retained at [underline]{harbor_job_dir}[/underline]"
+            )
+        if not successes:
+            CONSOLE.print("[yellow][harbor] No tasks passed Harbor stage; exiting[/yellow]")
+            return
 
-        if stage2_failures:
-            if harbor_job_dir is not None:
-                CONSOLE.print(
-                    f"[stage2] Harbor job logs retained at [underline]{harbor_job_dir}[/underline]"
-                )
-        else:
-            if harbor_job_dir is not None:
-                shutil.rmtree(harbor_job_dir.parent, ignore_errors=True)
-
-    stage3_successes: List[Path] = stage2_successes
-    if oracle_enabled:
-        (
-            stage3_successes,
-            stage3_failures,
-            stage3_missing,
-            oracle_job_dir,
-        ) = _run_oracle_solution_check(
+    if STAGE_ORACLE in stages:
+        successes, failures, missing, oracle_job_dir = _run_oracle_solution_check(
             staged,
             agent_timeout=args.timeout,
             verifier_timeout=args.timeout,
@@ -800,57 +890,45 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             concurrency=args.harbor_concurrency,
         )
         CONSOLE.print(
-            "[bold][stage3][/bold] Success: "
-            f"[green]{len(stage3_successes)}[/green]  "
-            f"Fail: [red]{len(stage3_failures)}[/red]  "
-            f"Missing: [yellow]{len(stage3_missing)}[/yellow]"
+            "[bold][oracle][/bold] Success: "
+            f"[green]{len(successes)}[/green]  "
+            f"Fail: [red]{len(failures)}[/red]  "
+            f"Missing: [yellow]{len(missing)}[/yellow]"
         )
-
-        all_stage3_failures = list(dict.fromkeys(stage3_failures + stage3_missing))
-
-        if args.keep_failed_dir and all_stage3_failures:
-            stage3_root = Path(args.keep_failed_dir) / "stage3"
-            stage3_root.mkdir(parents=True, exist_ok=True)
-            for task_dir in all_stage3_failures:
-                source = extract_dir / task_dir.name
-                shutil.copytree(
-                    source if source.exists() else task_dir,
-                    stage3_root / task_dir.name,
-                    dirs_exist_ok=True,
-                )
-            CONSOLE.print(f"[stage3] Copied oracle check failures to {stage3_root}")
-
-        for task_dir in all_stage3_failures:
+        all_failures = list(dict.fromkeys(failures + missing))
+        _save_failures_for_inspection(all_failures, args.keep_failed_dir, "oracle", fallback_source_root=extract_dir)
+        for task_dir in all_failures:
             shutil.rmtree(task_dir, ignore_errors=True)
-
-        if all_stage3_failures:
-            if oracle_job_dir is not None:
-                CONSOLE.print(
-                    f"[stage3] Harbor job logs retained at [underline]{oracle_job_dir}[/underline]"
-                )
-        else:
-            if oracle_job_dir is not None:
-                shutil.rmtree(oracle_job_dir.parent, ignore_errors=True)
-
-        if stage3_missing:
-            missing_names = ", ".join(sorted(path.name for path in stage3_missing))
+        if oracle_job_dir is not None:
             CONSOLE.print(
-                f"[yellow][stage3] Missing solution/solve.sh for: {missing_names}[/yellow]"
+                f"[oracle] Harbor job logs retained at [underline]{oracle_job_dir}[/underline]"
             )
+        if missing:
+            missing_names = ", ".join(sorted(path.name for path in missing))
+            CONSOLE.print(
+                f"[yellow][oracle] Missing solution/solve.sh for: {missing_names}[/yellow]"
+            )
+        if not successes:
+            CONSOLE.print("[yellow][oracle] No tasks passed oracle validation; exiting[/yellow]")
+            return
 
-        stage2_successes = stage3_successes
-
-    if not stage2_successes:
-        stage_label = "stage3" if oracle_enabled else "stage2"
-        stage_desc = "oracle validation" if oracle_enabled else "Harbor validation"
-        CONSOLE.print(f"[yellow][{stage_label}] No tasks passed {stage_desc}; exiting[/yellow]")
+    final_tasks = _discover_tasks(staged)
+    if not final_tasks:
+        CONSOLE.print("[yellow][upload] No tasks remain after staging; exiting[/yellow]")
         return
 
-    target_repo = args.target_repo or args.repo_id
-    token = args.token or os.environ.get("HF_TOKEN")
-    CONSOLE.print(f"[bold magenta][upload][/bold magenta] Uploading {len(stage2_successes)} tasks to {target_repo}")
-    upload_tasks_to_hf(str(staged), target_repo, private=bool(args.private), token=token)
-    CONSOLE.print(f"[bold magenta][upload][/bold magenta] Done: https://huggingface.co/datasets/{target_repo}")
+    if args.skip_upload:
+        CONSOLE.print(
+            f"[bold magenta][upload][/bold magenta] Skipped (--skip_upload). "
+            f"{len(final_tasks)} staged tasks at [underline]{staged}[/underline]"
+        )
+    else:
+        target_repo = args.target_repo or args.repo_id
+        token = args.token or os.environ.get("HF_TOKEN")
+        CONSOLE.print(f"[bold magenta][upload][/bold magenta] Uploading {len(final_tasks)} tasks to {target_repo}")
+        upload_tasks_to_hf(str(staged), target_repo, private=bool(args.private), token=token)
+        CONSOLE.print(f"[bold magenta][upload][/bold magenta] Done: https://huggingface.co/datasets/{target_repo}")
+
     if args.final_output_dir:
         try:
             staged = _relocate_staged_output(staged, Path(args.final_output_dir))

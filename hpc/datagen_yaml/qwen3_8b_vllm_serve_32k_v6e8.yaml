@@ -1,0 +1,71 @@
+engine:
+  type: vllm_local
+  model: Qwen/Qwen3-8B
+  max_output_tokens: 1024
+  healthcheck_interval: 600
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: Qwen/Qwen3-8B
+  num_replicas: 1
+  # v6e-8 = 8 chips on 2 hosts (4 chips/host); tp=8 spans the full slice.
+  tensor_parallel_size: 8
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  # 1024 → 4096 → 16384 bumps on 2026-05-21. The harbor eval_ctx32k.yaml
+  # harness sends terminus-2 prompts that grow with the conversation; even
+  # 4096 was insufficient on the first agent turn for openthoughts-tblite
+  # tasks. 16384 accepts the prompts we've observed so far.
+  #
+  # Important: vllm-tpu sizes the KV cache from available HBM (~21 GB/chip
+  # at gpu_memory_utilization=0.7 on a v6e-4), NOT from max_model_len, so
+  # bumping max_model_len here doesn't add KV pressure — it only raises the
+  # per-request prompt-length cap. The KV stays sized for ~64k attn tokens
+  # across all sequences regardless of this value.
+  #
+  # On the v6e-8 smoke at max_model_len=16384, the first agent inference
+  # succeeded (HTTP 200) but the second turn's prompt overflowed because
+  # terminus-2's conversation context grows across turns. v6e-8 has
+  # 250 GB total HBM (vs 125 GB on v6e-4), so 32768 fits comfortably and
+  # matches the eval_ctx32k.yaml harness's named context length. For
+  # eval_ctx131k.yaml or very long openhands trajectories, raise further
+  # or move to a larger slice.
+  max_model_len: 32768
+  max_num_seqs: 2
+  # vllm-tpu honors this for KV-cache sizing (confirmed via Stage-C smoke,
+  # despite earlier launcher comments claiming otherwise). 0.70 leaves
+  # headroom for the XLA compile scratch space + per-step state of
+  # hybrid mamba layers.
+  gpu_memory_utilization: 0.70
+  # TPU doesn't use host-RAM swap the way CUDA vLLM does.
+  swap_space: 0
+  enable_expert_parallel: false
+  enable_auto_tool_choice: true
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  extra_args:
+  - --dtype
+  - bfloat16
+  # vllm-tpu prefers larger KV blocks than the CUDA backend's default-16.
+  - --block-size
+  - '64'
+  - --max-num-partial-prefills
+  - '1'
+  # Qwen3.5-4B is a multimodal model (image-text-to-text architecture);
+  # vllm-tpu refuses to compile MM tower kernels on TPU unless we cap MM
+  # inputs to zero. The harbor eval (terminus-2 on openthoughts-tblite)
+  # is text-only so zero is correct. Harmless for text-only models like
+  # Qwen3-8B since they ignore the limit. Lives in extra_args because
+  # VLLMServerConfig doesn't model this knob.
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  # Notes vs the deleted _1xH200.yaml:
+  # * --enable-chunked-prefill omitted — vllm-tpu force-disables it on TPU
+  #   (Multimodal models also reject chunked MM input on TPU).
+  # * --enable-prefix-caching omitted — incompatible with hybrid GDN
+  #   architectures on the TPU compile path (caches attention KV but not
+  #   the mamba SSM state, which corrupts decode).
+  # * --all2all-backend pplx removed — pplx is CUDA/NCCL only.

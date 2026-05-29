@@ -40,7 +40,27 @@ rm -rf /tmp/podman-* 2>/dev/null || true
 # --- Module loading (cluster-specific, substituted by launcher) ---
 {module_commands}
 
-# --- Environment setup ---
+# --- Conda activation (cluster-specific, substituted by launcher) ---
+# Must run before WORKDIR detection so DCFT is available from the dotenv.
+{conda_activate}
+
+# --- Source environment files (sets DCFT, SCRATCH, etc.) ---
+# Try common DCFT locations so the dotenv can be sourced even before DCFT is set.
+for _try_dcft in "${DCFT:-}" "${DCFT_PRIVATE:-}" "$PWD"; do
+  if [ -n "$_try_dcft" ] && [ -f "$_try_dcft/hpc/dotenv/{cluster_env_file}" ]; then
+    source "$_try_dcft/hpc/dotenv/{cluster_env_file}"
+    break
+  fi
+done
+if [ -n "${DC_AGENT_SECRET_ENV:-}" ] && [ -f "$DC_AGENT_SECRET_ENV" ]; then
+  source "$DC_AGENT_SECRET_ENV"
+fi
+if [ -n "${DCFT_ACTIVATE_ENV:-}" ]; then
+  eval "$DCFT_ACTIVATE_ENV"
+fi
+
+# --- Environment setup (WORKDIR) ---
+# Now DCFT should be set from the dotenv sourced above.
 if [ -n "${DCFT_PRIVATE:-}" ]; then
   WORKDIR="$DCFT_PRIVATE"
 elif [ -n "${DCFT:-}" ]; then
@@ -52,20 +72,6 @@ cd "$WORKDIR"
 
 if [ -z "${DCFT:-}" ]; then
   export DCFT="$WORKDIR"
-fi
-
-# --- Conda activation (cluster-specific, substituted by launcher) ---
-{conda_activate}
-
-# --- Source environment files ---
-if [ -n "${DCFT:-}" ] && [ -f "$DCFT/hpc/dotenv/{cluster_env_file}" ]; then
-  source "$DCFT/hpc/dotenv/{cluster_env_file}"
-fi
-if [ -n "${DC_AGENT_SECRET_ENV:-}" ] && [ -f "$DC_AGENT_SECRET_ENV" ]; then
-  source "$DC_AGENT_SECRET_ENV"
-fi
-if [ -n "${DCFT_ACTIVATE_ENV:-}" ]; then
-  eval "$DCFT_ACTIVATE_ENV"
 fi
 
 # --- Daytona API key override (from --daytona_api_key CLI argument) ---
@@ -84,12 +90,19 @@ export NCCL_IB_TIMEOUT=23
 export PYTORCH_ALLOC_CONF="garbage_collection_threshold:0.6,max_split_size_mb:128"
 export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
 
-# --- Ray/vLLM GPU visibility fix ---
-# Prevent Ray from modifying CUDA_VISIBLE_DEVICES per-actor.
-# Without these, Ray sets CVD to a single physical GPU index (e.g. "3") per actor,
-# but vLLM uses Ray-reported indices as torch ordinals, causing "invalid device ordinal".
-export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
-export RAY_NOSET_CUDA_VISIBLE_DEVICES=1
+# --- Ray/vLLM GPU visibility ---
+# Previously we set RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1 and
+# RAY_NOSET_CUDA_VISIBLE_DEVICES=1 to keep Ray from rewriting CUDA_VISIBLE_DEVICES
+# per actor (which caused "invalid device ordinal" on an earlier vLLM build).
+# That now breaks the new wheel's multi-node DP placement: with NOSET set,
+# vllm/v1/engine/core.py's per-actor `get_accelerator_ids()` returns an empty
+# list (Ray isn't binding accelerators to actors), and the legacy fallback's
+# `get_device_indices` formula crashes with `IndexError: list index out of
+# range` on cross-node DP.
+# Leave NOSET unset so Ray's placement-group bundle drives per-actor GPU
+# selection, matching the patched core.py + ray_executor_v2.
+# If the original "invalid device ordinal" regression returns for single-node
+# eval on the new wheel, scope NOSET back on conditionally on NUM_NODES==1.
 
 # --- Cluster-specific environment variables ---
 {env_exports}

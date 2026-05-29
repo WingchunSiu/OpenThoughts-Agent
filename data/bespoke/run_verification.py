@@ -35,9 +35,11 @@ sys.path.insert(0, "/Users/etash/Documents/sandboxes/src")
 from harbor.job import Job
 from harbor.models.agent.name import AgentName
 from harbor.models.environment_type import EnvironmentType
-from harbor.models.job.config import JobConfig, LocalDatasetConfig
+from harbor.models.job.config import JobConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 from harbor.utils.traces_utils import export_traces
+
+from scripts.harbor._harbor_compat import LocalDatasetConfig, create_job, set_orchestrator_field
 
 if __name__ == "__main__":
     # Path to converted tasks
@@ -56,9 +58,9 @@ if __name__ == "__main__":
     config.n_attempts = 1
     config.timeout_multiplier = 1.0
     
-    # Orchestrator
-    config.orchestrator.n_concurrent_trials = 32  # Reduced for stability
-    config.orchestrator.quiet = True
+    # Orchestrator (compat: flat on unified Harbor, nested on legacy)
+    set_orchestrator_field(config, "n_concurrent_trials", 32)  # Reduced for stability
+    set_orchestrator_field(config, "quiet", True)
     
     # Agents
     config.agents = [
@@ -85,7 +87,7 @@ if __name__ == "__main__":
     config.tasks = []
     
     # Run the job
-    job = Job(config)
+    job = create_job(Job, config)
     asyncio.run(job.run())
     
     # Export traces from the produced job directory

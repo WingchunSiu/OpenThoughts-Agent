@@ -328,15 +328,13 @@ class HPC(BaseModel):
         lines = [
             "# --- Ray defaults ---",
             'export RAY_CGRAPH_get_timeout="${RAY_CGRAPH_get_timeout:-900}"',
+            "# Disable Ray OOM monitor: FSDP init transiently spikes CPU RAM",
+            "# (e.g., 4 workers × 32B model peaks at ~249GB on 251GB nodes).",
+            "# The spike settles after init; Ray's default 0.95 threshold kills",
+            "# workers during this transient phase. Already disabled for GH200",
+            "# (unified memory), now disabled universally.",
+            'export RAY_memory_monitor_refresh_ms=0',
         ]
-
-        if self.unified_gpu_memory:
-            lines += [
-                "# GH200 unified memory: GPU HBM is part of system RAM, so Ray's",
-                "# memory monitor double-counts GPU allocations and kills workers",
-                "# during model loading.  Disable the monitor entirely.",
-                'export RAY_memory_monitor_refresh_ms=0',
-            ]
 
         lines += [
             'if [ -z "${RAY_TMPDIR:-}" ]; then',
@@ -369,6 +367,10 @@ class HPC(BaseModel):
 
         return r'''# ============================================================================
 # SSH Tunnel + Proxychains Setup for No-Internet Clusters (JSC)
+# Wrapped in a function so `return` works correctly in sbatch scripts.
+# ============================================================================
+_setup_proxy() {
+# ============================================================================
 #
 # Creates SOCKS5 proxy via SSH tunnel to login node, then uses proxychains
 # to route external traffic through the tunnel.
@@ -561,6 +563,8 @@ PCEOF
         echo "[proxy] ✓ Proxy setup complete (using LD_PRELOAD for Ray worker inheritance)"
     fi
 fi
+}
+_setup_proxy
 '''
 
     def get_proxy_setup(self) -> str:
@@ -757,13 +761,35 @@ jupiter = HPC(
     unified_gpu_memory=True,
     total_partition_nodes=6000,  # ~6000 booster nodes
     gpu_directive_format="--gres=gpu:{n}",
-    # CUDA module required for DeepSpeed (sets CUDA_HOME=/e/software/.../CUDA/13)
-    modules=["nvidia-compilers/25.9-CUDA-13"],
+    # GCC 14 + CUDA 13 modules required for vLLM wheel builds and DeepSpeed
+    # (sets CUDA_HOME=/e/software/.../CUDA/13)
+    modules=["GCC/14.3.0", "nvidia-compilers/25.9-CUDA-13"],
     env_vars={
         "WANDB_MODE": "offline",  # Compute nodes have no internet
         # Force GLOO and NCCL to use IPv4 (IPv6 doesn't work on Jupiter compute nodes)
         "GLOO_USE_IPV6": "0",
         "NCCL_SOCKET_FAMILY": "AF_INET",
+        # Force vLLM's process-wide socket.getaddrinfo to return AF_INET only.
+        # GLOO_USE_IPV6/NCCL_SOCKET_FAMILY above only gate Gloo+NCCL; the
+        # c10d TCPStore bootstrap (used by vLLM's mp DP backend) consults
+        # getaddrinfo directly and tries the IPv6 entry first, hitting
+        # `errno 97 - Address family not supported by protocol` on Jupiter
+        # compute nodes (their hostnames have both A and AAAA records,
+        # but IPv6 transport is dead). Job 479619 / Bug F. The monkey
+        # patch lives in vllm/env_override.py and is gated on this var.
+        "VLLM_FORCE_IPV4": "1",
+        # Skip the `vllm --help` flag-discovery probe in
+        # scripts/vllm/start_vllm_ray_controller.py. The probe parses
+        # `vllm --help` output to check whether each launcher flag is
+        # supported; when the probe transiently fails to capture the
+        # full help text (intermittent: cold-cache, slow imports,
+        # buffering), `_flag_supported("--data-parallel-size")` returns
+        # False → controller WARN's and DROPS the flag → vLLM defaults
+        # to data_parallel_size=1 → DP master assert (Bug D recurrence
+        # on job 487389, 2026-05-22). All flags the launcher emits have
+        # been stable in vLLM for many releases so this short-circuit
+        # is safe.
+        "VLLM_SKIP_FLAG_DISCOVERY": "1",
         # NOTE: Do NOT set GLOO_SOCKET_IFNAME=ib0 - it causes Gloo to use the IB hostname
         # which resolves to IPv6. Let Gloo auto-detect the interface.
         # GH200 NUMA affinity: bind each GPU worker to its local CPU NUMA node
@@ -775,12 +801,79 @@ jupiter = HPC(
         "DISABLE_AIOHTTP_TRANSPORT": "True",
         # Disable symmetric memory allreduce — send_fd fails in Singularity containers
         "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
+        # Disable cuDNN SDP backend in SDPA. On GH200 + torch 2.9.1 + CUDA 13,
+        # cuDNN's MHA graph execution hits an edge case on long sequences:
+        #   RuntimeError: Expected mha_graph->execute(...).is_good() to be true
+        # This was fixed upstream (disabled by default) in pytorch/pytorch#459e2aa
+        # but that commit post-dates torch 2.9.1. Flash SDP and math backends
+        # still work fine. Only affects SFT (RL uses vLLM, not SDPA).
+        "TORCH_CUDNN_SDPA_ENABLED": "0",
+        # Dump a Python traceback on fatal signals (SIGABRT/SIGSEGV/SIGFPE/etc).
+        # Catches C-level aborts from extensions (DeepSpeed CPU Adam, Liger Triton)
+        # that otherwise exit with code 1 and no Python stack.
+        "PYTHONFAULTHANDLER": "1",
+        # Promote async NCCL errors (e.g. failed allreduce on one rank) to a
+        # raised exception instead of a silent hang, so we get a real traceback.
+        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
+        # Extend the NCCL watchdog timeout from the 10-min default to 30 min.
+        # 12-node FA3 SFT 445090 died at 2h44m with WorkNCCL reduce_scatter
+        # hanging 600.077s before the watchdog SIGABRT'd. Training was healthy
+        # right up to the hang (loss 0.35, grad 0.13) — at 48-rank scale on
+        # Jupiter IB, one rank occasionally straggles past 10 min on a single
+        # collective. 30 min lets the run survive transient stragglers without
+        # masking permanent hangs (those still die, just 20 min later).
+        "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC": "1800",
+        "TORCH_NCCL_BLOCKING_WAIT_TIMEOUT_MS": "1800000",
+        # Bump shm_broadcast ring slot count 10 → 240 to widen the buffer
+        # for the cross-node DP+MoE+EP coordination bus. Hardcoded default
+        # in MessageQueue is 10 slots; with our patches it's overridable
+        # via this env var. 240 slots × 16 MiB chunk size = ~3.8 GB per
+        # MessageQueue (trivial against Jupiter's 239 GB /dev/shm cap).
+        # If the late-game shm_broadcast hang is "chronic-slow reader",
+        # 24× more chunks gives ~24× more pre-stuck headroom; if it's
+        # "stuck reader", we still get the new diagnostic slot-state
+        # dump at watchdog time to tell us WHICH reader is stuck.
+        # Experiment 494030+ on 2026-05-23.
+        "VLLM_MQ_MAX_CHUNKS": "240",
+        # Redirect Ray cluster startup logs to /e/data1 — /e/scratch jureap59
+        # project-shared inode quota is chronically over-soft (8.20M / 8.0M)
+        # and any new file creation under $DCFT/experiments/logs/ EDQUOTs.
+        # Symlink fix isn't viable because creating the symlink itself needs
+        # a new inode. See reference_jupiter_inode_quota.md.
+        "OT_AGENT_RAY_LOG_DIR": "/e/data1/datasets/playground/ot-baf/experiments/_ray_logs",
+        # NCCL flight recorder for v4i and beyond — keeps last 10000 collective
+        # ops per rank in a ring buffer, dumped to disk on timeout. v4h told us
+        # _ALLGATHER_BASE on TP group hangs at seq 14157; the flight recorder
+        # gives us each peer rank's last-completed seq so we can see if peer is
+        # behind (slow workload), at same point but not enqueued (GIL/JIT), or
+        # already past (out-of-order issue). DESYNC_DEBUG=1 adds extra state
+        # logging at timeout. Dump path is /e/data1 (no quota issues vs /tmp
+        # tmpfs which gets cleaned up).
+        # v4k dumps printed a deprecation warning recommending the new name
+        # TORCH_FR_BUFFER_SIZE. Set both for forward compat across PyTorch
+        # 2.x versions — both still honored in 2.11 but the legacy name is
+        # going away in a future release.
+        "TORCH_NCCL_TRACE_BUFFER_SIZE": "10000",
+        "TORCH_FR_BUFFER_SIZE": "10000",
+        "TORCH_NCCL_DESYNC_DEBUG": "1",
+        "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": "/e/data1/datasets/playground/ot-baf/experiments/_nccl_dumps/nccl_trace",
+        # vLLM's pynccl bypasses ProcessGroupNCCL — PyTorch flight recorder
+        # is blind to it. Our local instrumentation in pynccl.py records the
+        # same shape/seq info for pynccl-driven collectives (MoE all-to-all
+        # etc.). Dump triggers: SIGUSR1, atexit. Same dir as TORCH_NCCL_DEBUG_INFO_TEMP_FILE.
+        "VLLM_PYNCCL_TRACE_BUFFER_SIZE": "10000",
+        "VLLM_PYNCCL_TRACE_DUMP_DIR": "/e/data1/datasets/playground/ot-baf/experiments/_nccl_dumps/nccl_trace",
+        # vLLM's ray_env.py default whitelist (VLLM_/LMCACHE_/NCCL_/UCX_/HF_/HUGGING_FACE_)
+        # doesn't include TORCH_NCCL_ — so without this override, the env vars above
+        # only exist on the launcher shell, not inside DPMoEEngineCoreActor or
+        # RayWorkerProc where PyTorch reads them. Additive prefix override:
+        "VLLM_RAY_EXTRA_ENV_VAR_PREFIXES_TO_COPY": "TORCH_NCCL_,TORCH_FR_,VLLM_PYNCCL_",
     },
     # NOTE: Do NOT use master_addr_suffix="i" - the "i" suffixed hostname is not DNS-resolvable
     # InfiniBand routing is handled by NCCL_SOCKET_IFNAME=ib0 instead
     # NCCL/networking settings for SFT training (InfiniBand NDR)
     nccl_settings={
-        "NCCL_DEBUG": "INFO",
+        "NCCL_DEBUG": "WARN",
         "NCCL_NET_GDR_LEVEL": "0",
         "NCCL_SOCKET_IFNAME": "ib0",
         "NCCL_IB_TIMEOUT": "60",
@@ -793,6 +886,7 @@ jupiter = HPC(
     # GH200 NUMA: --gpu-bind=closest restricts CPU affinity to NUMA node 0 only
     # and overrides --cpu-bind=none. Use gpu_bind="none" + disable_cpu_bind=True
     # to let SKYRL_ENABLE_NUMA_AFFINITY handle per-GPU NUMA binding at app level.
+    conda_activate="source /e/scratch/jureap59/feuer1/miniforge3/etc/profile.d/conda.sh && conda activate otagent",
     gpu_bind="none",
     disable_cpu_bind=True,
     pre_run_commands=["ulimit -c 0"],
@@ -805,7 +899,12 @@ jupiter = HPC(
     num_nodes_fast=8,
     # Exclude rack 031 - nodes are on 10.128.26.x subnet which can't communicate
     # with 10.128.25.x subnet nodes (racks 026-030) causing Ray cluster failures
-    node_exclusion_list="jpbo-031-[01-48]",
+    # Also exclude jpbo-038-38, jpbo-065-17, jpbo-074-22, jpbo-048-41, jpbo-011-[01-48] - recurring NCCL socket/heartbeat failures
+    # jpbo-091-05 added 2026-04-15: repeated SIGABRT on 32B training (hung the 32B-5ds superset job chain twice)
+    # jpbo-044-0[1-5] added 2026-04-22: repeated NCCL TCPStore broken-pipe stalls on Qwen3.5-9B chain (4 consecutive failures)
+    # jpbo-074-40 added 2026-05-20: SSH tunnel to login jpbl-s01-01 "No route to host" — proxychains setup fails at job start (exit 127 in 29s, job 475717)
+    # 2026-05-22: briefly excluded jpbo-063-40 + jpbo-063-36 after GLM-4.7 v6 (493343) shm_broadcast cascade was heavily attributed to those nodes. Rolled back after MiniMax (493421) on disjoint nodes jpbo-001-[23,32] hit the same hang at a comparable serving-time mark (~55min) with jpbo-001-32 as the primary offender (5/7 warnings). Two disjoint node sets, two distinct configs, same failure mode → the issue is a wheel-level cross-node sustained-load bug, not a per-node interconnect flake. Don't add per-incident -063 / -001 exclusions to mask it.
+    node_exclusion_list="jpbo-031-[01-48],jpbo-011-[01-48],jpbo-038-38,jpbo-004-46,jpbo-065-17,jpbo-074-22,jpbo-074-40,jpbo-048-41,jpbo-091-05,jpbo-044-0[1-5]",
 )
 
 juwels = HPC(
@@ -861,9 +960,13 @@ leonardo = HPC(
     total_partition_nodes=3456,
     env_vars={
         "WANDB_MODE": "offline",  # No internet on compute nodes
+        "TORCH_NCCL_ENABLE_MONITORING": "1",  # Kill hung jobs instead of burning wall-time
+        "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC": "600",  # 10 min before declaring hang (default 480s)
+        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
     },
     # node_exclusion_list="lrdn[1606,2776,2425,2808,3064,3064,1953,2414,1506,1718,1779,2828,2354,3279,1370,2595,2751,2921,2368,2976,2733,2277,3136,2013,2952,1427,2682,2349,1655,1390,3151,3130,2002,2654,2101,2358,1597,2585,2900,2687,3165,3031,2798,2530,2344,1384,1420,1474,1509,1520,1556,1607,1647,1810,1927,2000,2028,2056,2120,2136,2371,2384,2444,2465,2479,2563,2598,2652,2716,2731,2746,2755,2772,2775,2792,2794,2917,2926,2927,3110,3221,3395,0666,0291,0043,1743,3299,3434,2379,2660,2711,2855,3444,3354,3111,2736,2345,0021,0037,2350,2201,2674,2642,2734,2690,3004,3091,1670,2689,3002,2362,1714,2071,1399,2940,2581,1357,3439,1569,1591,3439,1507,1531,2297,3379,3277,2912,1930,2878,2363,2984,3012,2663,2139,1457,2197]",
     gpu_directive_format="--gres=gpu:{n}",
+    training_launcher="accelerate",
     pretok_qos="boost_qos_dbg",
     pretok_time_limit="00:30:00",
     pretok_partition="boost_usr_prod",
@@ -875,7 +978,9 @@ leonardo = HPC(
     # pretok_partition="lrd_all_serial",
     # SSH tunnel + proxychains for no-internet compute nodes (like JSC clusters)
     needs_ssh_tunnel=True,
-    proxychains_binary="/leonardo/home/userexternal/bfeuer00/proxychains/bin/proxychains4",
+    proxychains_binary="/leonardo_work/AIFAC_5C0_290/bfeuer00/proxychains/bin/proxychains4",
+    conda_activate="source /leonardo_work/AIFAC_5C0_290/bfeuer00/miniforge3/etc/profile.d/conda.sh && conda activate otagent",
+    # Note: PBS Pro is NOT used here — Leonardo uses SLURM
 )
 
 capella = HPC(
@@ -1257,7 +1362,35 @@ frontier = HPC(
     disable_cpu_bind=True,
 )
 
-clusters = [jureca, jupiter, juwels, leonardo, capella, alpha, dip, lrz, vista, lonestar, claix, nyugreene, nyutorch, oumi, perlmutter, frontier]
+polaris = HPC(
+    name="polaris",
+    # ALCF Polaris login nodes: polaris-login-01 through polaris-login-04
+    hostname_pattern=r"polaris-login-\d+",
+    dotenv_filename="polaris.env",
+    account="CausalAlign",
+    partition="",  # PBS uses queues, not partitions; prod queue auto-routes by node count
+    gpus_per_node=4,
+    cpus_per_node=64,  # 32 cores x 2 threads
+    mem_per_node="512GB",
+    internet_node=True,  # Via proxy (proxy.alcf.anl.gov:3128)
+    gpus_type="A100 40GB",
+    total_partition_nodes=560,
+    gpu_directive_format="",  # PBS uses ngpus= in select chunks, not SLURM directives
+    env_vars={
+        # Disable addr2line for vLLM model inspection subprocess (prevents SIGSEGV hangs)
+        "TORCH_DISABLE_ADDR2LINE": "1",
+    },
+    # Note: Polaris uses PBS Pro, not SLURM. The HPC model is used for env config,
+    # eval listener, and datagen — not for sbatch submission. PBS job scripts are
+    # separate (eval/polaris/*.pbs).
+    default_time_limit="24:00:00",
+    max_time_limit="24:00:00",
+    num_nodes_slow=10,
+    num_nodes_default=24,
+    num_nodes_fast=56,
+)
+
+clusters = [jureca, jupiter, juwels, leonardo, capella, alpha, dip, lrz, vista, lonestar, claix, nyugreene, nyutorch, oumi, perlmutter, frontier, polaris]
 
 
 def detect_hpc() -> HPC:

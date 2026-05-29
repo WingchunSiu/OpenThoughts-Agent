@@ -1,0 +1,61 @@
+# G3: D3 stack (chunked + FP8 KV, no prefix) on v5litepod-16 at 131k.
+#
+# Hardware: v5litepod-16 = 16 chips × 16 GB HBM = 256 GB total slice.
+# Full slice utilization via TP=8 DP=2 (two replicas of 8 chips each).
+# Same per-replica chip count as the v6e-8 winners (D3/D4), so the
+# only delta vs G1 (D3 on v6e-8) is the v5e XLA backend instead of v6e.
+#
+# Why TP=8 DP=2 instead of single-replica TP=16: gemma4-31B vision
+# tower (1152×5376) failed to shard at TP=16 on v6e-16 (E1/E2). TP=8
+# is the safe ceiling. DP=2 fills the slice with two replicas — same
+# layout as B2 (which succeeded on v6e-8 TP=4 DP=2). DP=2 did fail
+# on v6e-16 (E1dp2/E2dp2), but that may be a v6e multi-host bug;
+# litepod-16 is single-host so might not trigger it.
+#
+# HBM accounting per chip (v5litepod-16, 16 GB):
+#   weights (62 GB bf16 / TP=8) ≈ 8 GB
+#   KV cache FP8, seqs=2, 131k ctx ≈ 6.5 GB
+#   activations + XLA scratch ≈ 1-2 GB
+#   total ≈ 15-16 GB — TIGHT but workable
+# (seqs=8 like D-tier winner is NOT viable here: KV would be ~26 GB/chip)
+
+env_vars:
+  MODEL_IMPL_TYPE: auto
+engine:
+  type: vllm_local
+  model: google/gemma-4-31B-it
+  max_output_tokens: 4096
+  healthcheck_interval: 1800
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: google/gemma-4-31B-it
+  num_replicas: 1
+  tensor_parallel_size: 8
+  pipeline_parallel_size: 1
+  data_parallel_size: 2
+  time_limit: '48:00:00'
+  max_model_len: 131072
+  max_num_seqs: 2
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: false
+  enable_auto_tool_choice: true
+  tool_call_parser: hermes
+  reasoning_parser: gemma4
+  trust_remote_code: false
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --block-size
+  - '64'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  - --max-num-batched-tokens
+  - '16384'
+  - --kv-cache-dtype
+  - fp8
+  - --enable-chunked-prefill

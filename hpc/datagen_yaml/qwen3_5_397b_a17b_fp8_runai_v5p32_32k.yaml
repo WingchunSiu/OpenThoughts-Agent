@@ -1,0 +1,70 @@
+# Qwen3.5-397B-A17B-FP8 on v5p-32 TPU.
+#
+# Model: Qwen/Qwen3.5-397B-A17B-FP8 (~406 GB FP8 weights, 397B total / 17B active
+# MoE, 512 experts, hybrid GDN attention, multimodal — vision blocks kept bf16).
+#
+# Hardware: v5p-32 = 16 cores = 8 chips (v5p has 2 cores/chip), 2 hosts × 4
+# chips/host. Per-chip HBM ≈ 95 GB → aggregate ≈ 760 GB.
+#
+# Why TP=8 (full slice, no idle):
+#   FP8 quantization uses `weight_block_size: [128, 128]` — per-shard
+#   dim along the sharded axis must be a multiple of 128. Qwen3.5-397B's
+#   MoE intermediate=1024; at TP=16 the per-shard dim is 64 (< 128 →
+#   misaligned). TP=8 gives 128 (= exactly one block). Higher TP would
+#   need a model variant with bigger intermediate or different block size.
+#
+# Why not v6e: v6e chips are 16 GB HBM. 406 GB / 8 = 50.75 GB/chip,
+# 3× over a v6e chip's capacity. v5p (95 GB/chip) gives ~45 GB headroom
+# per chip for KV + activations.
+#
+# Quantization dispatch: FP8 with [128,128] weight blocks is handled by
+# tpu_inference's vLLM-path FP8 config (`MODEL_IMPL_TYPE=vllm` set as
+# launcher default for AWQ; FP8 also routes through that path on
+# tpu-inference 0.20.0). MODEL_IMPL_TYPE=auto might pick flax_nnx — but
+# flax_nnx allows `[None, 'fp8']` so it could work too. Force `vllm`
+# to be safe.
+#
+# Prerequisites:
+#   1. HF→GCS mirror: scripts/iris/launch_hf_mirror.py
+#        --repo Qwen/Qwen3.5-397B-A17B-FP8
+#   2. GCS→Jülich mirror: scripts/iris/launch_gcs_to_s3.py
+#        --repo Qwen/Qwen3.5-397B-A17B-FP8
+#   Both done 2026-05-24.
+
+engine:
+  type: vllm_local
+  model: s3://mmlaion/ot-agent/models/Qwen/Qwen3.5-397B-A17B-FP8/
+  max_output_tokens: 8192
+  healthcheck_interval: 1800   # large model + streaming load + XLA compile
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+vllm_server:
+  model_path: s3://mmlaion/ot-agent/models/Qwen/Qwen3.5-397B-A17B-FP8/
+  num_replicas: 1
+  tensor_parallel_size: 8
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '48:00:00'
+  max_model_len: 32768
+  max_num_seqs: 8
+  gpu_memory_utilization: 0.85
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  trust_remote_code: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --load-format
+  - runai_streamer
+  - --block-size
+  - '2096'
+  - --max-num-partial-prefills
+  - '1'
+  - --limit-mm-per-prompt
+  - '{"image":0,"video":0}'
+  - --max-num-batched-tokens
+  - '32768'

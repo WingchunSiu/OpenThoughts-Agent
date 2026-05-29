@@ -75,12 +75,19 @@ export NCCL_IB_TIMEOUT=23
 export PYTORCH_ALLOC_CONF="garbage_collection_threshold:0.6,max_split_size_mb:128"
 export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
 
-# --- Ray/vLLM GPU visibility fix ---
-# Prevent Ray from modifying CUDA_VISIBLE_DEVICES per-actor.
-# Without these, Ray sets CVD to a single physical GPU index (e.g. "3") per actor,
-# but vLLM uses Ray-reported indices as torch ordinals, causing "invalid device ordinal".
-export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
-export RAY_NOSET_CUDA_VISIBLE_DEVICES=1
+# --- Ray/vLLM GPU visibility ---
+# Previously we set RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1 and
+# RAY_NOSET_CUDA_VISIBLE_DEVICES=1 to keep Ray from rewriting CUDA_VISIBLE_DEVICES
+# per actor (which caused "invalid device ordinal" on an earlier vLLM build).
+# That now breaks the new wheel's multi-node DP placement: with NOSET set,
+# vllm/v1/engine/core.py's per-actor `get_accelerator_ids()` returns an empty
+# list (Ray isn't binding accelerators to actors), and the legacy fallback's
+# `get_device_indices` formula crashes with `IndexError: list index out of
+# range` on cross-node DP.
+# Leave NOSET unset so Ray's placement-group bundle drives per-actor GPU
+# selection, matching the patched core.py + ray_executor_v2.
+# If the original "invalid device ordinal" regression returns for single-node
+# taskgen on the new wheel, scope NOSET back on conditionally on NUM_NODES==1.
 
 # --- Cluster-specific environment variables ---
 {env_exports}

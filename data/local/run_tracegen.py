@@ -88,9 +88,30 @@ class TracegenRunner(LocalHarborRunner):
         return (None, self.args.tasks_input_path)
 
     def validate_args(self) -> None:
-        """Validate tracegen-specific arguments."""
-        # Resolve tasks input path
-        self.args.tasks_input_path = str(Path(self.args.tasks_input_path).expanduser().resolve())
+        """Validate tracegen-specific arguments.
+
+        ``--tasks_input_path`` accepts two shapes:
+
+        * Local FS path with raw task subdirs (each containing
+          ``instruction.md``, ``task.toml``, etc.) — used directly.
+        * HuggingFace dataset id (``org/name``) — downloaded via
+          ``snapshot_download``; if the snapshot is parquet-format
+          (with a ``task_binary`` column), tasks are extracted from
+          the parquet into a local directory tree via
+          ``convert_parquet_to_tasks``.
+
+        Mirrors the dispatch pattern used by ``hpc.eval_launch_utils``
+        (lines 95–110) so eval and tracegen share the same "task
+        extraction" convention.
+        """
+        from hpc.hf_utils import resolve_dataset_path, is_raw_tasks_directory
+        from hpc.launch_utils import convert_parquet_to_tasks
+
+        original = self.args.tasks_input_path
+        resolved = resolve_dataset_path(original, verbose=True)
+        if not is_raw_tasks_directory(resolved):
+            resolved = convert_parquet_to_tasks(resolved, original)
+        self.args.tasks_input_path = str(resolved)
 
     def print_banner(self) -> None:
         """Print startup banner for tracegen."""

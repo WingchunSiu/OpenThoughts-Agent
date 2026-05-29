@@ -65,15 +65,57 @@ _BOOLEAN_FLAGS = {
     "enable_chunked_prefill",
     "enable_prefix_caching",
     "enable_auto_tool_choice",
+    "enable_expert_parallel",
     "trust_remote_code",
     "disable_log_requests",
     "enable_reasoning",
 }
 
-# Fields that are environment variables, not CLI args
+# Boolean flags whose vLLM internal default is True but that OT-Agent
+# defaults to OFF unless explicitly enabled by the YAML. Setting the YAML
+# key to False (or omitting it) emits `--no-<flag>`; setting it True emits
+# `--<flag>`. Also, if neither form appears anywhere in the final CLI args
+# (including extra_args), `--no-<flag>` is injected at the end as a
+# belt-and-suspenders opt-out.
+#
+# 2026-05-23: enable_chunked_prefill REMOVED from this set. Original
+# rationale was that mid-inference Triton JIT compilation of chunked-
+# prefill kernels overran the vLLM shm_broadcast 60 s wait and killed
+# the engine with EngineDeadError (see
+# `vllm_v2_bugs/bug_c_iter_4_to_8_jit_progression/SUMMARY.md`). We now
+# know the shm_broadcast 600s warning is purely informational
+# (`feedback_shm_broadcast_warning_non_fatal` memory + vLLM source
+# review). The real engine deaths were NCCL collective timeouts upstream.
+# Forcing chunked-prefill OFF on MoE models like MiniMax-M2 triggers a
+# different problem: vLLM warns the model "does not officially support
+# disabling chunked prefill" AND blocks any config with
+# max_num_batched_tokens < max_model_len (the SchedulerConfig validator
+# at config/scheduler.py:259 conditions on `not enable_chunked_prefill`).
+# Letting vLLM's per-model default win is the right move now.
+_DEFAULT_OFF_BOOLEAN_FLAGS = {
+    "enable_prefix_caching",
+}
+
+# Fields that are environment variables, not CLI args.
+# When the YAML sets a value for one of these keys, we write the env var
+# explicitly as "1" or "0" so the user can FORCE-disable a flag whose
+# vLLM default is True (e.g. VLLM_USE_DEEP_GEMM, VLLM_USE_FLASHINFER_SAMPLER
+# both default to True in vllm/envs.py). Omitting the key entirely from
+# the YAML leaves the env var unset → vLLM uses its built-in default.
 _ENV_VAR_FIELDS = {
-    "enable_expert_parallel": "VLLM_ENABLE_EXPERT_PARALLEL",
     "use_deep_gemm": "VLLM_USE_DEEP_GEMM",
+    "use_flashinfer_sampler": "VLLM_USE_FLASHINFER_SAMPLER",
+    "use_flashinfer_moe_fp16": "VLLM_USE_FLASHINFER_MOE_FP16",
+    "pynccl_pyspy_on_sigusr1": "VLLM_PYNCCL_PYSPY_ON_SIGUSR1",
+}
+
+# Numeric env var fields. Same idea as _ENV_VAR_FIELDS but the value
+# is written through unchanged (e.g. an integer seconds-interval) rather
+# than coerced to "1"/"0". YAML key absent → env var unset → consumer
+# falls back to its own default (typically off / 0).
+_NUMERIC_ENV_VAR_FIELDS = {
+    "pynccl_trace_flush_interval_sec": "VLLM_PYNCCL_TRACE_FLUSH_INTERVAL_SEC",
+    "pynccl_faulthandler_interval_sec": "VLLM_PYNCCL_FAULTHANDLER_INTERVAL_SEC",
 }
 
 
@@ -101,10 +143,17 @@ def _build_vllm_cli_args(server_config: dict) -> tuple[list[str], dict[str, str]
                 cli_args.extend(str(v) for v in value)
             continue
 
-        # Handle env var fields
+        # Handle env var fields. We write "1" or "0" explicitly when the
+        # YAML key is present so callers can FORCE-disable env-vars that
+        # default to True in vLLM (e.g. VLLM_USE_DEEP_GEMM). The earlier
+        # "skip on falsy" behavior couldn't disable those defaults.
         if key in _ENV_VAR_FIELDS:
-            if value:  # Only set if truthy
-                env_vars[_ENV_VAR_FIELDS[key]] = "1"
+            env_vars[_ENV_VAR_FIELDS[key]] = "1" if value else "0"
+            continue
+
+        # Numeric env var fields: pass through as-is (str-coerced).
+        if key in _NUMERIC_ENV_VAR_FIELDS:
+            env_vars[_NUMERIC_ENV_VAR_FIELDS[key]] = str(value)
             continue
 
         # Rename field if needed
@@ -115,8 +164,14 @@ def _build_vllm_cli_args(server_config: dict) -> tuple[list[str], dict[str, str]
 
         # Handle boolean flags
         if key in _BOOLEAN_FLAGS:
-            if value:  # Only add flag if True
+            if value:
                 cli_args.append(f"--{arg_name}")
+            elif key in _DEFAULT_OFF_BOOLEAN_FLAGS:
+                # Explicit opt-out: emit `--no-<flag>` so vLLM's default
+                # True is actually overridden. Without this branch, the
+                # old behavior was to emit nothing on False, which let
+                # vLLM's internal default win.
+                cli_args.append(f"--no-{arg_name}")
             continue
 
         # Handle regular key-value args
@@ -128,6 +183,19 @@ def _build_vllm_cli_args(server_config: dict) -> tuple[list[str], dict[str, str]
             cli_args.extend([f"--{arg_name}", json.dumps(value)])
         else:
             cli_args.extend([f"--{arg_name}", str(value)])
+
+    # For default-OFF flags whose vLLM internal default is True, inject the
+    # `--no-<flag>` form when neither the affirmative nor negative form has
+    # appeared yet (e.g. YAML omitted the top-level key AND extra_args did
+    # not include either `--enable-X` or `--no-enable-X`). This preserves
+    # opt-in via either the top-level YAML key (`enable_X: true`) or an
+    # explicit `--enable-X` in `extra_args`.
+    for key in _DEFAULT_OFF_BOOLEAN_FLAGS:
+        arg_name = key.replace("_", "-")
+        pos_flag = f"--{arg_name}"
+        neg_flag = f"--no-{arg_name}"
+        if pos_flag not in cli_args and neg_flag not in cli_args:
+            cli_args.append(neg_flag)
 
     return cli_args, env_vars
 
@@ -145,7 +213,13 @@ class VLLMConfig:
     custom_model_name: Optional[str] = None
 
     # Health check settings
-    health_max_attempts: int = 120
+    # Default 480 × 15s = 7200s (2 hours). Long enough to cover slow
+    # post-load init paths (Qwen3.5-MoE Mamba page-size calibration on
+    # 4× GH200 single-node observed at 18+ min; cross-node TP weight
+    # quantization on 2-node observed at ~12 min). Override via
+    # `backend.healthcheck_max_attempts` in the datagen YAML if you
+    # want a tighter SLA for fast-failing experiments.
+    health_max_attempts: int = 480
     health_retry_delay: int = 15
     health_path: str = "v1/models"
 
@@ -263,16 +337,142 @@ class VLLMServer:
             cmd.extend(["--served-model-name", self.config.custom_model_name])
 
         # Build CLI args and env vars from server_config (pass-through from YAML)
+        extra_env_vars: dict[str, str] = {}
         if self.config.server_config:
             extra_cli_args, extra_env_vars = _build_vllm_cli_args(self.config.server_config)
             cmd.extend(extra_cli_args)
             if extra_cli_args:
                 print(f"  Extra vLLM args: {' '.join(extra_cli_args[:10])}{'...' if len(extra_cli_args) > 10 else ''}")
 
+        # When DP>1 with the Ray backend, vLLM's create_dp_placement_groups
+        # asserts the dp_master_ip is a key in Ray's known-nodes dict. Ray
+        # registers the head node under its real IPv4 (set via
+        # `--node-ip-address=<head_ip>` in ray_utils.py), NOT under
+        # "localhost" / "127.0.0.1" — so a misset --data-parallel-address
+        # fails with "AssertionError: The DP master node (ip: 127.0.0.1)
+        # is missing or dead". Inject head_ip here unless the caller
+        # explicitly overrode it via extra_args.
+        if self.config.data_parallel_size > 1 and "--data-parallel-address" not in cmd:
+            cmd.extend(["--data-parallel-address", self.ray_cluster.head_ip])
+
+        # --data-parallel-size-local tells vLLM how many DP ranks live on
+        # each node. Without it, vLLM defaults local_world_size to
+        # data_parallel_size and tries to pack ALL DP ranks on the head
+        # node's local GPUs, failing with:
+        #   Exception: Error setting CUDA_VISIBLE_DEVICES:
+        #     local range: [N*TP, (N+1)*TP)  base value: "0,1,2,3"
+        # (e.g. local range [4,8) for DP rank 1 with TP=4, but the node only
+        # exposes GPUs 0-3). Observed on Jupiter 491271 and Perlmutter
+        # 53299838 on 2026-05-22 with the multi-node DP=4 TP=4 EP=true
+        # GLM-4.7-AWQ config — the bug is launcher-side and fires on BOTH
+        # the current Jupiter wheel and the older Perlmutter wheel, so it
+        # is independent of the V1/V2 executor + shm_broadcast question.
+        #
+        # Layout: each DP rank consumes TP GPUs, so DP-ranks-per-node =
+        # gpus_per_node // tensor_parallel_size, clamped to data_parallel_size.
+        # This also handles the cross-node-TP case (TP > gpus_per_node): the
+        # max(1, ...) clamp produces size_local=1, which still requires
+        # data_parallel_size <= num_nodes for vLLM to accept the layout.
+        if self.config.data_parallel_size > 1 and "--data-parallel-size-local" not in cmd:
+            gpus_per_node = self.ray_cluster.config.gpus_per_node
+            dp_per_node = max(1, gpus_per_node // self.config.tensor_parallel_size)
+            dp_per_node = min(dp_per_node, self.config.data_parallel_size)
+            cmd.extend(["--data-parallel-size-local", str(dp_per_node)])
+
+        # --data-parallel-backend=ray is distinct from
+        # --distributed-executor-backend=ray (the latter controls TP/PP
+        # execution; the former controls DP rank PLACEMENT). With DP>1
+        # cross-node the Ray DP backend is required; the default tries to
+        # spawn worker procs locally and re-hits the CUDA_VISIBLE_DEVICES
+        # error. Pair with VLLM_RAY_DP_PACK_STRATEGY=span (set in env
+        # below) for the single-launch multi-node DP pattern documented at
+        # https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/.
+        if self.config.data_parallel_size > 1 and "--data-parallel-backend" not in cmd:
+            cmd.extend(["--data-parallel-backend", "ray"])
+
         # Set environment
         env = os.environ.copy()
         env["VLLM_MODEL_PATH"] = self.config.model_path
         env["PYTHONUNBUFFERED"] = "1"  # Ensure real-time log output
+        # Apply env vars derived from server_config YAML (e.g.
+        # VLLM_USE_DEEP_GEMM, VLLM_PYNCCL_TRACE_FLUSH_INTERVAL_SEC) — these
+        # were computed by _build_vllm_cli_args alongside the CLI args.
+        # Previously the env_vars dict was unpacked but silently discarded.
+        if extra_env_vars:
+            env.update(extra_env_vars)
+            print(f"  Extra vLLM env: {', '.join(f'{k}={v}' for k, v in extra_env_vars.items())}")
+        # VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS controls the collective_rpc
+        # deadline for execute_model + sample_tokens (multiproc_executor.py
+        # lines 314, 326). Default is 300s; on cross-node TP=16 with our
+        # GLM-5.1-AWQ config, the first inference-time Triton JIT compile
+        # for _topk_topp_kernel / _build_prefill_chunk_metadata_kernel
+        # exceeds that, tripping the watchdog → "RPC call to sample_tokens
+        # timed out" → EngineDeadError → every subsequent request 500s.
+        # Bumped 1800s → 7200s (2h) to also survive Qwen3.5-MoE Mamba
+        # post-load page-size calibration which has been observed at
+        # 18+ min of shm_broadcast wait on single-node TP=4.
+        # See vllm_v2_bugs/OVERVIEW.md (Bug C) for the full trace.
+        env.setdefault("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", "7200")
+        # VLLM_RINGBUFFER_WARNING_INTERVAL controls how often shm_broadcast
+        # logs the "No available shared memory broadcast block found in
+        # N seconds" hint while a cross-rank wait is in flight. Default
+        # 60s — produces hundreds of redundant log lines while the engine
+        # is doing legitimately long work (model load, Mamba calibration,
+        # cross-node weight quantization). Bump to 600s (10min) so the
+        # logs stay legible without losing the warning entirely.
+        env.setdefault("VLLM_RINGBUFFER_WARNING_INTERVAL", "600")
+        # V2 model runner DISABLED — chosen default until vLLM patches
+        # the multi-node DP path in RayExecutorV2.
+        #
+        # Why: RayExecutorV2 (introduced in vLLM 2026-05-13 upstream bump
+        # via PR #36836) inherits from MultiprocExecutor and uses
+        # shm_broadcast for inter-rank communication. Shared memory is
+        # single-host by definition, so cross-node DP falls back to Gloo
+        # TCP, which times out
+        # (gloo/transport/tcp/unbound_buffer.cc Timed out 1800000ms) on
+        # Jupiter's interconnect. Job 487456 (dp=2 MiniMax-M2.7) hit
+        # this consistently even with EP disabled.
+        #
+        # Validation: job 490175 (dp=2 same yaml + this env=0) ran clean
+        # with ZERO shm_broadcast warnings, sample_tokens timeouts, or
+        # Gloo unbound_buffer timeouts. The v0.16.0 known-good branch
+        # (penfever/debug-layer-split-v0.16.0, 2026-04-03) doesn't have
+        # RayExecutorV2 at all — it uses ray_executor.py which routes
+        # everything through Ray RPC (cross-node native).
+        #
+        # Throughput note: V1 (ray_executor.py) is somewhat slower per
+        # request than V2 was designed to be. Single-node dp=1 paths
+        # tested fine on V1 too. Revisit if a vLLM patch lands that
+        # fixes RayExecutorV2's multi-node DP coordination.
+        env["VLLM_USE_V2_MODEL_RUNNER"] = "0"
+        # VLLM_RAY_DP_PACK_STRATEGY controls how the Ray DP backend places
+        # ranks on the cluster. Three options, defined in
+        # vllm/v1/engine/utils.py:create_dp_placement_groups:
+        #
+        #   strict — 1 DP rank per node, no oversubscription. Required for
+        #            DeepEP kernels (EP ranks must co-reside on a node).
+        #   fill   — greedy pack: fit as many DP ranks per node as possible.
+        #   span   — a SINGLE DP rank spans multiple nodes (requires
+        #            world_size = TP*PP > gpus_per_node, i.e. cross-node TP).
+        #
+        # If we pick the wrong one, vLLM asserts at engine init with
+        #   AssertionError: World size N is smaller than the maximum number
+        #     of devices per node M. Make sure to set
+        #     `VLLM_RAY_DP_PACK_STRATEGY` to `strict` or `fill`
+        # (observed on Jupiter 491789 + Perlmutter 53302207 when we tried
+        # span with TP=4 on 4-GPU nodes — span is for the opposite case).
+        #
+        # Heuristic: if a single DP rank fits in one node (TP*PP <=
+        # gpus_per_node), use strict. Otherwise use span. We never
+        # auto-select fill — strict is the safer default for MoE (DeepEP
+        # compatibility) and behaves identically to fill for the
+        # single-DP-per-node case we hit in practice.
+        if self.config.data_parallel_size > 1:
+            tp_pp = self.config.tensor_parallel_size * self.config.pipeline_parallel_size
+            if tp_pp > self.ray_cluster.config.gpus_per_node:
+                env.setdefault("VLLM_RAY_DP_PACK_STRATEGY", "span")
+            else:
+                env.setdefault("VLLM_RAY_DP_PACK_STRATEGY", "strict")
         # Set VLLM_HOST_IP so vLLM's internal get_ip() returns the real node IP.
         # This is used for Ray placement group node constraints and NCCL communication,
         # NOT for the API server bind address (that's --host above).
@@ -321,12 +521,170 @@ class VLLMServer:
         # Wait for server to be healthy
         self._wait_for_healthy()
 
+        # Send a few pre-Harbor warmup requests to JIT-compile vLLM-native
+        # Triton kernels not covered by FlashInfer autotune. Skipping this
+        # would lead to first-request JIT during inference; on cross-node
+        # TP=16, that JIT exceeds vLLM's 60s shm_broadcast watchdog and
+        # kills the engine (see job 448672 logs). Failures here don't abort
+        # the server — best-effort.
+        try:
+            self._warmup_serving()
+        except Exception as e:
+            print(f"  [warmup] non-fatal exception during warmup: {e!r}")
+
         print(f"=== vLLM Server Ready ===")
         print(f"  Endpoint: {self.endpoint}")
         print(f"  Metrics: {self.metrics_endpoint}")
         print(f"=========================")
 
         return self.endpoint
+
+    def _warmup_serving(self) -> None:
+        """Pre-JIT the vLLM-native Triton kernels that are most likely to
+        deadlock the engine on first production traffic (Bug C: cross-rank
+        ``shm_broadcast`` RPC timeout while one worker is stuck mid-JIT).
+
+        Runs two phases:
+
+          1. **Sequential, short, varied-prompt** — 8 requests, max_tokens=32,
+             one at a time. Fires per-prompt-shape JIT for:
+               - ``_topk_topp_kernel`` (vllm/v1/sample/ops/topk_topp_triton.py),
+                 specialized per (top_k, top_p, vocab, dtype) tuple
+               - ``_build_prefill_chunk_metadata_kernel`` (only relevant if
+                 chunked prefill is ON; with the OT-Agent launcher's
+                 default-OFF this is moot but still cheap to cover)
+
+          2. **Concurrent, batched, longer-decode** — `concurrent_n` requests
+             fired in parallel, max_tokens=512, one of them a long-ish prompt
+             (~2k tokens). This drives the *batched* sampling kernel — Triton
+             specializes on batch dimension, so a single-request warmup
+             only JITs the batch=1 variant. Production traffic (Harbor at
+             ``trace_n_concurrent>=16``) immediately hits the batch=N
+             specialization, which then JITs mid-inference and stalls
+             cross-rank coordination → ``EngineDeadError`` (the residual
+             failure observed in iter 8 + iter 9).
+
+        Total wall budget: ~1-3 min on cross-node TP=16, much less than the
+        ~5+ min JIT-then-die cycle we hit at first real serving request.
+
+        Failures bubble up to the caller wrapped in try/except — a partial
+        warmup is acceptable; we still JIT what we can.
+        """
+        import urllib.request
+        import urllib.error
+        import json as _json
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # First, fetch the served model name (auto-generated when
+        # custom_model_name is None).
+        try:
+            with urllib.request.urlopen(
+                f"{self.base_url}/v1/models", timeout=10
+            ) as r:
+                model_name = _json.loads(r.read().decode())["data"][0]["id"]
+        except Exception as e:
+            print(f"  [warmup] could not fetch /v1/models ({e!r}); skipping")
+            return
+
+        # ---- shared helper: drive one /v1/chat/completions request ----
+        def _fire(prompt: str, max_tokens: int, label: str) -> tuple[str, float, bool, str]:
+            body = _json.dumps({
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                # Sampling params chosen to match the most common production
+                # config (Harbor terminus-2 + Qwen3/GLM-family). If your
+                # serving uses different params, JIT for THOSE specializations
+                # will still happen on the first real request — but the
+                # most-common path is what matters here.
+                "top_k": 20,
+                "top_p": 0.95,
+                "temperature": 0.7,
+            }).encode()
+            req = urllib.request.Request(
+                f"{self.base_url}/v1/chat/completions",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    _ = r.read()
+                return (label, time.time() - t0, True, "")
+            except Exception as e:
+                return (label, time.time() - t0, False, repr(e))
+
+        # ---- phase 1: sequential, short, varied-prompt ----
+        # Varied prompt lengths so the prefill-chunk metadata kernel sees
+        # several distinct chunk patterns. Short-ish prompts only — we
+        # don't want warmup to eat real GPU time.
+        seq_prompts = [
+            "Hello world.",
+            "Write a short Python function that adds two numbers.",
+            "Once upon a time, in a faraway land, there lived a curious cat. "
+            * 8,
+            "Solve: x^2 + 3x - 4 = 0. Walk through it step by step.",
+            "Describe a sunset in 2 sentences.",
+            "What is the capital of France?",
+            "Compute the integral of x dx from 0 to 1.",
+            "List 10 random English words: " + " ".join(f"word{i}" for i in range(48)),
+        ]
+        print(f"  [warmup] phase 1: {len(seq_prompts)} sequential requests "
+              f"against {model_name} (max_tokens=32, JITs single-request "
+              "sampling kernel)...")
+        seq_ok = 0
+        for i, prompt in enumerate(seq_prompts, 1):
+            label = f"seq {i}/{len(seq_prompts)}"
+            _, dt, success, err = _fire(prompt, max_tokens=32, label=label)
+            if success:
+                seq_ok += 1
+                print(f"  [warmup] {label} OK ({dt:.1f}s, {len(prompt.split())} words)")
+            else:
+                # Don't bail — partial warmup still helps. JIT errors here
+                # are the load-bearing thing we WANT to pay during warmup.
+                print(f"  [warmup] {label} FAILED: {err}")
+
+        # ---- phase 2: concurrent, batched, longer-decode ----
+        # Critical for Bug C iter 8/9 residual stall: Triton's
+        # ``_topk_topp_kernel`` specializes on batch dimension. Phase 1
+        # only JITs the batch=1 variant; first real Harbor traffic hits
+        # batch=16 or 32 which then JITs mid-inference and stalls
+        # cross-rank coordination. Drive a batch=concurrent_n forward
+        # pass here so the batched variant is JIT'd before traffic.
+        concurrent_n = 16
+        long_prompt = (
+            "You are an experienced software engineer. Consider the following "
+            "context carefully and respond with a short summary at the end. "
+            + ("Context line: a thoughtful description of a non-trivial "
+               "engineering tradeoff. " * 80)
+        )
+        batch_prompts = list(seq_prompts) + [long_prompt]
+        # Cycle batch_prompts up to concurrent_n entries
+        batch_n_prompts = [
+            batch_prompts[i % len(batch_prompts)] for i in range(concurrent_n)
+        ]
+        print(f"  [warmup] phase 2: {concurrent_n} concurrent requests "
+              "(max_tokens=512, one ~2k-token prompt; JITs batched sampling "
+              "kernel at production batch size)...")
+        batch_ok = 0
+        t_batch = time.time()
+        with ThreadPoolExecutor(max_workers=concurrent_n) as ex:
+            futures = [
+                ex.submit(_fire, p, 512, f"par {i + 1}/{concurrent_n}")
+                for i, p in enumerate(batch_n_prompts)
+            ]
+            for f in as_completed(futures):
+                label, dt, success, err = f.result()
+                if success:
+                    batch_ok += 1
+                    print(f"  [warmup] {label} OK ({dt:.1f}s)")
+                else:
+                    print(f"  [warmup] {label} FAILED: {err}")
+        print(f"  [warmup] phase 2 wall: {time.time() - t_batch:.1f}s "
+              f"({batch_ok}/{concurrent_n} succeeded)")
+        print(f"  [warmup] complete (phase 1: {seq_ok}/{len(seq_prompts)}, "
+              f"phase 2: {batch_ok}/{concurrent_n})")
 
     def stop(self) -> None:
         """Stop the vLLM server."""

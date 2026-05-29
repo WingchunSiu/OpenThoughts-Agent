@@ -1,12 +1,8 @@
-# Harbor job configuration for trace generation — 10-task smoke test.
-# Based on ctx131k_verified.yaml with n_tasks: 10.
-
 job_name: default-trace-job
 jobs_dir: trace_jobs
 n_attempts: 1
 timeout_multiplier: 1.0
 debug: false
-
 orchestrator:
   type: local
   n_concurrent_trials: 48
@@ -15,13 +11,13 @@ orchestrator:
   adaptive_concurrency:
     enabled: false
     algorithm: gradient2
-    min_limit:
-    max_limit:
-    metrics_endpoint:
+    min_limit: null
+    max_limit: null
+    metrics_endpoint: null
     metrics_timeout_sec: 10.0
     poll_interval_sec: 120.0
     window_size: 5
-    queue_p95_drop_threshold:
+    queue_p95_drop_threshold: null
     algorithm_kwargs: {}
   retry:
     max_retries: 10
@@ -40,7 +36,6 @@ orchestrator:
     min_wait_sec: 1.0
     max_wait_sec: 90.0
   kwargs: {}
-
 environment:
   type: daytona
   force_build: false
@@ -48,21 +43,19 @@ environment:
   override_cpus: 1
   override_memory_mb: 2048
   override_storage_mb: 2048
-  kwargs: {}
-
+  kwargs:
+    auto_snapshot: true
 verifier:
-  override_timeout_sec:
-  max_timeout_sec:
+  override_timeout_sec: null
+  max_timeout_sec: null
   disable: false
-
 metrics: []
-
 agents:
 - name: terminus-2
-  import_path:
+  import_path: null
   model_name: placeholder/override-at-runtime
   override_timeout_sec: 1800
-  max_timeout_sec:
+  max_timeout_sec: null
   kwargs:
     record_terminal_session: false
     enable_episode_logging: false
@@ -76,7 +69,6 @@ agents:
       max_output_tokens: 16384
       input_cost_per_token: 0
       output_cost_per_token: 0
-
     trajectory_config:
       raw_content: true
       linear_history: true
@@ -92,5 +84,4 @@ agents:
 datasets:
 - path: /replace/with/tasks/path
   n_tasks: 10
-
 tasks: []

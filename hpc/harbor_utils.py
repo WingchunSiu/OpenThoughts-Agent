@@ -569,6 +569,58 @@ def merge_agent_kwargs(
     return agent_kwargs, passthrough
 
 
+def merge_harbor_config(
+    harbor_config_data: dict,
+    *,
+    agent_name: Optional[str],
+    model_name: str,
+    n_concurrent: int,
+    endpoint_meta: Optional[dict],
+    agent_kwarg_overrides: List[str],
+    extra_agent_kwargs: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Materialize the merged Harbor config dict without writing files.
+
+    This is the side-effect-free core of ``build_harbor_command``: it
+    applies the same precedence rules (YAML base → endpoint values →
+    extra kwargs → CLI overrides) and returns a fresh dict ready to be
+    serialized as YAML or compared against a prior run's
+    ``config.json`` / ``merged_harbor_config.yaml``.
+
+    Used by ``build_harbor_command`` for the actual sbatch path and by
+    ``hpc.resume_manager`` for the resume-policy materialization step.
+
+    The result mirrors the legacy nested-orchestrator shape; callers that
+    need the unified flat shape can read top-level fields directly (they
+    are normalized by Harbor's own ``_migrate_orchestrator_config``
+    validator on load).
+    """
+    agent_kwargs, _ = merge_agent_kwargs(
+        harbor_config_data=harbor_config_data,
+        agent_name=agent_name,
+        endpoint_meta=endpoint_meta,
+        extra_kwargs=extra_agent_kwargs,
+        cli_overrides=agent_kwarg_overrides,
+    )
+
+    modified_config = copy.deepcopy(harbor_config_data)
+
+    if "orchestrator" not in modified_config:
+        modified_config["orchestrator"] = {}
+    modified_config["orchestrator"]["n_concurrent_trials"] = n_concurrent
+
+    agents = modified_config.get("agents", [])
+    for agent in agents:
+        if agent_name:
+            agent["name"] = agent_name
+        agent["model_name"] = model_name
+        existing_kwargs = agent.get("kwargs", {})
+        existing_kwargs.update(agent_kwargs)
+        agent["kwargs"] = existing_kwargs
+
+    return modified_config
+
+
 def build_harbor_command(
     harbor_binary: str,
     harbor_config_path: str,
@@ -617,8 +669,9 @@ def build_harbor_command(
     Returns:
         Complete harbor command as list of strings
     """
-    # Merge agent kwargs using consolidated helper
-    agent_kwargs, passthrough = merge_agent_kwargs(
+    # Compute passthrough for CLI flags; the merged-config path goes through
+    # the side-effect-free merge_harbor_config helper.
+    _, passthrough = merge_agent_kwargs(
         harbor_config_data=harbor_config_data,
         agent_name=agent_name,
         endpoint_meta=endpoint_meta,
@@ -626,29 +679,15 @@ def build_harbor_command(
         cli_overrides=agent_kwarg_overrides,
     )
 
-    # Create a modified config with model_name and kwargs merged directly.
-    # This avoids using --agent/--model CLI flags which would cause Harbor to
-    # create a fresh AgentConfig and lose settings like override_setup_timeout_sec.
-    modified_config = copy.deepcopy(harbor_config_data)
-
-    # Sync orchestrator.n_concurrent_trials with the resolved value so the
-    # merged config is an accurate record of what was actually used.
-    if "orchestrator" not in modified_config:
-        modified_config["orchestrator"] = {}
-    modified_config["orchestrator"]["n_concurrent_trials"] = n_concurrent
-
-    # Update all agents in the config with model_name and merged kwargs.
-    # If agent_name is specified, also override the agent name (e.g., "oracle").
-    agents = modified_config.get("agents", [])
-    for agent in agents:
-        if agent_name:
-            agent["name"] = agent_name
-        # Set model_name directly in config
-        agent["model_name"] = model_name
-        # Merge kwargs into the agent's existing kwargs
-        existing_kwargs = agent.get("kwargs", {})
-        existing_kwargs.update(agent_kwargs)
-        agent["kwargs"] = existing_kwargs
+    modified_config = merge_harbor_config(
+        harbor_config_data,
+        agent_name=agent_name,
+        model_name=model_name,
+        n_concurrent=n_concurrent,
+        endpoint_meta=endpoint_meta,
+        agent_kwarg_overrides=agent_kwarg_overrides,
+        extra_agent_kwargs=extra_agent_kwargs,
+    )
 
     # Write the modified config to the experiment directory (jobs_dir).
     # This keeps the merged config alongside the experiment outputs for reproducibility.
@@ -659,6 +698,23 @@ def build_harbor_command(
     else:
         # Fallback to current directory if no jobs_dir specified
         merged_config_path = Path(f"merged_harbor_config_{job_name}.yaml")
+
+    # Strip OT-Agent-only metrics (e.g. ``mean-drop-ei``, ``accuracy-drop-ei``)
+    # that the pinned harbor (0.7.0) rejects with a Pydantic enum
+    # ValidationError when it parses --config on its own. The same filter
+    # already runs at scripts/harbor/job_config_utils.py load time, but the
+    # merge-and-write path here takes the raw YAML dict and never goes
+    # through that loader, so the unsupported types survive into the file
+    # harbor reads back. Apply the filter here too — see commit 1ba6a4a7.
+    try:
+        from scripts.harbor.job_config_utils import _filter_supported_metrics
+        modified_config = _filter_supported_metrics(modified_config)
+    except ImportError:
+        # _filter_supported_metrics lives under scripts.harbor; if we're
+        # somehow invoked from an install layout where scripts/ isn't a
+        # package (older path), skip silently — harbor will surface its
+        # own ValidationError downstream and we'll see it in the log.
+        pass
 
     with open(merged_config_path, "w") as f:
         yaml.safe_dump(modified_config, f)
@@ -692,18 +748,29 @@ def build_harbor_command(
             yaml.safe_dump(modified_config, f)
         cmd.extend(["--dataset", dataset_slug])
     elif dataset_path:
-        # Replace YAML datasets path with the provided path, preserving
-        # other dataset-level fields like n_tasks from the original config.
-        yaml_datasets = modified_config.get("datasets") or [{}]
-        base_dataset = yaml_datasets[0] if yaml_datasets else {}
-        if isinstance(base_dataset, dict):
-            base_dataset["path"] = dataset_path
-        else:
-            base_dataset = {"path": dataset_path}
-        modified_config["datasets"] = [base_dataset]
+        # ``dataset_path`` is overloaded: it can be a local FS path, a
+        # HuggingFace dataset id (``org/name`` format), or a harbor
+        # registry slug. Harbor 0.7.0 requires the source flag on the CLI
+        # (``--path`` for local dirs, ``--dataset`` for slugs / HF refs)
+        # — YAML datasets without a CLI flag now error out with
+        # "Cannot specify --registry-url ... without also specifying
+        # --dataset, --task, or --path" whenever any registry-* field is
+        # populated by the merge.
+        #
+        # Heuristic: actually-existing FS path -> ``--path``; otherwise
+        # treat as a remote reference and use ``--dataset`` (harbor's
+        # ``--dataset`` accepts both slugs and HF org/name refs — see
+        # harbor/src/harbor/cli/jobs.py:1226).
+        modified_config.pop("datasets", None)
         modified_config.pop("tasks", None)
         with open(merged_config_path, "w") as f:
             yaml.safe_dump(modified_config, f)
+        # gs://, s3:// etc. are remote schemes; never local.
+        looks_local = not dataset_path.startswith(("gs://", "s3://", "http://", "https://"))
+        if looks_local and Path(dataset_path).expanduser().exists():
+            cmd.extend(["--path", str(Path(dataset_path).expanduser().resolve())])
+        else:
+            cmd.extend(["--dataset", dataset_path])
     else:
         # Neither dataset_slug nor dataset_path provided.  Strip the YAML
         # placeholder (if any) so we fail fast with a clear message rather
@@ -746,18 +813,30 @@ def build_harbor_command(
     def _flag_present(flag: str) -> bool:
         return any(arg == flag or arg.startswith(f"{flag}=") for arg in extra_args)
 
-    # Auto-resume on transient Daytona infrastructure errors so that flaky
-    # sandbox creation / rate limits don't permanently fail tasks.
-    if not _flag_present("--auto-resume"):
-        extra_args.append("--auto-resume")
-    if not _flag_present("--filter-error-type"):
-        for err_type in (
-            "DaytonaRateLimitError",
-            "EnvironmentStartTimeoutError",
-            "DaytonaError",
-        ):
-            extra_args.extend(["--filter-error-type", err_type])
+    # NOTE: --auto-resume was an older-harbor CLI flag (<=0.6.x) that retried
+    # on transient Daytona errors. harbor 0.7.0 (penfever/otagent-latest)
+    # removed the option entirely; retry behavior moved into the trial layer
+    # and is now driven by --filter-error-type / job-config defaults.
+    # Auto-injecting --auto-resume now causes `harbor jobs start` to exit 2
+    # with "Error: No such option '--auto-resume'." Removed 2026-05-21.
+    # If pinning to an older harbor again, re-add the auto-inject guarded
+    # on harbor version.
+    # NOTE: --filter-error-type was a <=0.6.x harbor CLI flag for
+    # auto-resume's error-type allowlist. harbor 0.7.0 replaced this with
+    # --retry-include / --retry-exclude exposed on `jobs start`, but the new
+    # retry model is driven primarily by --max-retries + job-config-level
+    # filter settings. Auto-injecting --filter-error-type now causes
+    # `harbor jobs start` to exit 2 with "No such option '--filter-error-type'".
+    # Dropped 2026-05-21 along with --auto-resume above; if pinning to an
+    # older harbor, re-add behind a version gate.
 
+    # Restored 2026-05-21 (initial removal was wrong). The --export-traces /
+    # --export-verifier-metadata / --export-episodes flags ARE still consumed
+    # by `harbor jobs start` in 0.7.0 (penfever/otagent-latest) — they're
+    # declared in src/harbor/cli/jobs.py:902-953 with `hidden=True`, so
+    # `--help` doesn't list them but click/typer still parses them.
+    # OT-Agent needs both traces and verifier metadata; without these flags
+    # the post-run pipeline that uploads to Supabase / HF gets no inputs.
     if not (_flag_present("--export-traces") or _flag_present("--no-export-traces")):
         extra_args.append("--export-traces")
     if not (_flag_present("--export-verifier-metadata") or _flag_present("--no-export-verifier-metadata")):
@@ -768,7 +847,132 @@ def build_harbor_command(
     for extra in extra_args:
         cmd.append(extra)
 
+    # Sync the on-disk Harbor config.json (if any) with the YAML+CLI
+    # effective state, so Harbor's _maybe_init_existing_job equality check
+    # passes on resume. The on-disk JSON gets written by Harbor on first
+    # run (or rewritten by hpc.resume_manager), but runtime-derived fields
+    # — agent kwargs.api_base/metrics_endpoint that depend on the live
+    # vLLM IP, and orchestrator.retry.include_exceptions that depend on
+    # the CLI's --filter-error-type defaults — would otherwise diverge
+    # from the JobConfig Harbor builds at runtime. Without this sync, a
+    # second-pass launch crashes at job.py:_maybe_init_existing_job with
+    # FileExistsError despite the resume_manager having mutated the
+    # static fields correctly.
+    if jobs_dir:
+        config_json_path = Path(jobs_dir) / job_name / "config.json"
+        if config_json_path.exists():
+            print(
+                f"[build_harbor_command] Syncing runtime fields into {config_json_path}",
+                flush=True,
+            )
+            try:
+                _sync_runtime_fields_into_config_json(
+                    config_json_path=config_json_path,
+                    modified_config=modified_config,
+                    extra_args=extra_args,
+                    n_concurrent=n_concurrent,
+                    n_attempts=n_attempts,
+                )
+                # fsync to make sure the write is visible to the harbor
+                # subprocess we are about to spawn (NFS-style filesystems
+                # can return stale data on close-to-open).
+                with open(config_json_path, "rb") as _f:
+                    os.fsync(_f.fileno())
+                print(
+                    f"[build_harbor_command] Sync complete, fsync'd",
+                    flush=True,
+                )
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                # Best-effort: if this fails, Harbor's equality check will
+                # surface the original drift with a clearer trace than
+                # whatever exception we'd add here.
+                print(
+                    f"[build_harbor_command] WARNING: could not sync runtime "
+                    f"fields into {config_json_path}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        else:
+            print(
+                f"[build_harbor_command] No config.json at {config_json_path}; skip sync",
+                flush=True,
+            )
+
     return cmd
+
+
+def _sync_runtime_fields_into_config_json(
+    *,
+    config_json_path: "Path",
+    modified_config: dict,
+    extra_args: List[str],
+    n_concurrent: int,
+    n_attempts: int,
+) -> None:
+    """Patch on-disk config.json so it matches the YAML+CLI effective state.
+
+    Only touches fields known to be runtime-derived (and therefore guaranteed
+    to drift across launches against a static on-disk JSON):
+      - agents[*].kwargs.{api_base, api_key, base_url, metrics_endpoint}
+      - agents[*].model_name (defensive — should already be the deterministic
+        ``hosted_vllm/<id>`` alias from a prior resume_manager mutation, but
+        we keep the on-disk value in lockstep with the YAML to handle
+        chain-restart edge cases)
+      - orchestrator.n_concurrent_trials (from CLI ``--n-concurrent``)
+      - n_attempts (from CLI ``--n-attempts``)
+
+    Notably **NOT** touched:
+      - orchestrator.retry.include_exceptions. The harbor CLI's
+        ``--filter-error-type`` flag is the ``auto_resume_filter_error_types``
+        option (separate semantics — error types to remove from prior trial
+        results on resume), NOT a JobConfig override for retry.include_exceptions.
+        The retry.include_exceptions field comes from the YAML only (unless
+        ``--retry-include`` is passed, which our launcher does not pass).
+        Earlier versions of this sync wrote the ``--filter-error-type`` values
+        into retry.include_exceptions, which caused Harbor's auto-resume
+        equality check to fail because the on-disk JSON had {3 items} while
+        Harbor's self.config (from YAML + no override) had {2 items}.
+    """
+    cj = json.loads(config_json_path.read_text())
+
+    yaml_agents = modified_config.get("agents") or []
+    cj_agents = cj.get("agents") or []
+    runtime_kwarg_keys = ("api_base", "api_key", "base_url", "metrics_endpoint")
+    for i, yaml_agent in enumerate(yaml_agents):
+        if i >= len(cj_agents):
+            break
+        if not isinstance(yaml_agent, dict) or not isinstance(cj_agents[i], dict):
+            continue
+        cj_agent = cj_agents[i]
+        yaml_kw = yaml_agent.get("kwargs") or {}
+        cj_kw = cj_agent.setdefault("kwargs", {})
+        for key in runtime_kwarg_keys:
+            if key in yaml_kw:
+                cj_kw[key] = yaml_kw[key]
+        if "model_name" in yaml_agent:
+            cj_agent["model_name"] = yaml_agent["model_name"]
+
+    orchestrator = cj.setdefault("orchestrator", {})
+    orchestrator["n_concurrent_trials"] = n_concurrent
+    cj["n_attempts"] = n_attempts
+
+    # Mirror the YAML's retry block (or n_concurrent_trials if top-level)
+    # into config.json. This is defensive: if the YAML was updated between
+    # the prior resume_manager mutation and now (e.g. exception lists in
+    # the harbor_config.yaml were tweaked), the on-disk JSON must follow
+    # so Harbor's self.config (which is just YAML+CLI overrides) matches.
+    yaml_orchestrator = modified_config.get("orchestrator") or {}
+    yaml_retry = yaml_orchestrator.get("retry") if isinstance(yaml_orchestrator, dict) else None
+    if isinstance(yaml_retry, dict):
+        cj_retry = orchestrator.setdefault("retry", {})
+        # Only sync the include/exclude exception lists — other retry fields
+        # (max_retries, wait_multiplier, etc.) are not runtime-derived and
+        # don't need re-syncing.
+        for k in ("include_exceptions", "exclude_exceptions", "mask_exceptions", "passthrough_exceptions"):
+            if k in yaml_retry:
+                cj_retry[k] = yaml_retry[k]
+
+    config_json_path.write_text(json.dumps(cj, indent=2))
 
 
 def run_harbor_cli(cmd: List[str], log_path: Optional[Path] = None) -> int:
@@ -864,5 +1068,6 @@ __all__ = [
     "default_job_name",
     # Command building and execution
     "build_harbor_command",
+    "merge_harbor_config",
     "run_harbor_cli",
 ]

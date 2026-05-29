@@ -18,10 +18,14 @@ from harbor.models.job.config import (
     AgentConfig,
     EnvironmentConfig,
     JobConfig,
-    LocalDatasetConfig,
-    OrchestratorConfig,
 )
 from harbor.models.trial.config import VerifierConfig
+
+from scripts.harbor._harbor_compat import (
+    LocalDatasetConfig,
+    build_job_config_kwargs,
+    create_job_async,
+)
 
 
 @dataclass
@@ -66,24 +70,24 @@ def build_job_config(dataset_dir: Path, cfg: TeacherJobConfig) -> JobConfig:
     job_name = cfg.job_name or f"nl2bash-teacher-{random.randrange(1_000_000):06d}"
 
     return JobConfig(
-        job_name=job_name,
-        jobs_dir=cfg.jobs_dir,
-        n_attempts=1,
-        timeout_multiplier=cfg.timeout_multiplier,
-        orchestrator=OrchestratorConfig(
+        **build_job_config_kwargs(
             n_concurrent_trials=cfg.n_concurrent,
-        ),
-        environment=environment_config,
-        verifier=VerifierConfig(),
-        agents=[agent_config],
-        datasets=[LocalDatasetConfig(path=dataset_dir)],
+            job_name=job_name,
+            jobs_dir=cfg.jobs_dir,
+            n_attempts=1,
+            timeout_multiplier=cfg.timeout_multiplier,
+            environment=environment_config,
+            verifier=VerifierConfig(),
+            agents=[agent_config],
+            datasets=[LocalDatasetConfig(path=dataset_dir)],
+        )
     )
 
 
 async def run_job_async(job_config: JobConfig) -> Tuple[Job, Any]:
     """Execute the job asynchronously."""
 
-    job = Job(job_config)
+    job = await create_job_async(Job, job_config)
     result = await job.run()
     return job, result
 

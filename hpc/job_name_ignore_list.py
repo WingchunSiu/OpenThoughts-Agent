@@ -106,6 +106,9 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "sandbox_memory_gb",
     "sandbox_disk_gb",
     "sandbox_gpu",
+    # Model/training infrastructure toggles
+    "attn",
+    "use_cce",
     # Noisy toggles that shouldn't impact identity
     "overwrite_output_dir",
     "enable_task_gen",
@@ -147,6 +150,7 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "consolidate_workdir",
     "consolidate_commit_message",
     "dependency",
+    "reservation",
     # RL environment toggles
     "rl_use_conda",
     "rl_conda_env",
@@ -155,4 +159,9 @@ JOB_NAME_IGNORE_KEYS: list[str] = [
     "trace_upload_repo_org",
     "trace_upload_episodes",
     "trace_upload_dataset_type",
+    # Resume-manager toggles — pure operator flags, no impact on job identity
+    "force_mutate",
+    "allow_overwrite",
+    # Ray runtime tuning — infra knob, not identity
+    "ray_object_store_gb",
 ]

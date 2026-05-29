@@ -512,7 +512,15 @@ class RayCluster:
 
         # Log Ray startup command and output for debugging
         role = "head" if is_head else "worker"
-        log_dir = Path(os.environ.get("DCFT", ".")) / "experiments" / "logs"
+        # OT_AGENT_RAY_LOG_DIR override: Jupiter /e/scratch project-shared inode
+        # quota is chronically over-soft; default path $DCFT/experiments/logs/
+        # hits EDQUOT on every new ray_<role>_<node>.log creation. Setting this
+        # env var redirects to /e/data1 (mmlaion, multi-PB headroom).
+        ray_log_override = os.environ.get("OT_AGENT_RAY_LOG_DIR")
+        if ray_log_override:
+            log_dir = Path(ray_log_override)
+        else:
+            log_dir = Path(os.environ.get("DCFT", ".")) / "experiments" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         ray_log_path = log_dir / f"ray_{role}_{node}.log"
 

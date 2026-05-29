@@ -212,9 +212,18 @@ class FileDescriptorMonitor:
 def _open_log_file(log_path: Optional[Path]) -> tuple:
     """Open a log file with line buffering for real-time tail access.
 
+    When ``OT_AGENT_INHERIT_SUBPROC_LOGS=1`` (set automatically by the iris
+    launcher), subprocess stdout/stderr are forwarded to the parent process
+    instead of a file. This makes Ray/vLLM logs visible in ``iris job logs``
+    when the per-task workdir hasn't been rsynced yet (e.g. when a job dies
+    in the first 60s before any sync runs). The log_path argument is then
+    ignored.
+
     Returns:
         Tuple of (stdout_dest, stderr_dest, log_file_handle)
     """
+    if os.environ.get("OT_AGENT_INHERIT_SUBPROC_LOGS") == "1":
+        return None, None, None
     if log_path:
         log_file = open(log_path, "w", encoding="utf-8", buffering=1)
         return log_file, log_file, log_file
@@ -708,7 +717,9 @@ class LocalHarborRunner:
 
         # Apply n_concurrent from harbor config if CLI didn't override
         # (CLI default is set in add_model_compute_args, check if it's still at that default)
-        config_n_concurrent = harbor_job.orchestrator.n_concurrent_trials if harbor_job.orchestrator else None
+        # Compat with both legacy Harbor (nested orchestrator) and unified Harbor (top-level field).
+        from scripts.harbor._harbor_compat import get_orchestrator_field
+        config_n_concurrent = get_orchestrator_field(harbor_job, "n_concurrent_trials")
         if config_n_concurrent is not None and config_n_concurrent > 0:
             # Only override if args.n_concurrent is at the class default
             if getattr(args, "n_concurrent", None) == self.DEFAULT_N_CONCURRENT:

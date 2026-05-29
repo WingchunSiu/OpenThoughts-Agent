@@ -1,0 +1,91 @@
+# Qwen3.5-397B-A17B-AWQ — MoE reasoning model, AWQ 4-bit quantized
+# https://huggingface.co/QuantTrio/Qwen3.5-397B-A17B-AWQ
+#
+# 32K context variant, Jupiter GH200 single-node — TP=4 / 1-node variant.
+#
+# Hardware: 1 node × 4x GH200 96GB = 4 GPUs (~384GB VRAM total)
+#   - AWQ 4-bit weights ~200GB → TP=4 within node → ~50GB/GPU
+#   - 96GB - 50GB ≈ 46GB per GPU for KV cache + activations
+#     (KV cache with fp8 + max_num_seqs=32 ≈ 30GB, plenty of headroom)
+#   - DP=1, no cross-node anything — sample_tokens RPC stays entirely
+#     within the node, matching the MiniMax-M2.7-AWQ single-node layout.
+#
+# Pivot from the FP8 variant on Jupiter 2-node TP=8: the FP8 weights
+# (397GB / 8 GPUs = ~50GB/GPU) match the GLM-5.1-AWQ 2-node math, but
+# the cross-node-init shm_broadcast timeout during weight quantization
+# kills the engine before serving starts (job 461560 died at ~33 min
+# elapsed with "Engine core initialization failed"). The same Bug C
+# cross-node RPC failure class that has now killed every cross-node
+# TP=8 job we've tried on Jupiter.
+
+engine:
+  type: vllm_local
+  model: QuantTrio/Qwen3.5-397B-A17B-AWQ
+  max_output_tokens: 16384
+  healthcheck_interval: 300
+  request_params:
+    temperature: 1.0
+    top_p: 0.95
+  vllm_local: {}
+backend:
+  type: ray
+  wait_for_endpoint: true
+  ray_cgraph_max_inflight_executions: 16
+  healthcheck_max_attempts: 160
+  healthcheck_retry_delay: 15
+vllm_server:
+  model_path: QuantTrio/Qwen3.5-397B-A17B-AWQ
+  num_replicas: 1
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 1
+  data_parallel_size: 1
+  time_limit: '11:59:00'
+  max_model_len: 32768
+  max_num_seqs: 32
+  gpu_memory_utilization: 0.9
+  enable_expert_parallel: true
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  trust_remote_code: true
+  # Disable DEEP_GEMM and the FlashInfer sampler — the sampler owns the
+  # _topk_topp_kernel JIT path that historically deadlocked cross-rank
+  # coordination on GLM-5.1-AWQ. Keep FLASHINFER_MOE_FP16 ON.
+  use_deep_gemm: false
+  use_flashinfer_sampler: false
+  use_flashinfer_moe_fp16: true
+  extra_args:
+  - --dtype
+  - bfloat16
+  - --kv-cache-dtype
+  - fp8
+  # Use awq_marlin (NOT awq). The vanilla `awq` kernel only supports
+  # torch.float16; bfloat16 — which the GLM-5.1 recipe uses and which
+  # we keep here for consistency with the rest of the GH200 stack —
+  # raises:
+  #   ValidationError: torch.bfloat16 is not supported for quantization
+  #   method awq. Supported dtypes: [torch.float16]
+  # awq_marlin is the modern AWQ kernel: supports bfloat16 + is faster
+  # (vLLM even prints a hint suggesting the switch when you pass `awq`).
+  - --quantization
+  - awq_marlin
+  # Disables CUDA graphs + Inductor; Triton kernels still JIT but in eager
+  # dispatch, avoiding the cross-rank deadlock.
+  - --enforce-eager
+  # Pre-empt the mamba post-load page-size calibration. The auto-compute
+  # message from prior runs was:
+  #   "Setting attention block size to 2096 tokens to ensure that
+  #    attention page size is >= mamba page size."
+  #   "Padding mamba page size by 0.58% ..."
+  # Setting --block-size 2096 explicitly skips the cross-rank coordination
+  # step that follows the auto-compute and was deadlocking on shm_broadcast.
+  # If 2096 isn't right for some other reason, vLLM will reject it at parse
+  # time (loud failure beats silent stall).
+  - --block-size
+  - '2096'
+  # Prefill / caching are default-OFF via hpc/vllm_utils.py's
+  # `_DEFAULT_OFF_BOOLEAN_FLAGS` — the launcher injects --no-enable-... .
+  # With chunked prefill OFF, vLLM requires
+  # max_num_batched_tokens >= max_model_len, so set to 32768.
+  - --max-num-batched-tokens
+  - '32768'
