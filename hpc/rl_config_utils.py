@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import copy
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -770,6 +771,29 @@ def build_skyrl_hydra_args(
     trainer["resume_path"] = (
         str(run_paths.resume_path) if run_paths.resume_path is not None else None
     )
+
+    # Compute nodes have no route to api.wandb.ai, which is why the launcher pins
+    # WANDB_MODE=offline on the apptainer --env list (see rl_launch_utils). SkyRL's
+    # Tracking() passes settings=wandb.Settings(mode="shared") to wandb.init(), and an
+    # explicit settings= argument overrides the environment, so the wandb backend still
+    # tries to reach the API. wandb.init() then never returns: the Go core retries the
+    # GraphQL POST against an unreachable host with unbounded backoff. Jobs 1429059 and
+    # 1431539 each held six Jupiter nodes at zero GPU utilization until they were cancelled.
+    #
+    # When wandb is going to run offline, downgrade the backend to console. No metrics are
+    # lost: RayPPOTrainer._log_metrics_stdout mirrors every tracker payload to the job log
+    # as WANDB_MIRROR lines whatever the backend is. Exporting WANDB_MODE=online opts back
+    # in for a cluster that does have egress.
+    if (
+        os.environ.get("WANDB_MODE", "offline") == "offline"
+        and trainer.get("logger") == "wandb"
+    ):
+        trainer["logger"] = "console"
+        print(
+            "WANDB_MODE=offline: trainer.logger wandb -> console "
+            "(offline wandb.init hangs on compute nodes; metrics stay in the job "
+            "log as WANDB_MIRROR lines)"
+        )
 
     num_nodes = int(exp_args.get("num_nodes", 1))
     gpus_per_node = int(exp_args.get("gpus_per_node", getattr(hpc, "gpus_per_node", 4)))
