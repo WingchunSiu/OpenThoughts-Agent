@@ -112,3 +112,25 @@ def test_container_pythonpath_exposes_root_and_trainer_packages(tmp_path, monkey
         str(skyrl_home),
         str(skyrl_home / "skyrl-train"),
     ]
+
+
+def test_container_pythonpath_exposes_skyrl_gym_when_the_checkout_ships_it(
+    tmp_path, monkeypatch
+):
+    """A checkout carrying skyrl-gym must win over the SIF's baked copy.
+
+    skyrl_train.trajectory_runners imports skyrl_gym.verification at module import time.
+    Without this entry ``skyrl_gym`` resolves to /opt/SkyRL/skyrl-gym inside the image,
+    which is pinned at build time, and any newer host tree fails to import.
+    """
+    skyrl_home = tmp_path / "SkyRL"
+    (skyrl_home / "cloud").mkdir(parents=True)
+    (skyrl_home / "skyrl-train" / "skyrl_train").mkdir(parents=True)
+    (skyrl_home / "skyrl-gym" / "skyrl_gym").mkdir(parents=True)
+    monkeypatch.setenv("SKYRL_HOME", str(skyrl_home))
+
+    assert _build_container_pythonpath().split(":") == [
+        str(skyrl_home),
+        str(skyrl_home / "skyrl-train"),
+        str(skyrl_home / "skyrl-gym"),
+    ]
