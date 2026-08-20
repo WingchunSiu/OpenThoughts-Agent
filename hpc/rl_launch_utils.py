@@ -239,6 +239,15 @@ def _build_container_pythonpath() -> str:
     if skyrl_home:
         parts.append(skyrl_home)
         parts.append(os.path.join(skyrl_home, "skyrl-train"))
+        # skyrl-gym is a second importable root in the same repo. Without it, `skyrl_gym`
+        # resolves to the container's baked /opt/SkyRL/skyrl-gym, which is pinned at image
+        # build time and goes stale against the host checkout. MarinSkyRL added
+        # skyrl_gym.verification, which skyrl_train.trajectory_runners imports at module
+        # import time, so a host tree newer than the image fails to import without this.
+        # Same host-overrides-baked rule already applied to skyrl-train above.
+        skyrl_gym = os.path.join(skyrl_home, "skyrl-gym")
+        if os.path.isdir(os.path.join(skyrl_gym, "skyrl_gym")):
+            parts.append(skyrl_gym)
 
     # Harbor lives as a sibling of OpenThoughts-Agent ($DCFT/../harbor on
     # Jupiter); fall back to $HARBOR_HOME if set explicitly.
