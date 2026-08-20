@@ -905,7 +905,11 @@ def build_skyrl_hydra_args(
         for key, val in _flatten_dict(parsed.teacher, "teacher").items():
             args.append(_format_hydra_arg(key, val, prefix="++"))
 
-    # Terminal bench with + prefix (these are new keys added by the config group)
+    # Terminal bench with ++ prefix. Most of these keys are added by the config group and
+    # would need "+", but the group's own defaults have grown over time (trace_upload.enabled
+    # is one), and "+" hard-fails on a key that already exists. "++" adds or overrides and is
+    # correct for both cases, so the launcher does not have to track which keys the group
+    # happens to define.
     if parsed.terminal_bench:
         terminal_bench = dict(parsed.terminal_bench)
 
@@ -913,7 +917,7 @@ def build_skyrl_hydra_args(
 
         for key, val in _flatten_dict(terminal_bench).items():
             args.append(
-                _format_hydra_arg(f"terminal_bench_config.{key}", val, prefix="+")
+                _format_hydra_arg(f"terminal_bench_config.{key}", val, prefix="++")
             )
 
     return args
