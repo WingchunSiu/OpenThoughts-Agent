@@ -886,10 +886,13 @@ def build_skyrl_hydra_args(
         ".wrap_policy",
     }
 
+    # `rollout` (fanout coordinators, coordinator_rpc_timeout) is a real SkyRL section; dropping it
+    # silently left every arm on ppo_base_config defaults (jupiter-tasktrove-dapo, 2026-08-22).
     for section, values in [
         ("trainer", trainer),
         ("generator", generator),
         ("data", data),
+        ("rollout", parsed.raw.get("rollout", {})),
     ]:
         for key, val in _flatten_dict(values, section).items():
             # Use ++ prefix for keys that may not exist in base config
