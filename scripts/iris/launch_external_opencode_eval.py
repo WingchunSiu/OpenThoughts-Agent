@@ -273,8 +273,16 @@ def build_worker_command(
         args.dataset_path,
     ]
     after_api_base = [
-        "--n_concurrent",
-        str(args.n_concurrent),
+        *(
+            argument
+            for value in getattr(args, "agent_kwarg", [])
+            for argument in ("--agent_kwarg", value)
+        ),
+        *(
+            ("--n_concurrent", str(args.n_concurrent))
+            if args.n_concurrent is not None
+            else ()
+        ),
         "--n_attempts",
         str(args.n_attempts),
         "--job_name",
@@ -282,12 +290,17 @@ def build_worker_command(
         "--experiments_dir",
         work_dir,
         f"--harbor_extra_arg=--jobs-dir={durable_jobs_dir}",
-        "--upload_hf_repo",
-        args.upload_hf_repo,
+        *(
+            f"--harbor_extra_arg={value}"
+            for value in getattr(args, "harbor_extra_arg", [])
+        ),
     ]
+    if not getattr(args, "skip_hf_upload", False):
+        after_api_base.extend(["--upload_hf_repo", args.upload_hf_repo])
     return (
         "set -eu\n"
         'test -n "${EXTERNAL_AGENT_API_BASE:?missing minted endpoint URL}"\n'
+        "uv pip install --python /app/.venv/bin/python s3fs==2026.2.0\n"
         f"exec {shlex.join(before_api_base)} "
         '--agent_kwarg "api_base=${EXTERNAL_AGENT_API_BASE}" '
         f"{shlex.join(after_api_base)}"
@@ -303,6 +316,7 @@ def build_submit_command(
         "HF_TOKEN": require_secret(env, "HF_TOKEN"),
         "OPENAI_API_KEY": require_secret(env, "OPENAI_API_KEY"),
         "OPENCODE_DUMMY_KEY": DUMMY_API_KEY,
+        "EXTERNAL_AGENT_API_KEY": DUMMY_API_KEY,
         "EXTERNAL_AGENT_API_BASE": api_base,
     }
     task_env["OT_AGENT_CAPABILITY_TOKEN_DURATION_POLICY"] = (
@@ -349,6 +363,11 @@ def build_submit_command(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job-name", default=default_job_name())
+    parser.add_argument(
+        "--agent",
+        default="opencode",
+        help="Installed Harbor agent used by the eval and token-duration policy.",
+    )
     parser.add_argument(
         "--existing-endpoint",
         help="Use an already-running federated endpoint instead of submitting a new serve.",
@@ -416,11 +435,25 @@ def main() -> int:
     )
     parser.add_argument("--model", help="Eval model id (default: vllm/<serve-model>).")
     parser.add_argument("--dataset-path", default=DEFAULT_DATASET_PATH)
-    # One coordinator is intentionally task-sharded; Iris GPU eval replicas are
-    # not.  A high Harbor concurrency feeds the separately served DP=8 model
-    # without launching duplicate full-dataset evaluations.
-    parser.add_argument("--n-concurrent", type=int, default=256)
+    parser.add_argument(
+        "--n-concurrent",
+        type=int,
+        default=None,
+        help="Override Harbor concurrency. Omit this option to use the Harbor YAML.",
+    )
     parser.add_argument("--n-attempts", type=int, default=3)
+    parser.add_argument(
+        "--agent-kwarg",
+        action="append",
+        default=[],
+        help="Additional key=value argument forwarded to the Harbor agent.",
+    )
+    parser.add_argument(
+        "--harbor-extra-arg",
+        action="append",
+        default=[],
+        help="Additional raw Harbor CLI argument. Repeat as needed.",
+    )
     parser.add_argument(
         "--s3-output-dir",
         default=DEFAULT_S3_OUTPUT_ROOT,
@@ -430,6 +463,11 @@ def main() -> int:
         ),
     )
     parser.add_argument("--upload-hf-repo", default=DEFAULT_HF_TRACE_REPO)
+    parser.add_argument(
+        "--skip-hf-upload",
+        action="store_true",
+        help="Keep durable Harbor artifacts in object storage without publishing to Hugging Face.",
+    )
     parser.add_argument("--cpu", type=float, default=32)
     parser.add_argument("--memory", default="128GB")
     parser.add_argument("--disk", default="128GB")
@@ -449,7 +487,7 @@ def main() -> int:
     )
     try:
         token_policy = resolve_token_duration_policy(
-            agent="opencode",
+            agent=args.agent,
             timeout_seconds=args.timeout,
             requested_token_ttl_seconds=requested_ttl_seconds,
         )

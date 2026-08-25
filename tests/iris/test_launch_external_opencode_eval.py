@@ -70,8 +70,11 @@ def test_submit_uses_env_for_url_and_fails_fast_when_missing():
         dataset_path="DCAgent/dev_set_v2",
         n_concurrent=256,
         n_attempts=3,
+        agent_kwarg=["thinking_format=chat-template"],
+        harbor_extra_arg=["--n-tasks=1"],
         s3_output_dir="s3://marin-us-east-02a/iris",
         upload_hf_repo="laion/traces",
+        skip_hf_upload=True,
     )
     command = _MODULE.build_submit_command(
         args,
@@ -85,8 +88,11 @@ def test_submit_uses_env_for_url_and_fails_fast_when_missing():
     shell = command[-1]
     assert "set -eu" in shell
     assert "${EXTERNAL_AGENT_API_BASE:?missing minted endpoint URL}" in shell
+    assert "uv pip install --python /app/.venv/bin/python s3fs==2026.2.0" in shell
     assert "api_base=${EXTERNAL_AGENT_API_BASE}" in shell
     assert "https://iris.oa.dev" not in shell
+    assert "thinking_format=chat-template" in shell
+    assert "--harbor_extra_arg=--n-tasks=1" in shell
     assert "--n_concurrent 256" in shell
     assert "--job_name eval-v2" in shell
     assert "--experiments_dir /tmp/ot-agent-runs/eval-v2" in shell
@@ -95,6 +101,31 @@ def test_submit_uses_env_for_url_and_fails_fast_when_missing():
         "--harbor_extra_arg=--jobs-dir=s3://marin-us-east-02a/iris/eval-v2/trace_jobs"
         in shell
     )
+    assert "--upload_hf_repo" not in shell
+    assert command[command.index("EXTERNAL_AGENT_API_KEY") + 1] == _MODULE.DUMMY_API_KEY
+
+
+def test_submit_uses_harbor_config_concurrency_when_not_overridden():
+    args = argparse.Namespace(
+        harbor_config="config.yaml",
+        datagen_config="external.yaml",
+        model="vllm/model",
+        dataset_path="DCAgent/dev_set_v2",
+        n_concurrent=None,
+        n_attempts=1,
+        job_name="eval-v2",
+        agent_kwarg=[],
+        harbor_extra_arg=[],
+        skip_hf_upload=True,
+    )
+
+    command = _MODULE.build_worker_command(
+        args,
+        "s3://marin-us-east-02a/iris/eval-v2/trace_jobs",
+        "/tmp/ot-agent-runs/eval-v2",
+    )
+
+    assert "--n_concurrent" not in command
 
 
 def test_s3_harbor_jobs_dir_isolated_per_iris_job():
