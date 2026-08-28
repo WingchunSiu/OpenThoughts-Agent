@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Rewire the three QA/instruction-following sandboxes with the LLM-judge pattern.
+"""Rewire three QA/instruction-following sandboxes with RewardKit judges.
 
 Takes the Harbor task datasets (``tasks.parquet`` = path + gzipped-tar
 ``task_binary``) for wizardlm-orca / staqc / qasper and installs the
-``nemotron_gym`` LLM-judge verifier contract on every task:
+``nemotron_gym`` rubric contract on every task. The legacy verifier template is
+used only as an intermediate representation; ``write_task`` normalizes every
+archive to RewardKit before it can be staged or uploaded.
 
   * ``instruction.md``      — original instruction, with submission guidance
                               appended telling the agent to write its answer to
@@ -28,7 +30,6 @@ Takes the Harbor task datasets (``tasks.parquet`` = path + gzipped-tar
 Usage:
     python -m data.rl_converters.fix_llm_judge process  --workdir <dir>
     python -m data.rl_converters.fix_llm_judge smoke    --workdir <dir> [--source NAME]
-    python -m data.rl_converters.fix_llm_judge upload   --workdir <dir>
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ import os
 import re
 import tarfile
 from pathlib import Path
+
+from data.tasktrove.rewardkit_migration import migrate_task_binary
 
 
 # --------------------------------------------------------------------------- #
@@ -419,7 +422,7 @@ def read_task(task_binary: bytes) -> dict[str, bytes]:
 
 
 def write_task(files: dict[str, bytes]) -> bytes:
-    """Re-encode {path: content} as a gzip-tar binary."""
+    """Re-encode a task and normalize its legacy judge to RewardKit."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for name, content in sorted(files.items()):
@@ -428,7 +431,13 @@ def write_task(files: dict[str, bytes]) -> bytes:
             ti = tarfile.TarInfo(name=name)
             ti.size = len(content)
             tar.addfile(ti, io.BytesIO(content))
-    return gzip.compress(buf.getvalue())
+    task_binary = gzip.compress(buf.getvalue())
+    migrated, migration = migrate_task_binary(task_binary)
+    if migration is None:
+        raise ValueError(
+            "generated LLM judge was not recognized for RewardKit migration"
+        )
+    return migrated
 
 
 # --------------------------------------------------------------------------- #
@@ -667,80 +676,9 @@ def smoke(workdir: Path, source: str | None = None, sample: int = 2) -> None:
         print(f"  summary: empty->low({0.0}) ok {ok_low}/{n}")
 
 
-# --------------------------------------------------------------------------- #
-# upload
-# --------------------------------------------------------------------------- #
-README_BODY = """\
-# {dst}
-
-LLM-judge-verified version of `{src}`.
-
-Each task follows the `nemotron_gym` LLM-judge verifier contract:
-
-* `instruction.md` — the original task instruction, with submission guidance
-  appended directing the agent to write its answer to `/app/response.txt`.
-* `tests/test_state.py` — a pytest-runnable LLM judge that reads
-  `/app/response.txt` (legacy `/app/answer.txt` fallback), reads
-  `tests/verifier_data.json` for the instruction + rubric, calls
-  `litellm.completion` (default `openai/gpt-4o-mini`, temperature=0) with the
-  rubric, parses `\\boxed{{<score>}}`, and writes the float score to
-  `/logs/verifier/reward.txt`.
-* `tests/test.sh` — defaults reward to 0, then runs
-  `python3 -m pytest /tests/test_state.py`.
-* `tests/verifier_data.json` — the task instruction + a per-dataset rubric.
-* `environment/Dockerfile` — `ubuntu:24.04` + python3 + pip + openai + pytest
-  + litellm.
-* `task.toml` — `LLM_JUDGE_TASK_TOML`, so `OPENAI_API_KEY` / `JUDGE_MODEL`
-  propagate into the verifier container via `[verifier].env` (`OPENAI_API_KEY`
-  is required at trial time).
-
-{notes}
-
-**Rubric:** {rubric_list}
-
-`{n_tasks}` tasks.
-"""
-
-
-def upload(workdir: Path) -> None:
-
-    from huggingface_hub import HfApi, create_repo
-
-    token = os.environ.get("HF_TOKEN")
-    api = HfApi(token=token)
-    for key, cfg in SOURCES.items():
-        pq_path = workdir / "out" / f"{key}.parquet"
-        import pandas as pd
-
-        n = len(pd.read_parquet(pq_path))
-        readme = README_BODY.format(
-            dst=cfg["dst_repo"],
-            src=cfg["src_repo"],
-            notes=cfg["notes"],
-            rubric_list=" / ".join(r["id"] for r in cfg["rubric"]),
-            n_tasks=n,
-        )
-        create_repo(cfg["dst_repo"], repo_type="dataset", token=token, exist_ok=True)
-        api.upload_file(
-            path_or_fileobj=str(pq_path),
-            path_in_repo="tasks.parquet",
-            repo_id=cfg["dst_repo"],
-            repo_type="dataset",
-            token=token,
-        )
-        api.upload_file(
-            path_or_fileobj=readme.encode("utf-8"),
-            path_in_repo="README.md",
-            repo_id=cfg["dst_repo"],
-            repo_type="dataset",
-            token=token,
-        )
-        print(f"[{key}] uploaded -> https://huggingface.co/datasets/{cfg['dst_repo']}")
-
-
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("cmd", choices=["process", "smoke", "upload"])
+    p.add_argument("cmd", choices=["process", "smoke"])
     p.add_argument("--workdir", required=True, type=Path)
     p.add_argument("--source", default=None, help="smoke: single source key")
     p.add_argument("--sample", type=int, default=2)
@@ -749,8 +687,6 @@ def main() -> int:
         process(args.workdir)
     elif args.cmd == "smoke":
         smoke(args.workdir, args.source, args.sample)
-    else:
-        upload(args.workdir)
     return 0
 
 

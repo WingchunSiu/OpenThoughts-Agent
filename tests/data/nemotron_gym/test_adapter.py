@@ -368,10 +368,11 @@ def test_safety_converter_with_principle_makes_judge_task():
     # Model defaults are resolved at runtime (env var → Harbor default
     # openai/gpt-4o-mini); per-task verifier_data shouldn't hardcode them.
     assert "model" not in data
-    # Container should install litellm for multi-provider judge support.
+    # Container should install RewardKit, which provides the LiteLLM judge runtime.
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar2:
         dockerfile = tar2.extractfile("environment/Dockerfile").read().decode()
-    assert "litellm" in dockerfile
+    assert "harbor-rewardkit==0.1.4" in dockerfile
+    assert "litellm==1.51.3" not in dockerfile
 
 
 def test_identity_converter_with_principle_makes_judge_task():

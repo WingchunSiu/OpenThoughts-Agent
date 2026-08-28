@@ -24,6 +24,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from data.tasktrove.rewardkit_migration import migrate_task_binary
+
 
 # Name-pinned base image registry. Values are the expected sha256 digest if
 # known; None means "name-pinned only". A digest may be added later by running
@@ -214,7 +216,19 @@ class HarborTask:
                 info.gname = ""
                 info.mode = 0o644
                 tar.addfile(info, io.BytesIO(content))
-        return buf.getvalue()
+        task_binary = buf.getvalue()
+        if "litellm" not in self.verifier_py:
+            return task_binary
+
+        # Normalize legacy hand-written LLM judges at the serialization boundary.
+        # RewardKit preserves judge failures as infrastructure failures instead of
+        # turning them into scoreable zero rewards.
+        migrated, migration = migrate_task_binary(task_binary)
+        if migration is None:
+            raise ValueError(
+                "LLM judge verifier was not recognized for RewardKit migration"
+            )
+        return migrated
 
 
 def task_id_for(prefix: str, payload: str | bytes) -> str:
