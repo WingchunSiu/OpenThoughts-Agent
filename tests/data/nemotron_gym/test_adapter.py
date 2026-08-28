@@ -29,7 +29,7 @@ from data.nemotron_gym.adapter import (
     task_id_for,
     validate_path,
 )
-from data.nemotron_gym.verifiers import MATH_BOXED_VERIFIER_PY
+from data.nemotron_gym.verifiers import CALENDAR_VERIFIER_PY, MATH_BOXED_VERIFIER_PY
 
 
 def _make_valid_task(**overrides) -> HarborTask:
@@ -295,7 +295,17 @@ def test_calendar_converter_smoke():
     from data.nemotron_gym.converters.agent_calendar import convert_agent_calendar
 
     row = {
-        "input": [{"role": "user", "content": "Schedule a 30-min meeting."}],
+        "input": [
+            {"role": "user", "content": "Schedule a 30-min planning meeting."},
+            {
+                "role": "assistant",
+                "content": (
+                    '[{"event_id": 0, "event_name": "Planning Meeting", '
+                    '"start_time": "10:00", "duration": 30}]'
+                ),
+            },
+            {"role": "user", "content": "Keep event 0 after 10am."},
+        ],
         "exp_cal_state": {
             "0": {
                 "event_id": 0,
@@ -309,6 +319,122 @@ def test_calendar_converter_smoke():
     }
     task = convert_agent_calendar(row, 0)
     assert task is not None
+    with tarfile.open(fileobj=io.BytesIO(task.to_tarball()), mode="r:gz") as tar:
+        data = json.loads(tar.extractfile("tests/verifier_data.json").read())
+    assert data["expected_events"]["0"]["event_name"] == "Planning Meeting"
+
+
+def _calendar_namespace():
+    namespace = {"__name__": "calendar_verifier_test"}
+    exec(CALENDAR_VERIFIER_PY, namespace)
+    return namespace
+
+
+def _calendar_evaluator():
+    return _calendar_namespace()["evaluate_calendar"]
+
+
+def _valid_calendar_case():
+    expected = {
+        "0": {
+            "event_id": 0,
+            "event_name": "Design Review",
+            "duration": 30,
+            "min_time": "10:00",
+            "max_time": "16:00",
+            "constraint": "after 10am",
+        },
+        "1": {
+            "event_id": 1,
+            "event_name": "Lunch",
+            "duration": 45,
+            "min_time": "10:00",
+            "max_time": "16:00",
+            "constraint": "at 12pm",
+        },
+    }
+    events = [
+        {
+            "event_id": 0,
+            "event_name": "Design Review",
+            "start_time": "10:00",
+            "duration": 30,
+        },
+        {
+            "event_id": 1,
+            "event_name": "Lunch",
+            "start_time": "12:00",
+            "duration": 45,
+        },
+    ]
+    return expected, events
+
+
+def test_calendar_verifier_accepts_complete_non_overlapping_schedule():
+    expected, events = _valid_calendar_case()
+    valid, errors = _calendar_evaluator()(expected, events)
+    assert valid, errors
+
+
+def test_calendar_verifier_leaves_no_reward_for_corrupt_verifier_data(tmp_path):
+    namespace = _calendar_namespace()
+    namespace["DATA"] = tmp_path / "verifier_data.json"
+    namespace["ANSWER"] = tmp_path / "answer.txt"
+    namespace["REWARD"] = tmp_path / "reward.txt"
+    namespace["DATA"].write_text("not-json")
+    namespace["ANSWER"].write_text("[]")
+
+    with pytest.raises(json.JSONDecodeError):
+        namespace["main"]()
+    assert not namespace["REWARD"].exists()
+
+
+def test_calendar_verifier_scores_missing_agent_answer_as_zero(tmp_path):
+    namespace = _calendar_namespace()
+    expected, _ = _valid_calendar_case()
+    namespace["DATA"] = tmp_path / "verifier_data.json"
+    namespace["ANSWER"] = tmp_path / "missing-answer.txt"
+    namespace["REWARD"] = tmp_path / "reward.txt"
+    namespace["DATA"].write_text(json.dumps({"expected_events": expected}))
+
+    assert namespace["main"]() == 0
+    assert namespace["REWARD"].read_text() == "0"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda events: events[0].update(event_name="Renamed Review"),
+        lambda events: events.append(dict(events[0])),
+        lambda events: events.pop(),
+        lambda events: events.append(
+            {
+                "event_id": 2,
+                "event_name": "Extra",
+                "start_time": "14:00",
+                "duration": 15,
+            }
+        ),
+        lambda events: events[0].update(start_time="12:15"),
+        lambda events: events[0].update(start_time="09:30"),
+        lambda events: events[0].update(duration=45),
+    ],
+    ids=[
+        "renamed",
+        "duplicate",
+        "omitted",
+        "extra",
+        "overlap",
+        "time-constraint",
+        "duration",
+    ],
+)
+def test_calendar_verifier_rejects_invalid_schedule_mutations(mutate):
+    expected, events = _valid_calendar_case()
+    mutate(events)
+    valid, errors = _calendar_evaluator()(expected, events)
+    assert not valid
+    assert errors
 
 
 def test_workplace_converter_smoke():

@@ -34,9 +34,38 @@ _INSTRUCTION_HEADER = (
 _MAX_EVENTS = 32
 
 
-def _coerce_expected_events(state: object) -> dict | None:
+def _calendar_names_from_prompt(prompt: str) -> dict[int, str]:
+    """Return the latest calendar name for each event ID in a transcript."""
+    names: dict[int, str] = {}
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(prompt):
+        if char != "[":
+            continue
+        try:
+            value, _ = decoder.raw_decode(prompt[start:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, list):
+            continue
+        for event in value:
+            if not isinstance(event, dict):
+                continue
+            event_id = event.get("event_id")
+            event_name = event.get("event_name")
+            if (
+                isinstance(event_id, int)
+                and not isinstance(event_id, bool)
+                and isinstance(event_name, str)
+                and event_name.strip()
+            ):
+                names[event_id] = event_name.strip()
+    return names
+
+
+def _coerce_expected_events(state: object, prompt: str) -> dict | None:
     if not isinstance(state, dict):
         return None
+    names = _calendar_names_from_prompt(prompt)
     out: dict = {}
     for k, v in state.items():
         if not isinstance(k, str):
@@ -50,7 +79,13 @@ def _coerce_expected_events(state: object) -> dict | None:
             json.dumps(v, ensure_ascii=False, allow_nan=False)
         except (TypeError, ValueError):
             continue
-        out[k] = v
+        event_id = v.get("event_id")
+        if not isinstance(event_id, int) or isinstance(event_id, bool):
+            continue
+        event_name = names.get(event_id)
+        if event_name is None:
+            continue
+        out[k] = {**v, "event_name": event_name}
         if len(out) >= _MAX_EVENTS:
             break
     return out or None
@@ -58,7 +93,7 @@ def _coerce_expected_events(state: object) -> dict | None:
 
 def _build(row: dict, source_dataset: str, *, row_idx: int) -> HarborTask | None:
     prompt = extract_prompt(row)
-    expected = _coerce_expected_events(row.get("exp_cal_state"))
+    expected = _coerce_expected_events(row.get("exp_cal_state"), prompt)
     if expected is None:
         return None
     uuid = row.get("uuid") if isinstance(row.get("uuid"), str) else None
