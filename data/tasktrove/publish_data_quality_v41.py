@@ -20,6 +20,7 @@ from huggingface_hub import (
 REPO_ID = "open-thoughts/TaskTrove"
 SOURCE_REVISION = "81820c33ba26d705b9ea7ebac2d090d70fac93f4"
 TAG = "v4.1"
+UPLOAD_THREADS = 1
 
 
 def file_sha256(path: Path) -> str:
@@ -248,7 +249,7 @@ def publish(stage: Path) -> str:
         operations=operations,
         commit_message="TaskTrove v4.1: remediate data-quality survey findings",
         parent_commit=SOURCE_REVISION,
-        num_threads=2,
+        num_threads=UPLOAD_THREADS,
     )
     return commit.oid
 
