@@ -1,7 +1,7 @@
 """Compatibility shim for Harbor dataset-config classes.
 
-Harbor recently unified ``LocalDatasetConfig`` and ``RegistryDatasetConfig``
-into a single ``DatasetConfig`` class:
+Harbor unified ``LocalDatasetConfig`` and ``RegistryDatasetConfig`` into a single
+``DatasetConfig`` class:
 
   - Local datasets:    ``DatasetConfig(path=Path(...))``
   - Registry datasets: ``DatasetConfig(name="...")``
@@ -9,9 +9,7 @@ into a single ``DatasetConfig`` class:
                        ``cfg.is_package()``
 
 This module exposes the legacy names regardless of which Harbor version is
-installed so existing OT-Agent callers keep working. Once we drop support
-for pre-unification Harbor, callers can import ``DatasetConfig`` directly
-and this shim becomes a no-op (and can be deleted).
+installed so existing OT-Agent callers keep working.
 
 Usage::
 
@@ -52,14 +50,11 @@ except ImportError:
 def is_local_dataset(dataset) -> bool:
     """Return True iff ``dataset`` represents a local-path dataset.
 
-    Safe replacement for ``isinstance(dataset, LocalDatasetConfig)`` that
-    works on both legacy and unified Harbor:
-
-    - Unified Harbor: ``LocalDatasetConfig is DatasetConfig``, so the legacy
-      isinstance check would incorrectly return True for ALL DatasetConfig
-      instances (registry, package, local). The unified class exposes
-      ``is_local()`` which checks ``path is not None``.
-    - Legacy Harbor: falls back to the original isinstance check.
+    Safe replacement for ``isinstance(dataset, LocalDatasetConfig)`` that works
+    on both legacy and unified Harbor. On unified Harbor ``LocalDatasetConfig
+    is DatasetConfig``, so the legacy isinstance check would return True for
+    ALL DatasetConfig instances; the unified ``is_local()`` checks ``path is
+    not None``.
     """
     if hasattr(dataset, "is_local") and callable(dataset.is_local):
         return bool(dataset.is_local())
@@ -88,21 +83,11 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Orchestrator-concept breaking change.
 #
-# Old Harbor:
-#   from harbor.orchestrators.base import OrchestratorEvent
-#   from harbor.models.job.config import OrchestratorConfig
-#   JobConfig(..., orchestrator=OrchestratorConfig(n_concurrent_trials=N))
-#   job._orchestrator.add_hook(OrchestratorEvent.TRIAL_COMPLETED, callback)
-#
-# New (unified) Harbor:
-#   ``harbor.orchestrators`` is gone. ``OrchestratorEvent`` has been replaced
-#   by ``harbor.trial.hooks.TrialEvent`` (``TRIAL_COMPLETED`` → ``END``).
-#   ``OrchestratorConfig`` is removed; ``JobConfig`` accepts
-#   ``n_concurrent_trials`` (and ``quiet``, ``retry``) directly at the top
-#   level. Hooks are attached via the public ``Job.add_hook`` /
-#   ``Job.on_trial_completed`` methods, with no private ``_orchestrator``
-#   indirection.
-#
+# Legacy Harbor: OrchestratorEvent from harbor.orchestrators.base, OrchestratorConfig
+# nested on JobConfig, hooks via job._orchestrator.add_hook.
+# Unified Harbor: harbor.orchestrators is gone; TrialEvent.END replaces
+# OrchestratorEvent.TRIAL_COMPLETED; OrchestratorConfig removed (n_concurrent_trials,
+# quiet, retry are top-level on JobConfig); hooks via Job.add_hook / on_trial_completed.
 # This shim hides the difference so existing callers keep working.
 # ---------------------------------------------------------------------------
 
@@ -246,15 +231,11 @@ def add_trial_completed_hook(job, callback) -> None:
 # ---------------------------------------------------------------------------
 # Job construction: ``Job(config)`` → ``await Job.create(config)``.
 #
-# Unified Harbor split construction in two: ``Job.__init__`` is sync but now
-# requires ``_task_configs`` / ``_metrics`` to be pre-resolved (asynchronously
-# via ``_resolve_task_configs`` etc.), and the public constructor is the async
-# classmethod ``Job.create(config)``. Direct ``Job(config)`` calls raise
-# ``ValueError("Instantiating Job directly is deprecated...")``.
-#
-# The legacy ``Job(config, **kwargs)`` API also accepted extras like
-# ``enable_progress_log=True``. The new ``Job.create()`` only takes ``config``;
-# extras are silently dropped on the unified path.
+# Unified Harbor split construction: Job.__init__ is sync but requires
+# _task_configs/_metrics pre-resolved (async); the public constructor is the
+# async classmethod Job.create(config). Direct Job(config) raises ValueError.
+# Legacy Job(config, **kwargs) also accepted extras like enable_progress_log;
+# the new Job.create() only takes config (extras dropped on the unified path).
 # ---------------------------------------------------------------------------
 
 

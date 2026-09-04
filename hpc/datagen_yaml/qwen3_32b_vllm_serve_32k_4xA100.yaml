@@ -31,4 +31,3 @@ vllm_server:
   - --max-num-partial-prefills
   - '1'
   - --enable-prefix-caching
-  # NOTE: No --all2all-backend pplx (requires PPLX library, not available on A100)

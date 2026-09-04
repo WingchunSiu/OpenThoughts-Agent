@@ -126,7 +126,9 @@ def _safe_stats_dump(stats_obj):
     try:
         if stats_obj is None:
             return None
-        if hasattr(stats_obj, "model_dump") and callable(getattr(stats_obj, "model_dump")):
+        if hasattr(stats_obj, "model_dump") and callable(
+            getattr(stats_obj, "model_dump")
+        ):
             return stats_obj.model_dump()  # type: ignore[no-any-return]
         if hasattr(stats_obj, "dict") and callable(getattr(stats_obj, "dict")):
             return stats_obj.dict()  # type: ignore[no-any-return]
@@ -264,7 +266,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate NL2Bash sandboxes tasks using a teacher agent.",
     )
-    parser.add_argument("--split", type=str, default="train", help="Dataset split to sample.")
+    parser.add_argument(
+        "--split", type=str, default="train", help="Dataset split to sample."
+    )
     parser.add_argument("--seed", type=int, default=None, help="Random seed.")
     parser.add_argument(
         "--output",
@@ -288,7 +292,9 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     dataset_dir, artifacts = generate_tasks(args)
     final_path = finalize_dataset_output(dataset_dir, _resolve_output_dir(args))
-    print(json.dumps({"dataset_path": str(final_path), "artifacts": artifacts}, indent=2))
+    print(
+        json.dumps({"dataset_path": str(final_path), "artifacts": artifacts}, indent=2)
+    )
 
 
 if __name__ == "__main__":

@@ -56,10 +56,14 @@ def create_task_dir(
     (d / "environment").mkdir(parents=True, exist_ok=True)
 
     # task.toml
-    (d / "task.toml").write_text(render_task_toml(difficulty, category), encoding="utf-8")
+    (d / "task.toml").write_text(
+        render_task_toml(difficulty, category), encoding="utf-8"
+    )
 
     # instruction.md
-    (d / "instruction.md").write_text(render_instruction_md(task_desc), encoding="utf-8")
+    (d / "instruction.md").write_text(
+        render_instruction_md(task_desc), encoding="utf-8"
+    )
 
     # environment/Dockerfile
     (d / "environment" / "Dockerfile").write_text(PLAIN_DOCKERFILE, encoding="utf-8")
@@ -101,8 +105,11 @@ def generate_subset(
 
         for row in iter_parquet_rows(parquet_path):
             ok = create_task_dir(
-                row, subset_dir, num_produced,
-                difficulty=difficulty, category=category,
+                row,
+                subset_dir,
+                num_produced,
+                difficulty=difficulty,
+                category=category,
             )
             if ok:
                 num_produced += 1
@@ -150,23 +157,32 @@ def parse_args() -> argparse.Namespace:
         description="Generate Harbor tasks from Nemotron-Terminal-Corpus"
     )
     p.add_argument(
-        "--corpus-dir", type=Path, required=True,
+        "--corpus-dir",
+        type=Path,
+        required=True,
         help="Path to downloaded nvidia/Nemotron-Terminal-Corpus",
     )
     p.add_argument(
-        "--out-dir", type=Path, required=True,
+        "--out-dir",
+        type=Path,
+        required=True,
         help="Output directory for generated task dirs and parquets",
     )
     p.add_argument(
-        "--hf-org", type=str, default="penfever",
+        "--hf-org",
+        type=str,
+        default="penfever",
         help="HuggingFace organization for uploads",
     )
     p.add_argument(
-        "--no-upload", action="store_true",
+        "--no-upload",
+        action="store_true",
         help="Skip the HF upload step",
     )
     p.add_argument(
-        "--subsets", nargs="*", default=None,
+        "--subsets",
+        nargs="*",
+        default=None,
         help="Only process these subsets (default: all)",
     )
     return p.parse_args()

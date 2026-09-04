@@ -83,16 +83,18 @@ from pathlib import Path
 
 STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+    }
+)
 
 WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
     "requests": ("requests",),
@@ -125,9 +127,7 @@ WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 
 PIP_WHITELIST: frozenset[str] = frozenset(
-    name
-    for imports in WHITELIST_PIP_TO_IMPORTS.values()
-    for name in imports
+    name for imports in WHITELIST_PIP_TO_IMPORTS.values() for name in imports
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
@@ -138,6 +138,7 @@ MARKER_FILENAME = ".exp_rle_expert_patched"
 # ---------------------------------------------------------------------------
 # AST helpers
 # ---------------------------------------------------------------------------
+
 
 def _top_level_imports(tree: ast.AST) -> set[str]:
     """Return the set of top-level package names imported by an AST module."""
@@ -220,7 +221,11 @@ def _module_level_pytestmark_skip(tree: ast.Module) -> bool:
     """
     for node in tree.body:
         if isinstance(node, ast.Assign):
-            targets = [t for t in node.targets if isinstance(t, ast.Name) and t.id == "pytestmark"]
+            targets = [
+                t
+                for t in node.targets
+                if isinstance(t, ast.Name) and t.id == "pytestmark"
+            ]
             if targets and _pytestmark_value_is_all_skip(node.value):
                 return True
         elif isinstance(node, ast.AnnAssign):
@@ -234,17 +239,25 @@ def _module_level_pytestmark_skip(tree: ast.Module) -> bool:
     return False
 
 
-def _iter_test_functions(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+def _iter_test_functions(
+    tree: ast.Module,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     """Collect top-level ``test_*`` functions and methods of top-level
     classes whose name starts with ``Test`` (pytest's default discovery).
     """
     out: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.name.startswith("test_"):
             out.append(node)
-        elif isinstance(node, ast.ClassDef) and (node.name.startswith("Test") or node.name.startswith("test_")):
+        elif isinstance(node, ast.ClassDef) and (
+            node.name.startswith("Test") or node.name.startswith("test_")
+        ):
             for sub in node.body:
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.name.startswith("test_"):
+                if isinstance(
+                    sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and sub.name.startswith("test_"):
                     out.append(sub)
     return out
 
@@ -259,6 +272,7 @@ def _all_tests_skipped(tree: ast.Module) -> bool:
 # ---------------------------------------------------------------------------
 # Per-task evaluation
 # ---------------------------------------------------------------------------
+
 
 def evaluate_task(task_dir: Path) -> dict:
     """Return a per-task verdict dict.
@@ -279,14 +293,26 @@ def evaluate_task(task_dir: Path) -> dict:
         with tempfile.NamedTemporaryFile(suffix=".pyc", delete=True) as tmp:
             py_compile.compile(str(test_file), cfile=tmp.name, doraise=True)
     except py_compile.PyCompileError as exc:
-        return {"kept": False, "reason": f"syntax_error: {exc.msg.splitlines()[0][:80]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"syntax_error: {exc.msg.splitlines()[0][:80]}",
+            "bad_imports": [],
+        }
     except Exception as exc:
-        return {"kept": False, "reason": f"compile_error: {type(exc).__name__}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"compile_error: {type(exc).__name__}",
+            "bad_imports": [],
+        }
 
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8", errors="replace"))
     except SyntaxError as exc:
-        return {"kept": False, "reason": f"ast_syntax: {exc.msg[:60]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"ast_syntax: {exc.msg[:60]}",
+            "bad_imports": [],
+        }
 
     # 2. Import filter
     imports = _top_level_imports(tree)
@@ -324,22 +350,42 @@ def evaluate_task(task_dir: Path) -> dict:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import samples.")
-    p.add_argument("--force", action="store_true",
-                   help="Re-run even if the idempotency marker is present.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad", type=int, default=20, help="Print the first N bad-import samples."
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run even if the idempotency marker is present.",
+    )
     return p.parse_args()
 
 
@@ -351,7 +397,9 @@ def main() -> None:
 
     marker = root / MARKER_FILENAME
     if marker.exists() and not args.force and not args.dry_run:
-        print(f"[patch_exp_rle_expert] marker present at {marker}; skipping (use --force to re-run).")
+        print(
+            f"[patch_exp_rle_expert] marker present at {marker}; skipping (use --force to re-run)."
+        )
         return
 
     task_dirs = sorted(d for d in root.iterdir() if d.is_dir())
@@ -379,7 +427,11 @@ def main() -> None:
         r = v["reason"]
         if r == "no_test_file":
             no_test_dropped += 1
-        elif r.startswith("syntax_error") or r.startswith("ast_syntax") or r.startswith("compile_error"):
+        elif (
+            r.startswith("syntax_error")
+            or r.startswith("ast_syntax")
+            or r.startswith("compile_error")
+        ):
             syntax_dropped += 1
         elif r == "missing_import":
             import_dropped += 1
@@ -409,7 +461,9 @@ def main() -> None:
 
     if bad_import_samples:
         print()
-        print(f"[patch_exp_rle_expert] sample bad-import drops (first {len(bad_import_samples)}):")
+        print(
+            f"[patch_exp_rle_expert] sample bad-import drops (first {len(bad_import_samples)}):"
+        )
         for tid, bad in bad_import_samples:
             print(f"  {tid}: {bad}")
 
@@ -433,11 +487,7 @@ def main() -> None:
     print(f"[patch_exp_rle_expert] removed {removed} dropped task directories.")
 
     # Write idempotency marker.
-    marker.write_text(
-        f"total={total}\n"
-        f"kept={kept}\n"
-        f"removed={removed}\n"
-    )
+    marker.write_text(f"total={total}\nkept={kept}\nremoved={removed}\n")
     print(f"[patch_exp_rle_expert] wrote idempotency marker: {marker}")
 
 

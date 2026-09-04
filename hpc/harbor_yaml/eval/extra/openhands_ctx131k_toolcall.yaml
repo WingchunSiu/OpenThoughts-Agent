@@ -1,17 +1,3 @@
-# Harbor eval configuration (16 concurrency, OpenHands, 131k context, TOOL CALLING ENABLED)
-#
-# This config enables native OpenHands tool calling via the OpenAI function calling API.
-# Use this with vLLM configs that have enable_auto_tool_choice: true
-#
-# Key difference from standard openhands configs:
-#   disable_tool_calls: false  (enables native function calling)
-#
-# Usage:
-#   python -m hpc.launch \
-#       --job_type eval \
-#       --vllm_serve_config hpc/datagen_yaml/nemotron_nano_30b_vllm_serve_32k_toolcall.yaml \
-#       --harbor_yaml hpc/harbor_yaml/trace_16concurrency_openhands_eval_ctx131k_toolcall.yaml \
-#       ...
 
 job_name: default-eval-job
 jobs_dir: trace_jobs
@@ -67,12 +53,6 @@ verifier:
   max_timeout_sec:
   disable: false
 
-metrics:
-  - type: mean-drop-ei
-    kwargs: {}
-  - type: accuracy-drop-ei
-    kwargs: {}
-
 agents:
 - name: openhands
   import_path:
@@ -80,9 +60,6 @@ agents:
   max_timeout_sec:
   override_setup_timeout_sec: 600
   kwargs:
-    # IMPORTANT: Tool calling ENABLED for native function calling
-    # This requires the vLLM server to have enable_auto_tool_choice: true
-    # and an appropriate tool_call_parser (e.g., hermes for Nemotron)
     disable_tool_calls: false
 
     collect_rollout_details: false
@@ -96,7 +73,7 @@ agents:
       output_cost_per_token: 0
 
     trajectory_config:
-      raw_content: false  # Use events folder (structured tool calls) instead of raw completions
+      raw_content: false
       linear_history: true
 
 datasets:

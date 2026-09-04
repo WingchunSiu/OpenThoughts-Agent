@@ -3,6 +3,7 @@
 Resumable: skips datasets whose target dir already has a non-empty README.md
 or any *.parquet file. Logs per-dataset success/failure to staging.log.
 """
+
 import os
 import sys
 import time
@@ -45,7 +46,15 @@ def stage_one(repo_id: str, difficulty: str) -> tuple[str, str]:
             repo_id=repo_id,
             repo_type="dataset",
             local_dir=str(target),
-            allow_patterns=["*.parquet", "*.json", "*.md", "*.txt", "*.yaml", "*.yml", ".gitattributes"],
+            allow_patterns=[
+                "*.parquet",
+                "*.json",
+                "*.md",
+                "*.txt",
+                "*.yaml",
+                "*.yml",
+                ".gitattributes",
+            ],
             max_workers=4,
         )
         return ("ok", safe)

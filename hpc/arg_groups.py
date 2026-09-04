@@ -106,7 +106,7 @@ def add_harbor_env_arg(
         default=default,
         choices=["daytona", "docker", "modal", None],
         help="Harbor environment backend: daytona (cloud), docker (local/podman), modal. "
-             "If not specified, inferred from Harbor config YAML.",
+        "If not specified, inferred from Harbor config YAML.",
     )
 
     # Support legacy names as hidden aliases for backwards compatibility
@@ -497,6 +497,49 @@ def add_tasks_input_arg(
     )
 
 
+def add_ingress_literal_args(parser: ArgTarget) -> None:
+    """Add datagen literal-capture + controller-ingress flags.
+
+    Mirrors the SLURM dataclass flags in hpc/arguments.py (record_literal /
+    ingress_mode / ingress_host) for the argparse-based local/iris runners, so
+    the iris TPU datagen path can co-locate harbor's RecordProxy for literal-token
+    capture and route the agent through the auth-gated iris controller ingress.
+    """
+    parser.add_argument(
+        "--record_literal",
+        action="store_true",
+        help="Co-locate harbor's RecordProxy in front of the on-cluster vLLM and route the "
+        "agent endpoint THROUGH it, capturing literal token IDs / logprobs to literal.jsonl "
+        "(for SUPPORTS_LITERAL_TRACES agents, e.g. opencode). On the iris path this REQUIRES "
+        "--ingress_mode controller (no pinggy tunnel here to expose a loopback proxy).",
+    )
+    parser.add_argument(
+        "--record-literal",
+        dest="record_literal",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    _add_arg_with_alias(
+        parser,
+        "--ingress_mode",
+        "--ingress-mode",
+        choices=["pinggy", "controller"],
+        default="pinggy",
+        help="How cloud sandboxes reach the on-cluster vLLM: 'pinggy' (default, legacy) or "
+        "'controller' (auth-gated iris controller ingress). Controller mode registers the "
+        "vLLM (or the co-located RecordProxy) with the iris controller and points harbor at "
+        "https://<ingress_host>/proxy/<name>/v1.",
+    )
+    _add_arg_with_alias(
+        parser,
+        "--ingress_host",
+        "--ingress-host",
+        default=None,
+        help="Public controller-ingress host (required for --ingress_mode controller). The "
+        "sandbox api_base becomes https://<ingress_host>/proxy/<endpoint_name>/v1.",
+    )
+
+
 __all__ = [
     "add_harbor_args",
     "add_harbor_env_arg",
@@ -507,4 +550,5 @@ __all__ = [
     "add_log_path_args",
     "add_rl_training_args",
     "add_tasks_input_arg",
+    "add_ingress_literal_args",
 ]

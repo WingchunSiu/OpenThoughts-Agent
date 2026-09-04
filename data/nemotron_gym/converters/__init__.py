@@ -25,19 +25,17 @@ def register(hf_path: str) -> Callable[[Converter], Converter]:
             raise ValueError(f"converter already registered for {hf_path!r}")
         _REGISTRY[hf_path] = fn
         return fn
+
     return decorator
 
 
 def get(hf_path: str) -> Converter:
     if hf_path not in _REGISTRY:
         raise KeyError(
-            f"no converter registered for {hf_path!r}; "
-            f"available: {sorted(_REGISTRY)}"
+            f"no converter registered for {hf_path!r}; available: {sorted(_REGISTRY)}"
         )
     return _REGISTRY[hf_path]
 
 
 def all_registered() -> list[str]:
     return sorted(_REGISTRY)
-
-

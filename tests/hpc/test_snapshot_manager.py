@@ -15,8 +15,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest import mock
+from typing import Dict, List, Optional
 
 import pytest
 
@@ -24,11 +23,8 @@ from hpc import snapshot_manager as sm
 from hpc.snapshot_manager import (
     OrgConfig,
     SnapshotCapExceeded,
-    SnapshotBuildFailed,
-    SnapshotPlanResult,
     ensure_snapshots,
     cleanup_unused_snapshots,
-    list_snapshots,
     load_orgs_from_env,
     _snapshot_name,
 )
@@ -37,6 +33,7 @@ from hpc.snapshot_manager import (
 # -----------------------------------------------------------------------------
 # Fakes
 # -----------------------------------------------------------------------------
+
 
 class _FakeSnap:
     def __init__(self, name: str, state: str):
@@ -62,7 +59,9 @@ class FakeDaytona:
         not_found_states: Optional[set] = None,
     ):
         # state-machine fake: each `get` pops the next state for that name
-        self._states: Dict[str, List[str]] = {k: list(v) for k, v in (initial_state or {}).items()}
+        self._states: Dict[str, List[str]] = {
+            k: list(v) for k, v in (initial_state or {}).items()
+        }
         self._created: List[str] = []
         self._deleted: List[str] = []
         self._not_found = set(not_found_states or [])
@@ -78,7 +77,10 @@ class FakeDaytona:
 
     def list(self, *, limit=1, page=None):
         self._maybe_rate_limit()
-        snaps = [_FakeSnap(name, self._states.get(name, ["ACTIVE"])[-1]) for name in self._states]
+        snaps = [
+            _FakeSnap(name, self._states.get(name, ["ACTIVE"])[-1])
+            for name in self._states
+        ]
         return _FakeList(snaps)
 
     def get(self, name):
@@ -129,6 +131,7 @@ class _FakeRateLimitError(Exception):
 # Test fixtures + helpers
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _patch_sdk_imports(monkeypatch, tmp_path):
     """Patch SDK imports referenced inside ``_ensure_one`` and helpers.
@@ -137,7 +140,7 @@ def _patch_sdk_imports(monkeypatch, tmp_path):
     our fakes. Also redirect the registry to ``tmp_path`` so each test gets
     a clean slate.
     """
-    fake_daytona_mod = type(sys_mod := __import__("sys").modules["__main__"])  # placeholder
+    fake_daytona_mod = type(sys_mod := __import__("sys").modules["__main__"])  # noqa: F841  # placeholder
     # Inject lightweight modules for the imports inside snapshot_manager.
     import sys
     import types
@@ -151,12 +154,15 @@ def _patch_sdk_imports(monkeypatch, tmp_path):
     class _FakeDaytonaConfig:
         def __init__(self, **kw):
             self.__dict__.update(kw)
+
     class _FakeDaytonaCls:
         def __init__(self, _cfg=None):
             # Return a fresh FakeDaytona that records nothing of interest.
             self._fake = FakeDaytona()
+
         def __getattr__(self, item):
             return getattr(self._fake, item)
+
     daytona_pkg.Daytona = _FakeDaytonaCls
     daytona_pkg.DaytonaConfig = _FakeDaytonaConfig
     daytona_common = types.ModuleType("daytona.common")
@@ -195,6 +201,7 @@ def _patch_discovery(monkeypatch, hash_to_env_dir):
     class _FakeStats:
         total_tasks = sum(1 for _ in hash_to_env_dir)
         unique_hashes = len(hash_to_env_dir)
+
     monkeypatch.setattr(
         sm,
         "_discover_hash_to_env_dir",
@@ -206,6 +213,7 @@ def _patch_discovery(monkeypatch, hash_to_env_dir):
 # Tests
 # -----------------------------------------------------------------------------
 
+
 def test_single_org_happy_path(monkeypatch, tmp_path):
     """One org, all snapshots missing → all built → all ACTIVE."""
     h2e = _hash_to_env(["aaa111", "bbb222"], tmp_path)
@@ -213,7 +221,8 @@ def test_single_org_happy_path(monkeypatch, tmp_path):
 
     fake = FakeDaytona()
     result = ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
     assert result.built == 2
@@ -243,9 +252,12 @@ def test_pending_to_active_transition(monkeypatch, tmp_path):
     h2e = _hash_to_env(["pen111"], tmp_path)
     _patch_discovery(monkeypatch, h2e)
 
-    fake = FakeDaytona(initial_state={"harbor__pen111__snapshot": ["PENDING", "ACTIVE"]})
+    fake = FakeDaytona(
+        initial_state={"harbor__pen111__snapshot": ["PENDING", "ACTIVE"]}
+    )
     result = ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
         pending_wait_s=10.0,
     )
@@ -259,11 +271,14 @@ def test_pending_then_error_triggers_rebuild(monkeypatch, tmp_path):
     h2e = _hash_to_env(["err111"], tmp_path)
     _patch_discovery(monkeypatch, h2e)
 
-    fake = FakeDaytona(initial_state={
-        "harbor__err111__snapshot": ["PENDING", "ERROR"],
-    })
+    fake = FakeDaytona(
+        initial_state={
+            "harbor__err111__snapshot": ["PENDING", "ERROR"],
+        }
+    )
     ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
         pending_wait_s=10.0,
     )
@@ -281,7 +296,8 @@ def test_cap_overrun_hard_fails(monkeypatch, tmp_path):
     fake = FakeDaytona(initial_state=existing)
     with pytest.raises(SnapshotCapExceeded):
         ensure_snapshots(
-            ["/fake/tasks"], [OrgConfig(name="full", api_key="k")],
+            ["/fake/tasks"],
+            [OrgConfig(name="full", api_key="k")],
             daytona_factory=lambda org: fake,
             max_org_snapshots=60,
         )
@@ -296,7 +312,8 @@ def test_max_new_snapshots_safety(monkeypatch, tmp_path):
     fake = FakeDaytona()
     with pytest.raises(SnapshotCapExceeded):
         ensure_snapshots(
-            ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+            ["/fake/tasks"],
+            [OrgConfig(name="org1", api_key="k")],
             daytona_factory=lambda org: fake,
             max_new_snapshots=10,
         )
@@ -309,7 +326,8 @@ def test_rate_limit_backoff_recovers(monkeypatch, tmp_path):
 
     fake = FakeDaytona(rate_limit_hits=2)
     ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
     assert "harbor__rate11__snapshot" in fake._created
@@ -322,12 +340,14 @@ def test_registry_roundtrip_and_dedup(monkeypatch, tmp_path):
 
     fake = FakeDaytona()
     ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
     # Second run: snapshot is ACTIVE on the fake's side, so we should skip.
     ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
     # Only one create across both runs.
@@ -336,7 +356,9 @@ def test_registry_roundtrip_and_dedup(monkeypatch, tmp_path):
     # Registry file should contain at least one record for the (hash, org).
     reg_path = Path(os.environ["OT_AGENT_SNAPSHOT_REGISTRY"])
     assert reg_path.exists()
-    records = [json.loads(line) for line in reg_path.read_text().splitlines() if line.strip()]
+    records = [
+        json.loads(line) for line in reg_path.read_text().splitlines() if line.strip()
+    ]
     matching = [r for r in records if r["hash"] == "reg111" and r["org"] == "org1"]
     assert len(matching) >= 1
     assert matching[-1]["state"] == "ACTIVE"
@@ -350,16 +372,25 @@ def test_registry_stale_overwritten(monkeypatch, tmp_path):
     # Seed the registry with an ACTIVE entry for stale1@org1.
     reg_path = Path(os.environ["OT_AGENT_SNAPSHOT_REGISTRY"])
     reg_path.parent.mkdir(parents=True, exist_ok=True)
-    reg_path.write_text(json.dumps({
-        "hash": "stale1", "snapshot_name": "harbor__stale1__snapshot",
-        "org": "org1", "state": "ACTIVE", "env_dir_path": "old",
-        "ts": 0.0,
-    }) + "\n")
+    reg_path.write_text(
+        json.dumps(
+            {
+                "hash": "stale1",
+                "snapshot_name": "harbor__stale1__snapshot",
+                "org": "org1",
+                "state": "ACTIVE",
+                "env_dir_path": "old",
+                "ts": 0.0,
+            }
+        )
+        + "\n"
+    )
 
     # SDK reports the snapshot missing.
     fake = FakeDaytona(not_found_states={"harbor__stale1__snapshot"})
     ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
     # Manager called create() to reconcile.
@@ -377,9 +408,11 @@ def test_concurrent_create_idempotency(monkeypatch, tmp_path):
         # First call raises "already exists"; populate the state so the post-create wait succeeds.
         fake._states[params.name] = ["ACTIVE"]
         raise RuntimeError("snapshot already exists in target region")
+
     fake.create = _create_already_exists  # type: ignore[assignment]
     result = ensure_snapshots(
-        ["/fake/tasks"], [OrgConfig(name="org1", api_key="k")],
+        ["/fake/tasks"],
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
     assert result.errors == []
@@ -388,6 +421,7 @@ def test_concurrent_create_idempotency(monkeypatch, tmp_path):
 def test_backward_compat_shim_calls_unified_path(monkeypatch, tmp_path):
     """``prebuild_daytona_snapshots`` delegates to ``ensure_snapshots``."""
     from hpc import rl_launch_utils
+
     h2e = _hash_to_env(["compat1"], tmp_path)
     _patch_discovery(monkeypatch, h2e)
 
@@ -415,19 +449,25 @@ def test_load_orgs_from_env(monkeypatch):
 def test_cleanup_only_deletes_unused(monkeypatch, tmp_path):
     """``cleanup_unused_snapshots`` keeps snapshots whose hashes are needed."""
     monkeypatch.setattr(sm, "time", sm.time)  # no-op guard
-    fake = FakeDaytona(initial_state={
-        "harbor__keep01__snapshot": ["ACTIVE"],
-        "harbor__drop01__snapshot": ["ACTIVE"],
-        "harbor__drop02__snapshot": ["ACTIVE"],
-        "other__unrelated":         ["ACTIVE"],
-    })
+    fake = FakeDaytona(
+        initial_state={
+            "harbor__keep01__snapshot": ["ACTIVE"],
+            "harbor__drop01__snapshot": ["ACTIVE"],
+            "harbor__drop02__snapshot": ["ACTIVE"],
+            "other__unrelated": ["ACTIVE"],
+        }
+    )
     needed = {"keep01"}
     result = cleanup_unused_snapshots(
-        needed, [OrgConfig(name="org1", api_key="k")],
+        needed,
+        [OrgConfig(name="org1", api_key="k")],
         daytona_factory=lambda org: fake,
     )
-    assert set(fake._deleted) == {"harbor__drop01__snapshot", "harbor__drop02__snapshot"}
-    assert "other__unrelated" not in fake._deleted   # untouched
+    assert set(fake._deleted) == {
+        "harbor__drop01__snapshot",
+        "harbor__drop02__snapshot",
+    }
+    assert "other__unrelated" not in fake._deleted  # untouched
     assert "harbor__keep01__snapshot" not in fake._deleted
     assert result.per_org["org1"] == 2
 
@@ -440,14 +480,28 @@ def test_snapshot_name_function():
 def test_maybe_prebuild_gates(monkeypatch, tmp_path):
     """The hook in ``launch_utils`` is a no-op for non-daytona env / empty inputs."""
     from hpc.launch_utils import maybe_prebuild_daytona_snapshots
-    assert maybe_prebuild_daytona_snapshots(
-        ["/fake/tasks"], harbor_env="docker",
-        orgs=[OrgConfig(name="x", api_key="k")],
-    ) is None
-    assert maybe_prebuild_daytona_snapshots(
-        [], harbor_env="daytona",
-        orgs=[OrgConfig(name="x", api_key="k")],
-    ) is None
-    assert maybe_prebuild_daytona_snapshots(
-        ["/fake/tasks"], harbor_env="daytona", orgs=[],
-    ) is None
+
+    assert (
+        maybe_prebuild_daytona_snapshots(
+            ["/fake/tasks"],
+            harbor_env="docker",
+            orgs=[OrgConfig(name="x", api_key="k")],
+        )
+        is None
+    )
+    assert (
+        maybe_prebuild_daytona_snapshots(
+            [],
+            harbor_env="daytona",
+            orgs=[OrgConfig(name="x", api_key="k")],
+        )
+        is None
+    )
+    assert (
+        maybe_prebuild_daytona_snapshots(
+            ["/fake/tasks"],
+            harbor_env="daytona",
+            orgs=[],
+        )
+        is None
+    )

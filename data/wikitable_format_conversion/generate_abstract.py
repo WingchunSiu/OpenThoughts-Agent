@@ -8,13 +8,12 @@ from __future__ import annotations
 import csv
 import io
 import json
-import tempfile
 import textwrap
 import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, List, Optional, Sequence, Tuple
+from typing import Callable, Iterator, List, Optional
 
 from data.commons import (
     BaseDataGenerator,
@@ -442,19 +441,19 @@ def iter_table_records(dataset_root: Path) -> Iterator[TableRecord]:
     csv_root = dataset_root / "csv"
     if not csv_root.exists():
         raise RuntimeError(f"Expected directory {csv_root} in dataset archive")
-    
+
     for tsv_path in sorted(csv_root.glob("*/*.tsv")):
         table_id = f"{tsv_path.parent.name}-{tsv_path.stem}"
         try:
             with tsv_path.open(encoding="utf-8") as handle:
                 reader = csv.reader(handle, delimiter="\t")
                 rows = list(reader)
-            
+
             if not rows:
                 continue
-            
+
             header, data_rows = rows[0], rows[1:]
-            
+
             if not data_rows:
                 continue
             if len(header) > MAX_COLUMNS or len(data_rows) > MAX_ROWS:
@@ -463,7 +462,7 @@ def iter_table_records(dataset_root: Path) -> Iterator[TableRecord]:
                 continue
             if any(len(row) != len(header) for row in data_rows):
                 continue
-            
+
             yield TableRecord(table_id=table_id, columns=header, rows=data_rows)
         except Exception:
             continue
@@ -481,14 +480,14 @@ def _build_wikitable_task(
     env_dir = task_dir / "environment"
     solution_dir = task_dir / "solution"
     tests_dir = task_dir / "tests"
-    
+
     env_dir.mkdir(parents=True, exist_ok=True)
     solution_dir.mkdir(parents=True, exist_ok=True)
     tests_dir.mkdir(parents=True, exist_ok=True)
 
     # Write task.toml
     (task_dir / "task.toml").write_text(TASK_TOML, encoding="utf-8")
-    
+
     # Write Dockerfile
     (env_dir / "Dockerfile").write_text(DOCKERFILE, encoding="utf-8")
 
@@ -558,17 +557,18 @@ def _build_wikitable_task(
             {"columns": table.columns, "rows": table.rows},
             indent=2,
             ensure_ascii=False,
-        ) + "\n",
+        )
+        + "\n",
         encoding="utf-8",
     )
 
     # Write test files
     (tests_dir / "verify.py").write_text(VERIFY_PY, encoding="utf-8")
-    
+
     test_sh_path = tests_dir / "test.sh"
     test_sh_path.write_text(TEST_SH, encoding="utf-8")
     test_sh_path.chmod(0o755)
-    
+
     (tests_dir / "test_state.py").write_text(TEST_STATE_PY, encoding="utf-8")
 
     return task_dir
@@ -583,24 +583,24 @@ def convert_wikitable_to_sandboxes(
 ) -> str:
     """Convert WikiTableQuestions dataset to sandbox format."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"Generating tasks in: {output_dir}")
-    
+
     usable_tables = list(iter_table_records(dataset_root))
     if offset >= len(usable_tables):
         raise ValueError(
             f"Offset {offset} is out of range for {len(usable_tables)} available tables"
         )
-    
+
     limit_value = limit if limit is not None and limit > 0 else len(usable_tables)
     created_tasks = []
-    
+
     for task_idx, table in enumerate(usable_tables[offset:]):
         blueprint = TASK_BLUEPRINTS[task_idx % len(TASK_BLUEPRINTS)]
         source_name, target_name = blueprint
         source_spec = FORMAT_SPECS[source_name]
         target_spec = FORMAT_SPECS[target_name]
-        
+
         task_dir = _build_wikitable_task(
             output_dir,
             task_idx,
@@ -608,14 +608,14 @@ def convert_wikitable_to_sandboxes(
             source_spec,
             target_spec,
         )
-        
+
         if task_dir is not None:
             created_tasks.append(task_dir.name)
             print(f"Created task: {task_dir.name}")
-        
+
         if len(created_tasks) >= limit_value:
             break
-    
+
     print(f"\nGenerated {len(created_tasks)} tasks successfully!")
     print(f"Tasks created in: {output_dir}")
     return str(output_dir)
@@ -623,7 +623,7 @@ def convert_wikitable_to_sandboxes(
 
 class WikiTableConversionGenerator(BaseDataGenerator):
     """Generator for WikiTableQuestions format conversion tasks."""
-    
+
     parser_description = "Generate WikiTableQuestions format conversion sandboxes"
     default_target_repo = "DCAgent/wikitable-format-conversion"
 
@@ -650,19 +650,25 @@ class WikiTableConversionGenerator(BaseDataGenerator):
     ) -> GenerationResult:
         """Generate WikiTable conversion tasks."""
         args = context.args
-        
+
         # Ensure dataset is downloaded
-        cache_dir = getattr(args, "cache_dir", Path("data/wikitable_format_conversion/cache"))
+        cache_dir = getattr(
+            args, "cache_dir", Path("data/wikitable_format_conversion/cache")
+        )
         dataset_root = ensure_dataset(cache_dir)
         print(f"Using dataset from: {dataset_root}")
-        
+
         # Set up output directory
-        output_root = Path(args.output_dir) if args.output_dir else context.temp_dir / "wikitable_tasks"
-        
+        output_root = (
+            Path(args.output_dir)
+            if args.output_dir
+            else context.temp_dir / "wikitable_tasks"
+        )
+
         # Get parameters
         limit = self._resolve_limit(request)
         offset = getattr(args, "offset", 0)
-        
+
         # Generate tasks
         dataset_path = convert_wikitable_to_sandboxes(
             dataset_root,
@@ -670,11 +676,13 @@ class WikiTableConversionGenerator(BaseDataGenerator):
             limit=limit,
             offset=offset,
         )
-        
+
         # Finalize output
-        output_path = finalize_dataset_output(dataset_path, getattr(args, "output_dir", None))
+        output_path = finalize_dataset_output(
+            dataset_path, getattr(args, "output_dir", None)
+        )
         final_dataset_path = str(output_path)
-        
+
         # Upload if requested
         uploaded_repo: Optional[str] = None
         if not getattr(args, "no_upload", False):
@@ -685,11 +693,13 @@ class WikiTableConversionGenerator(BaseDataGenerator):
             uploaded_repo = target_repo
         else:
             print(f"Skipping upload. Dataset available at: {final_dataset_path}")
-        
+
         # Validate output
         if not Path(final_dataset_path).exists():
-            raise RuntimeError(f"Generated dataset path does not exist: {final_dataset_path}")
-        
+            raise RuntimeError(
+                f"Generated dataset path does not exist: {final_dataset_path}"
+            )
+
         return GenerationResult(
             dataset_path=final_dataset_path,
             status=GenerationStatus.SUCCESS,

@@ -11,18 +11,77 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import quote
 
 # Default HuggingFace org for auto-derived repo IDs (override with env var)
 DEFAULT_HF_ORG = "DCAgent"
 HF_ORG_ENV_VAR = "DCAGENT_HF_ORG"
+HF_SELECTOR_REVISION_SEPARATOR = "@"
+HF_SELECTOR_SUBDIR_SEPARATOR = "::"
+
+
+@dataclass(frozen=True)
+class HfDatasetSelector:
+    """A Hugging Face dataset repo with an optional revision and subdirectory."""
+
+    repo_id: str
+    revision: str | None = None
+    subdir: str | None = None
+
+    def canonical(self) -> str:
+        revision = (
+            f"{HF_SELECTOR_REVISION_SEPARATOR}{self.revision}" if self.revision else ""
+        )
+        subdir = f"{HF_SELECTOR_SUBDIR_SEPARATOR}{self.subdir}" if self.subdir else ""
+        return f"{self.repo_id}{revision}{subdir}"
+
+    def cache_name(self) -> str:
+        """Return a reversible cache key containing repo, subdirectory, and revision."""
+        components = (
+            ("repo", self.repo_id),
+            ("subdir", self.subdir),
+            ("revision", self.revision),
+        )
+        encoded = (
+            (name, quote(value, safe="-._"))
+            for name, value in components
+            if value is not None
+        )
+        return "__".join(f"{name}-{len(value)}-{value}" for name, value in encoded)
+
+
+def parse_hf_dataset_selector(value: str) -> HfDatasetSelector | None:
+    """Parse ``org/repo[@revision][::subdir]`` dataset selectors."""
+    if not value or value.startswith(("./", "../", "/", "~")) or "\\" in value:
+        return None
+
+    repo_revision, separator, subdir = value.partition(HF_SELECTOR_SUBDIR_SEPARATOR)
+    repo_id, revision_separator, revision = repo_revision.partition(
+        HF_SELECTOR_REVISION_SEPARATOR
+    )
+    if repo_id.count("/") != 1 or not all(part.strip() for part in repo_id.split("/")):
+        return None
+    if separator and (
+        not subdir or subdir.startswith("/") or ".." in subdir.split("/")
+    ):
+        return None
+    if revision_separator and not revision:
+        return None
+
+    return HfDatasetSelector(
+        repo_id=repo_id,
+        revision=revision if revision_separator else None,
+        subdir=subdir if separator else None,
+    )
 
 
 def is_hf_dataset_path(path: str) -> bool:
     """Check if path looks like a HuggingFace dataset identifier.
 
-    HF identifiers have format: org/repo-name or username/repo-name
-    They contain exactly one "/" and no path separators like "./" or "../"
+    Supports bare ``org/repo`` identifiers and pinned subdirectory selectors in
+    the form ``org/repo@revision::subdir``.
 
     Args:
         path: Path string to check
@@ -30,27 +89,18 @@ def is_hf_dataset_path(path: str) -> bool:
     Returns:
         True if path appears to be an HF dataset identifier
     """
-    if not path:
-        return False
+    return parse_hf_dataset_selector(path) is not None
 
-    # Must contain exactly one "/"
-    if path.count("/") != 1:
-        return False
 
-    # Must not look like a filesystem path
-    if path.startswith(("./", "../", "/", "~")):
-        return False
+def resolve_hf_dataset_selector(value: str) -> HfDatasetSelector:
+    """Resolve a selector revision to an immutable Hub commit."""
+    selector = parse_hf_dataset_selector(value)
+    if selector is None:
+        raise ValueError(f"Invalid Hugging Face dataset selector: {value!r}")
+    from huggingface_hub import HfApi
 
-    # Must not contain backslashes (Windows paths)
-    if "\\" in path:
-        return False
-
-    # Both parts must be non-empty
-    parts = path.split("/")
-    if not all(p.strip() for p in parts):
-        return False
-
-    return True
+    info = HfApi().dataset_info(selector.repo_id, revision=selector.revision)
+    return HfDatasetSelector(selector.repo_id, info.sha, selector.subdir)
 
 
 def sanitize_hf_repo_id(repo_id: str, max_length: int = 96) -> str:
@@ -111,6 +161,40 @@ def derive_default_hf_repo_id(job_name: str) -> str:
     return f"{org}/{job_name}"
 
 
+def _download_object_store_dataset(uri: str, *, verbose: bool = True) -> str:
+    """Recursively fetch a gs://|s3:// dataset snapshot to a local temp dir.
+
+    Uses fsspec (gcsfs/s3fs) with default credential discovery — on iris workers
+    that is workload-identity for gs:// and the injected AWS_* creds for s3://.
+    Makes ZERO HuggingFace calls, so it is safe under HF_HUB_OFFLINE=1. Returns
+    the local directory (containing the mirrored parquet / task tree), which the
+    caller feeds to the same raw-vs-parquet handling as an HF snapshot.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import fsspec
+
+    proto = uri.split("://", 1)[0]
+    fs = fsspec.filesystem("gcs" if proto == "gs" else "s3")
+    dest = Path(tempfile.mkdtemp(prefix="ds_precached_"))
+    if verbose:
+        print(
+            f"[hf_utils] Fetching pre-cached dataset from {uri} -> {dest} (offline, no HF)"
+        )
+    # Trailing slash + recursive => copy the directory tree, preserving layout.
+    fs.get(uri.rstrip("/") + "/", str(dest) + "/", recursive=True)
+    files = [p for p in dest.rglob("*") if p.is_file()]
+    if not files:
+        raise FileNotFoundError(
+            f"Pre-cached dataset URI {uri} resolved to no files under {dest}; "
+            "the mirror is empty or the URI is wrong."
+        )
+    if verbose:
+        print(f"[hf_utils] Fetched {len(files)} files from {uri}")
+    return str(dest)
+
+
 def resolve_dataset_path(
     path_or_repo: str,
     *,
@@ -128,15 +212,37 @@ def resolve_dataset_path(
     Returns:
         Resolved local filesystem path (absolute)
     """
-    from pathlib import Path
+
+    if path_or_repo.startswith(("gs://", "s3://")):
+        # Pre-cached dataset snapshot in object storage (offline path — the iris
+        # launcher mirrored the HF dataset to the region-local GCS bucket and
+        # rewrote --dataset_path to it). Fetch from the store WITHOUT touching HF
+        # (so HF_HUB_OFFLINE=1 is honored), then let the caller's raw-vs-parquet
+        # detection + convert_parquet_to_tasks run on the local snapshot as usual.
+        return _download_object_store_dataset(path_or_repo, verbose=verbose)
 
     if is_hf_dataset_path(path_or_repo):
         # It's an HF dataset identifier - download it
         from huggingface_hub import snapshot_download
 
+        selector = parse_hf_dataset_selector(path_or_repo)
+        assert selector is not None
+
         if verbose:
             print(f"[hf_utils] Downloading HF dataset: {path_or_repo}")
-        local_path = snapshot_download(repo_id=path_or_repo, repo_type="dataset")
+        allow_patterns = [f"{selector.subdir}/**"] if selector.subdir else None
+        local_path = snapshot_download(
+            repo_id=selector.repo_id,
+            repo_type="dataset",
+            revision=selector.revision,
+            allow_patterns=allow_patterns,
+        )
+        if selector.subdir:
+            local_path = os.path.join(local_path, selector.subdir)
+            if not os.path.isdir(local_path):
+                raise FileNotFoundError(
+                    f"Dataset selector {path_or_repo} did not resolve a subdirectory"
+                )
         if verbose:
             print(f"[hf_utils] Downloaded to: {local_path}")
         return local_path
@@ -174,6 +280,7 @@ def is_raw_tasks_directory(snapshot_dir) -> bool:
         # Has parquet files - check if they have task_binary column
         try:
             import pyarrow.parquet as pq
+
             for pf in parquet_files[:1]:  # Check first parquet
                 table = pq.read_table(pf)
                 if "task_binary" in table.column_names:

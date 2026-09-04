@@ -48,6 +48,7 @@ Usage::
         --root /tmp/tasks_extracted/<repo> \
         [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -219,8 +220,11 @@ def patch_one_task(task_dir: Path, dry_run: bool) -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--root", required=True,
-                   help="Directory of extracted task folders (each with tests/)")
+    p.add_argument(
+        "--root",
+        required=True,
+        help="Directory of extracted task folders (each with tests/)",
+    )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--examples", type=int, default=10)

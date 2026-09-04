@@ -3,9 +3,9 @@
 Utility functions for R2E-Gym dataset generation.
 """
 
-import pandas as pd
 from typing import List, Tuple, Any, Dict
 from data.gcs_cache import gcs_cache
+
 
 @gcs_cache()
 def load_r2egym_instances() -> List[Dict[str, Any]]:
@@ -34,9 +34,13 @@ def load_r2egym_instances() -> List[Dict[str, Any]]:
         instances = []
         for idx, row in df.iterrows():
             instance = {
-                "instance_id": row.get("docker_image", f"r2e-{idx:04d}"),  # Use docker_image as instance_id
+                "instance_id": row.get(
+                    "docker_image", f"r2e-{idx:04d}"
+                ),  # Use docker_image as instance_id
                 "docker_image": row.get("docker_image"),
-                "problem_statement": row.get("problem_statement", row.get("prompt", "")),
+                "problem_statement": row.get(
+                    "problem_statement", row.get("prompt", "")
+                ),
                 "base_commit": row.get("commit_hash", "main"),
                 "repo_name": row.get("repo_name", ""),
                 "expected_output_json": row.get("expected_output_json", "{}"),
@@ -55,7 +59,7 @@ def load_r2egym_instances() -> List[Dict[str, Any]]:
                 "docker_image": "sample-r2e-001",
                 "problem_statement": "Sample R2E-Gym problem statement",
                 "base_commit": "main",
-                "repo_name": "sample/repo"
+                "repo_name": "sample/repo",
             }
         ]
         return instances
@@ -431,9 +435,10 @@ if __name__ == "__main__":
     print(f"Reward: {reward}")
 """
 
+
 @gcs_cache()
 def add_r2egym_verifier_tests_to_instances(
-    instances: List[Dict[str, Any]]
+    instances: List[Dict[str, Any]],
 ) -> List[Tuple[str, Dict[str, Any], None, str, str, str, str]]:
     """
     Add R2E-Gym verifier test files to instances.
@@ -469,19 +474,21 @@ def add_r2egym_verifier_tests_to_instances(
             "problem_statement": instance.get("problem_statement"),
             "repo_name": instance.get("repo_name"),
             "expected_output_json": instance.get("expected_output_json", "{}"),
-            "source": "r2egym"
+            "source": "r2egym",
         }
 
         # Return as tuple: (instruction, metadata, solution, test_sh, test_py, task_toml, dockerfile)
-        questions_with_tests.append((
-            instruction,
-            metadata,
-            None,  # solution_content (not provided)
-            test_sh_content,
-            None,  # test_py_content (not needed, tests are in docker)
-            task_toml_content,
-            dockerfile_content
-        ))
+        questions_with_tests.append(
+            (
+                instruction,
+                metadata,
+                None,  # solution_content (not provided)
+                test_sh_content,
+                None,  # test_py_content (not needed, tests are in docker)
+                task_toml_content,
+                dockerfile_content,
+            )
+        )
 
     print(f"Created {len(questions_with_tests)} tasks")
     return questions_with_tests

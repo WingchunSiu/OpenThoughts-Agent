@@ -10,7 +10,6 @@ Run from the OT-Agent repo root with:
 
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,8 +18,6 @@ import pytest
 
 from hpc import resume_manager as rm
 from hpc.resume_manager import (
-    ConfigFieldDrift,
-    MutationPlan,
     ResumeAction,
     ResumeBail,
     ResumeState,
@@ -30,7 +27,6 @@ from hpc.resume_manager import (
     render_bail_message,
     resolve_resume_policy,
     resolve_resume_policy_for_launch,
-    wipe_job_dir,
 )
 
 
@@ -104,7 +100,10 @@ def _trial_result(
         ),
     }
     if exception_type:
-        blob["exception_info"] = {"exception_type": exception_type, "exception_message": "..."}
+        blob["exception_info"] = {
+            "exception_type": exception_type,
+            "exception_message": "...",
+        }
     return blob
 
 
@@ -263,7 +262,11 @@ def test_synthetic_vllm_old_to_canonical_new_is_mutable(tmp_path):
     """
     job_dir = tmp_path / "job"
     prior_top = _planned_config(model_name="hosted_vllm/1715800123456789")
-    _seed_prior(job_dir, top_level=prior_top, trials=[_trial_config(model_name="hosted_vllm/1715800123456789")])
+    _seed_prior(
+        job_dir,
+        top_level=prior_top,
+        trials=[_trial_config(model_name="hosted_vllm/1715800123456789")],
+    )
 
     new_plan = _planned_config(model_name="Qwen/Qwen3-32B-Instruct")
     report = inspect_resume(job_dir, new_plan)
@@ -308,7 +311,11 @@ def test_real_to_real_model_swap_stays_fatal(tmp_path):
     """
     job_dir = tmp_path / "job"
     prior_top = _planned_config(model_name="meta-llama/Llama-3-8B")
-    _seed_prior(job_dir, top_level=prior_top, trials=[_trial_config(model_name="meta-llama/Llama-3-8B")])
+    _seed_prior(
+        job_dir,
+        top_level=prior_top,
+        trials=[_trial_config(model_name="meta-llama/Llama-3-8B")],
+    )
 
     new_plan = _planned_config(model_name="Qwen/Qwen3-32B-Instruct")
     report = inspect_resume(job_dir, new_plan)
@@ -382,7 +389,10 @@ def test_apply_mutation_rewrites_trial_configs(tmp_path):
     _seed_prior(
         job_dir,
         top_level=prior_top,
-        trials=[_trial_config(api_base="http://OLD:8000/v1"), _trial_config(api_base="http://OLD:8000/v1")],
+        trials=[
+            _trial_config(api_base="http://OLD:8000/v1"),
+            _trial_config(api_base="http://OLD:8000/v1"),
+        ],
     )
 
     new_plan = _planned_config(api_base="http://NEW:8000/v1")
@@ -404,7 +414,11 @@ def test_apply_mutation_rewrites_trial_configs(tmp_path):
 def test_apply_mutation_is_idempotent(tmp_path):
     job_dir = tmp_path / "job"
     prior_top = _planned_config(api_base="http://OLD:8000/v1")
-    _seed_prior(job_dir, top_level=prior_top, trials=[_trial_config(api_base="http://OLD:8000/v1")])
+    _seed_prior(
+        job_dir,
+        top_level=prior_top,
+        trials=[_trial_config(api_base="http://OLD:8000/v1")],
+    )
 
     new_plan = _planned_config(api_base="http://NEW:8000/v1")
     report = inspect_resume(job_dir, new_plan)
@@ -429,7 +443,10 @@ def test_apply_mutation_wipes_orphans(tmp_path):
     _seed_prior(
         job_dir,
         top_level=prior,
-        trials=[_trial_config(agent_name="OLD-AGENT"), _trial_config(api_base="http://OLD:8000/v1")],
+        trials=[
+            _trial_config(agent_name="OLD-AGENT"),
+            _trial_config(api_base="http://OLD:8000/v1"),
+        ],
     )
 
     # Plan changes api_base but keeps agent terminus-2; the OLD-AGENT trial
@@ -470,7 +487,9 @@ def test_matrix_clean_resume(tmp_path):
 
 def test_matrix_default_bails_on_mutable(tmp_path):
     job_dir = tmp_path / "job"
-    _seed_prior(job_dir, top_level=_planned_config(n_concurrent=32), trials=[_trial_config()])
+    _seed_prior(
+        job_dir, top_level=_planned_config(n_concurrent=32), trials=[_trial_config()]
+    )
     with pytest.raises(ResumeBail) as excinfo:
         resolve_resume_policy(
             job_dir,
@@ -502,7 +521,11 @@ def test_matrix_force_mutate_alone_patches(tmp_path):
 
 def test_matrix_force_mutate_alone_bails_on_fatal(tmp_path):
     job_dir = tmp_path / "job"
-    _seed_prior(job_dir, top_level=_planned_config(model_name="A"), trials=[_trial_config(model_name="A")])
+    _seed_prior(
+        job_dir,
+        top_level=_planned_config(model_name="A"),
+        trials=[_trial_config(model_name="A")],
+    )
     with pytest.raises(ResumeBail):
         resolve_resume_policy(
             job_dir,
@@ -535,7 +558,11 @@ def test_matrix_allow_overwrite_alone_wipes(tmp_path):
 def test_matrix_force_mutate_plus_overwrite_falls_back_to_wipe(tmp_path):
     """Fatal drift + both flags → wipe."""
     job_dir = tmp_path / "job"
-    _seed_prior(job_dir, top_level=_planned_config(model_name="A"), trials=[_trial_config(model_name="A")])
+    _seed_prior(
+        job_dir,
+        top_level=_planned_config(model_name="A"),
+        trials=[_trial_config(model_name="A")],
+    )
     result = resolve_resume_policy(
         job_dir,
         _planned_config(model_name="B"),
@@ -556,7 +583,9 @@ def test_matrix_already_complete_default_bails(tmp_path):
         job_result={"started_at": "x", "finished_at": "y", "n_total_trials": 1},
     )
     with pytest.raises(ResumeBail) as excinfo:
-        resolve_resume_policy(job_dir, planned, force_mutate=False, allow_overwrite=False)
+        resolve_resume_policy(
+            job_dir, planned, force_mutate=False, allow_overwrite=False
+        )
     assert "ALREADY COMPLETE" in excinfo.value.message
 
 
@@ -570,7 +599,9 @@ def test_matrix_already_complete_with_overwrite_wipes(tmp_path):
         trial_results=[_trial_result(reward=1.0)],
         job_result={"started_at": "x", "finished_at": "y", "n_total_trials": 1},
     )
-    result = resolve_resume_policy(job_dir, planned, force_mutate=False, allow_overwrite=True)
+    result = resolve_resume_policy(
+        job_dir, planned, force_mutate=False, allow_overwrite=True
+    )
     assert result.action == ResumeAction.WIPE_AND_FRESH
 
 
@@ -598,7 +629,11 @@ def test_bail_message_includes_diff_and_flags(tmp_path):
 
 def test_bail_message_marks_fatal_when_present(tmp_path):
     job_dir = tmp_path / "job"
-    _seed_prior(job_dir, top_level=_planned_config(model_name="A"), trials=[_trial_config(model_name="A")])
+    _seed_prior(
+        job_dir,
+        top_level=_planned_config(model_name="A"),
+        trials=[_trial_config(model_name="A")],
+    )
     report = inspect_resume(job_dir, _planned_config(model_name="B"))
     msg = render_bail_message(report, force_mutate=False, allow_overwrite=False)
     assert "fatal" in msg.lower()
@@ -659,6 +694,7 @@ def test_for_launch_declines_when_planned_config_unavailable(tmp_path):
 def test_resolve_prior_job_dir_defaults_when_experiments_dir_missing():
     """Without --experiments_dir, prior dir defaults to experiments/<job>/trace_jobs/<job>_traces."""
     from hpc.launch_utils import PROJECT_ROOT
+
     prior = rm._resolve_prior_job_dir({"job_type": "datagen"}, "demo")
     assert prior is not None
     assert prior.name == "demo_traces"

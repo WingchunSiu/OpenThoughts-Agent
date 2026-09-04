@@ -1,6 +1,6 @@
-import os 
 from datasets import load_dataset, concatenate_datasets
-from data.commons import  upload_traces_to_hf
+from data.commons import upload_traces_to_hf
+
 
 # Convert ot3_traces to STAQC format
 def convert_conversation(example):
@@ -9,22 +9,20 @@ def convert_conversation(example):
         role = turn.get("from", "")
         content = turn.get("value", "")
         role = "user" if role == "human" else "assistant"
-        new_conversations.append({
-            "role": role,
-            "content": content
-        })
+        new_conversations.append({"role": role, "content": content})
     example["conversations"] = new_conversations
     return example
 
 
 if __name__ == "__main__":
-
-    staqc_traces = load_dataset("mlfoundations-dev/staqc-sandboxes-traces-terminus-2", split="train")
+    staqc_traces = load_dataset(
+        "mlfoundations-dev/staqc-sandboxes-traces-terminus-2", split="train"
+    )
     # ot3_traces = load_dataset("open-thoughts/OpenThoughts3-1.2M", split="train")
     ot3_traces = load_dataset("/data1/hbansal/OpenThoughts3-1.2M/", split="train")
 
     ot3_traces = ot3_traces.shuffle(seed=42).select(range(100_000))
-    
+
     ## filter examples with domain == science
     # ot3_traces = ot3_traces.filter(lambda x: x["domain"] == "science")
 
@@ -42,4 +40,6 @@ if __name__ == "__main__":
     staqc_ot3_merged = concatenate_datasets([staqc_traces, ot3_traces])
 
     ## upload the dataset to hf
-    upload_traces_to_hf(staqc_ot3_merged, "DCAgent/staqc-ot3-100k-traces-terminus-2", "SFT")
+    upload_traces_to_hf(
+        staqc_ot3_merged, "DCAgent/staqc-ot3-100k-traces-terminus-2", "SFT"
+    )

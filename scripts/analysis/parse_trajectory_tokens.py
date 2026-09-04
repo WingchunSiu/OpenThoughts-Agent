@@ -21,8 +21,12 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("trace_dir", type=Path, help="Root directory to scan for trajectory.json files")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Print per-trajectory details")
+    parser.add_argument(
+        "trace_dir", type=Path, help="Root directory to scan for trajectory.json files"
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Print per-trajectory details"
+    )
     args = parser.parse_args()
 
     if not args.trace_dir.is_dir():
@@ -31,7 +35,11 @@ def main():
 
     traj_files = sorted(args.trace_dir.rglob("trajectory.json"))
     # Exclude continuation/summarization trajectories
-    traj_files = [f for f in traj_files if ".cont-" not in f.name and ".summarization" not in str(f)]
+    traj_files = [
+        f
+        for f in traj_files
+        if ".cont-" not in f.name and ".summarization" not in str(f)
+    ]
 
     if not traj_files:
         print("No trajectory.json files found.", file=sys.stderr)
@@ -63,7 +71,9 @@ def main():
         if pt is None and ct is None:
             no_metrics_count += 1
             if args.verbose:
-                print(f"  {traj_path.parent.name}: no token metrics (steps={len(steps)})")
+                print(
+                    f"  {traj_path.parent.name}: no token metrics (steps={len(steps)})"
+                )
             continue
 
         pt = pt or 0

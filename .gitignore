@@ -8,9 +8,18 @@ scripts/beam/helm-chart/charts/localstack-0.6.5.tgz
 
 # database bu
 scripts/database/backups
+datasets/
+
+# Results
+results/
 
 # C extensions
 *.so
+
+# gpu-rl wheelhouse: large CUDA/x86 wheels (vllm-*.whl, flash_attn-*.whl) built
+# by docker/build_wheels.sh. Keep the dir (.keep) but never commit the binaries.
+docker/wheelhouse/*
+!docker/wheelhouse/.keep
 
 # Distribution / packaging
 .Python
@@ -232,8 +241,6 @@ train/experiments/configs/
 train/experiments/sbatch_scripts/
 
 # Eval results
-eval/tacc/jobs/
-eval/tacc/runs/
 
 AGENTS.md
 CLAUDE.md
@@ -274,8 +281,6 @@ train/hpc/dotenv/secret.env
 CLAUDE.md
 data/self_instruct/seed
 # Eval results
-eval/tacc/jobs/
-eval/tacc/runs/
 
 # Google Cloud SDK and credentials
 google-cloud-sdk/
@@ -300,8 +305,6 @@ train/hpc/dotenv/secret.env
 CLAUDE.md
 data/self_instruct/seed
 # Eval results
-eval/tacc/jobs/
-eval/tacc/runs/
 
 # Google Cloud SDK and credentials
 google-cloud-sdk/
@@ -326,8 +329,6 @@ train/hpc/dotenv/secret.env
 CLAUDE.md
 data/self_instruct/seed
 # Eval results
-eval/tacc/jobs/
-eval/tacc/runs/
 
 # Google Cloud SDK and credentials
 google-cloud-sdk/
@@ -353,8 +354,6 @@ CLAUDE.md
 data/self_instruct/seed
 
 # Eval results
-eval/tacc/jobs/
-eval/tacc/runs/
 cloud_runs/
 trace_runs/
 trace_jobs/
@@ -385,8 +384,6 @@ train/hpc/dotenv/secret.env
 CLAUDE.md
 data/self_instruct/seed
 # Eval results
-eval/tacc/jobs/
-eval/tacc/runs/
 
 # Google Cloud SDK and credentials
 google-cloud-sdk/
@@ -420,3 +417,102 @@ hpc/dotenv/jupiter_eval_data_org.env
 # Build outputs that don't belong in git; regenerate locally via the converters.
 data/nemotron_gym/output/*.parquet
 data/nemotron_gym/output_v2/
+
+# Agent runtime local values
+.agents/secret.md
+.agents/settings.local.json
+.agents/scheduled_tasks.lock
+.agents/scheduled_tasks.json
+.agents/routines/.state/
+.agents/worktrees/
+.agents/checkpoints/
+.agents/mailbox/
+.agents/agent-registry.json
+.agents/agent-memory-local
+.agents/first-run
+.agents/assistant-daemon-state.json
+
+# Local (this Mac) environment map — operator-local state, kept untracked on purpose.
+.agents/ops/local/ENVIRONMENT_MAP.md
+
+# Track the .agents experiments ops doc (override the broad `experiments/` ignore above)
+!.agents/ops/experiments/
+!.agents/ops/experiments/**
+
+# agent_logs belong at the ABSOLUTE ~/Documents/agent_logs/, never in-repo.
+# A relative agent_logs/ here is the recurring relative-path bug — ignore it so it can never be committed.
+/agent_logs/
+
+# Recurring transient cluster artifacts (Leonardo working-tree junk that keeps reappearing).
+# A file literally named "&1" is a botched `2>&1` redirect that wrote to a file — never real output.
+/&1
+# Grid launch manifests under hpc/skyrl_standard/leonardo/ are generated launch-logs (one line per
+# submitted cell, from launch_*_grid.sh) — ephemeral run output, not curated inputs.
+# (The completed grid launchers themselves were archived to experiments/complete/*/scripts/ on 2026-07-08.)
+hpc/skyrl_standard/leonardo/*_manifest.txt
+
+# Round 2 (2026-06-25): more recurring Leonardo working-tree junk.
+# Editor/script backup copies (*.bak) — e.g. dataset_info.json.bak, sbatch_gsm8k_grid.sh.bak —
+# are transient snapshots written by the launch drivers (launch_54.sh §9.4 cp-then-sed); the
+# tracked file is the non-.bak original. No tracked .bak exists, so this is safe.
+*.bak
+# Per-sweep reeval campaign priority files (one model per file) are auto-generated each refill by
+# the eval refill loop — ephemeral campaign scratch, regenerated, not curated. (The curated eval
+# priority lists live under eval/lists/ and are tracked individually.)
+reeval_priority_*.txt
+# Wave-launch SLURM jobid dumps (one line per submitted cell, written by wave*_launch.sh) —
+# per-run output, regenerated each launch. The reusable launchers themselves are tracked.
+wave*_jobids.txt
+# Repo-root gen_only_delphi.py is a leftover DUPLICATE of the canonical tracked
+# scripts/gen_only_delphi.py (round-1 relocated it to scripts/). Anchored to root so it never
+# re-enters git as a near-dup; the tracked scripts/ copy is unaffected.
+/gen_only_delphi.py
+
+# Round 3 (2026-06-26): the a1-* re-eval campaign auto-generates per-benchmark REFILL priority
+# lists in eval/lists/ each refill cycle (one model name per file, e.g. refill_tb2_a1-bugswarm.txt,
+# reeval_refill_java_swebench.txt). These are the eval/lists/ siblings of the already-ignored
+# repo-root reeval_priority_*.txt — ephemeral campaign scratch, regenerated every refill by the
+# active re-eval driver, NOT curated. The CURATED eval lists in eval/lists/ are tracked
+# individually and do NOT match these prefixes, so this is surgical.
+eval/lists/refill_tb2_a1-*.txt
+eval/lists/reeval_refill_*.txt
+# Also ignore the eval/lists/ copies of the reeval_priority_* campaign scratch (the existing
+# unanchored reeval_priority_*.txt already covers these, but kept explicit for clarity).
+eval/lists/reeval_priority_a1-*.txt
+# Per-sweep reeval RELAUNCH priority lists (dated, e.g. eval/lists/reeval_relaunch_swe_20260627.txt) —
+# the relaunch-path siblings of reeval_refill_*; regenerated each campaign relaunch, never tracked.
+eval/lists/reeval_relaunch_*.txt
+reeval_relaunch*.txt
+# Repo-root per-sweep reeval REFILL scratch (dated, e.g. reeval_refill16_swe_20260626.txt /
+# reeval_refill_swe2_20260626.txt) — regenerated every refill (the eval/lists/ copies are ignored above).
+reeval_refill*.txt
+# One-off dated wave-launch scaffolding (launch_wave1.sh / wave4_launch.sh / wave4_prep.sh) —
+# transient per-wave campaign launchers; the durable launcher is eval/unified_eval_listener.py.
+launch_wave*.sh
+wave*_launch.sh
+wave*_prep.sh
+
+# Transient per-sweep generated eval priority-lists (regenerated each refill; not reusable artifacts)
+eval/lists/a1_resume_*.txt
+eval/lists/tacc_refill_*.txt
+eval/lists/tacc_sanity_*.txt
+eval/lists/reeval_priority_*.txt
+# Per-cluster/per-sweep refill + resume priority-lists — regenerated every refill, ANY cluster
+# prefix (tacc_refill_*, leonardo_refill_*, reeval_refill_*, …). Forward-proof so a new cluster's
+# refill lists don't need a new pattern each time. (Curated lists in eval/lists/ have distinct
+# names — README.md, EXAMPLE.txt, models_131k.txt, id_evals_*/bfcl_*/dsv2_* — and stay tracked.)
+eval/lists/*_refill_*.txt
+eval/lists/resume_*.txt
+
+# Local throwaway working space (never commit; excluded from the iris workspace bundle)
+scratchpad/
+
+# Live MarinSkyRL checkout used by the HPC RL launcher. It is an independent repository;
+# SKYRL_HOME resolves this path, while OpenThoughts-Agent must not treat its contents as local changes.
+/SkyRL/
+
+# tokviz test-fixture repos: 5 tiny locally-generated git repos (scripts/analysis/tokviz/make_repos.py).
+# They were accidentally committed as bare gitlinks (mode 160000) with no .gitmodules entry, which
+# wedged the Nightly Submodule Update workflow (`git submodule update --init --recursive` aborts on the
+# undeclared gitlink). De-submoduled + ignored; regenerate locally via make_repos.py.
+scripts/analysis/tokviz/repos/

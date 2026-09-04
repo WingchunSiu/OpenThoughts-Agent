@@ -16,14 +16,306 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import shlex
+import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
-from hpc.hf_utils import is_hf_dataset_path
+from hpc.artifact_store import (
+    DEFAULT_IMAGE_SIZE,
+    DEFAULT_INODE_COUNT,
+    ensure_image,
+    write_authority_record,
+)
+from hpc.checkpoint_utils import is_huggingface_repo, pre_download_model
+from hpc.hf_utils import is_hf_dataset_path, resolve_hf_dataset_selector
 from hpc.launch_utils import get_daytona_api_key_override
+from hpc.rl_config_utils import (
+    expected_rl_world_sizes,
+    get_skyrl_command_preview,
+    resolve_placement,
+)
+from hpc.rl_paths import (
+    LATEST_CHECKPOINT_FILE,
+    RLLaunchIntent,
+    RLPathManager,
+    RLResumePolicy,
+    RLRunPaths,
+    hydra_override_values,
+)
+
+
+# Default Apptainer bind mounts for the RL container runtime mode.
+# These GPFS roots on Jupiter are NOT auto-bound by Apptainer (only $HOME,
+# $PWD, /tmp, /proc, /sys, /dev are) and cover code, SIF, tasks, checkpoints,
+# HF cache, and experiments. See scope_rl_via_apptainer_launcher.md §3.
+DEFAULT_RL_CONTAINER_BINDS: List[str] = ["/e/scratch", "/e/data1"]
+
+
+# Candidate directory NAMES for the RL training repo, in probe order. The repo
+# was historically always cloned to a dir literally named "SkyRL", but its
+# contents may be replaced by MarinSkyRL while keeping (or changing) the dir
+# name. The Python import name (skyrl_train) is unaffected by the dir name and
+# must NOT be touched — only filesystem PATH resolution. "SkyRL" stays first so
+# any existing SkyRL-named deployment resolves byte-identically.
+RL_REPO_DIR_CANDIDATES: List[str] = ["SkyRL", "MarinSkyRL"]
+
+
+def resolve_rl_repo_dir(parent: str) -> str:
+    """Resolve the RL training repo directory under ``parent``.
+
+    The Jupiter deployment is about to have its RL repo *contents* replaced
+    with MarinSkyRL while keeping the directory NAME ``SkyRL`` (to satisfy
+    hardcoded paths); future setups may instead name the dir ``MarinSkyRL``.
+    This helper lets the launcher consume either, while staying byte-identical
+    for existing ``SkyRL``-only deployments.
+
+    Precedence:
+      (a) explicit override env var ``RL_REPO_DIR`` (full path) if set — honored
+          verbatim, regardless of whether it exists yet;
+      (b) probe ``parent`` for ``SkyRL`` then ``MarinSkyRL`` (``RL_REPO_DIR_CANDIDATES``
+          order) and return the first that exists as a directory;
+      (c) fall back to ``<parent>/SkyRL`` (the historical literal) for
+          byte-identical back-compat when neither candidate exists.
+
+    Args:
+        parent: Parent directory that contains (or will contain) the repo dir.
+
+    Returns:
+        Absolute-or-relative path to the resolved repo directory (joins
+        ``parent`` with the resolved dir name; does not normalize ``parent``).
+    """
+    override = os.environ.get("RL_REPO_DIR")
+    if override:
+        return override
+    for name in RL_REPO_DIR_CANDIDATES:
+        candidate = os.path.join(parent, name)
+        if os.path.isdir(candidate):
+            return candidate
+    # Back-compat fallback: the historical literal, even if it doesn't exist
+    # yet (e.g. setup_rl_env.sh is about to clone into it).
+    return os.path.join(parent, RL_REPO_DIR_CANDIDATES[0])
+
+
+def _resolve_skyrl_home() -> Optional[str]:
+    """Resolve the on-disk RL repo dir for SKYRL_HOME-based path construction.
+
+    Honors ``SKYRL_HOME`` (precedence (a)) when it points at an existing dir.
+    If ``SKYRL_HOME`` is set but missing, or unset, falls back to probing its
+    parent (or CWD's parent) for the ``{SkyRL, MarinSkyRL}`` candidate dirs via
+    :func:`resolve_rl_repo_dir`. Returns None only when nothing is set and no
+    candidate exists (callers then skip adding the path, as before).
+
+    This keeps existing SkyRL-named deployments byte-identical: ``SKYRL_HOME``
+    is set by the dotenv to ``<parent>/SkyRL`` and exists, so it is returned
+    unchanged.
+    """
+    skyrl_home = os.environ.get("SKYRL_HOME")
+    if skyrl_home:
+        if os.path.isdir(skyrl_home):
+            return skyrl_home
+        # SKYRL_HOME set but absent under that exact name — probe its parent for
+        # the alternate dir name (e.g. dotenv hardcoded .../SkyRL but only
+        # .../MarinSkyRL exists on this box).
+        parent = os.path.dirname(skyrl_home.rstrip("/"))
+        if parent:
+            resolved = resolve_rl_repo_dir(parent)
+            if os.path.isdir(resolved):
+                return resolved
+        # Nothing better found; preserve prior behavior (use SKYRL_HOME as-is).
+        return skyrl_home
+    return None
+
+
+def build_apptainer_prefix(
+    sif: str,
+    binds: Optional[List[str]] = None,
+    pythonpath: Optional[str] = None,
+) -> List[str]:
+    """Build the ``apptainer exec --nv`` command prefix for the RL runtime.
+
+    Mirrors the SFT-MCA precedent (``hpc/sbatch_sft_mca/vista_train_mca.sbatch``
+    line 139: ``srun singularity exec --nv --bind ... <sif> ...``).
+
+    The returned list is meant to be *prepended* to a command (Ray ``ray start``,
+    the ray.init() wait script, or the SkyRL driver), so that the command runs
+    inside the SIF using the container's own Python install. A ``PYTHONPATH``
+    is prepended via ``--env`` so the live host SkyRL/harbor source overrides
+    the install baked into the container (live-source bind, §3 of the design doc).
+
+    Intentional omissions per the design doc:
+    - NO ``--cleanenv``: host env (UV_USE_IO_URING, NCCL_*, etc.) must survive.
+    - NO ``--net``/``--network``: the container shares the host network so Ray's
+      ``--node-ip-address``/``--address`` and VLLM_HOST_IP work unchanged.
+
+    Args:
+        sif: Absolute path to the Apptainer/Singularity SIF image.
+        binds: Bind-mount sources (default: DEFAULT_RL_CONTAINER_BINDS). Each is
+            passed as ``--bind <src>`` (DST==SRC).
+        pythonpath: Value for an ``--env PYTHONPATH=...`` flag, prepended so the
+            bind-mounted host source wins over the in-SIF install. If None, no
+            PYTHONPATH override is injected (apptainer passes host env by default).
+
+    Returns:
+        List of command tokens ending with the SIF path, e.g.::
+
+            ["apptainer", "exec", "--nv",
+             "--bind", "/e/scratch", "--bind", "/e/data1",
+             "--env", "PYTHONPATH=...", "<sif>"]
+    """
+    if binds is None:
+        binds = DEFAULT_RL_CONTAINER_BINDS
+    prefix: List[str] = ["apptainer", "exec", "--nv"]
+    # Writable/RO overlays composed over the read-only SIF rootfs. Sourced from
+    # the RL_CONTAINER_OVERLAYS env var (colon-separated paths, each mounted
+    # read-only via `--overlay <path>:ro`). Used for the 80B Qwen3-Next run,
+    # which stacks the P1 vLLM-HTTP overlay + the Stage-8 fla_tilelang overlay
+    # over skyrl_megatron_vllm.sif. Each overlay is an independent ext3 image;
+    # they compose by stacking `--overlay` flags. Empty/unset => no overlays
+    # (byte-identical to the prior non-overlay path).
+    overlays_env = os.environ.get("RL_CONTAINER_OVERLAYS", "")
+    for ov in (p for p in overlays_env.split(":") if p):
+        prefix.extend(["--overlay", f"{ov}:ro"])
+    for b in binds:
+        prefix.extend(["--bind", b])
+    if pythonpath:
+        prefix.extend(["--env", f"PYTHONPATH={pythonpath}"])
+    # Force WANDB_MODE into the container explicitly. Although apptainer passes
+    # host env by default (no --cleanenv), the SkyRL wandb.init() inside the SIF
+    # was NOT seeing the host WANDB_MODE=offline (dotenv-set) on the 80B run
+    # (job 599463) and tried an online init that timed out after 90s against
+    # wandb.ai through proxychains (CommError: "Run initialization has timed
+    # out"). Pinning it on the apptainer --env list guarantees offline mode
+    # inside the container, removing the network dependency entirely; the .out
+    # log carries all train metrics and the offline run can be `wandb sync`'d
+    # later. Defaults to offline but honors an explicit host override.
+    wandb_mode = os.environ.get("WANDB_MODE", "offline")
+    prefix.extend(["--env", f"WANDB_MODE={wandb_mode}"])
+    # Ray has independent startup deadlines for GCS registration and for the
+    # local plasma-store socket. A large object-store mmap can exceed the
+    # plasma client's default ten one-second connection attempts even while GCS
+    # is healthy. Pass both controls through Apptainer so every head, worker,
+    # and wait process observes them; each still honors an explicit override.
+    raylet_wait = os.environ.get("RAY_raylet_start_wait_time_s", "120")
+    prefix.extend(["--env", f"RAY_raylet_start_wait_time_s={raylet_wait}"])
+    raylet_connect_attempts = os.environ.get(
+        "RAY_raylet_client_num_connect_attempts", "120"
+    )
+    prefix.extend(
+        ["--env", f"RAY_raylet_client_num_connect_attempts={raylet_connect_attempts}"]
+    )
+    prefix.append(sif)
+    return prefix
+
+
+def _build_container_pythonpath() -> str:
+    """Build the in-container PYTHONPATH for the Apptainer RL runtime mode.
+
+    Prepends the live host MarinSkyRL root, its bundled skyrl-train package,
+    harbor, and workdir paths so the bind-mounted host source wins over the
+    install baked into the SIF (the SIF installed our SkyRL fork ``--no-deps``).
+    The root is required for launcher-owned packages such as ``cloud``; the
+    skyrl-train child is required for ``skyrl_train``. Resolved at runtime
+    inside the sbatch job from environment set by the dotenv + sbatch
+    (SKYRL_HOME, DCFT, WORKDIR), so it reflects the actual cluster paths. Mirrors
+    ``universal_rl.sbatch:143`` (``PYTHONPATH="$WORKDIR:..."``).
+
+    Returns:
+        Colon-joined PYTHONPATH string. Includes the existing $PYTHONPATH tail
+        so nothing already on the host path is dropped.
+    """
+    parts: List[str] = []
+
+    # Extra pure-python deps installed into a bind-mounted dir for SIFs built
+    # --no-deps (e.g. hydra-core + antlr4, which the qwen3_next/main_tbench
+    # entrypoint imports but skyrl_megatron_vllm.sif lacks). Sourced from
+    # RL_CONTAINER_PYDEPS (colon-separated); prepended FIRST so it wins. Unset
+    # => no-op (byte-identical to the prior path).
+    pydeps = os.environ.get("RL_CONTAINER_PYDEPS", "")
+    for p in (x for x in pydeps.split(":") if x):
+        parts.append(p)
+
+    # Resolve SKYRL_HOME with {SkyRL, MarinSkyRL} dir-name hardening (honors an
+    # explicit SKYRL_HOME / RL_REPO_DIR override first; see resolve_rl_repo_dir).
+    skyrl_home = _resolve_skyrl_home()
+    if skyrl_home:
+        parts.append(skyrl_home)
+        parts.append(os.path.join(skyrl_home, "skyrl-train"))
+        # skyrl-gym is a second importable root in the same repo. Without it, `skyrl_gym`
+        # resolves to the container's baked /opt/SkyRL/skyrl-gym, which is pinned at image
+        # build time and goes stale against the host checkout. MarinSkyRL added
+        # skyrl_gym.verification, which skyrl_train.trajectory_runners imports at module
+        # import time, so a host tree newer than the image fails to import without this.
+        # Same host-overrides-baked rule already applied to skyrl-train above.
+        skyrl_gym = os.path.join(skyrl_home, "skyrl-gym")
+        if os.path.isdir(os.path.join(skyrl_gym, "skyrl_gym")):
+            parts.append(skyrl_gym)
+
+    # Harbor lives as a sibling of OpenThoughts-Agent ($DCFT/../harbor on
+    # Jupiter); fall back to $HARBOR_HOME if set explicitly.
+    harbor_home = os.environ.get("HARBOR_HOME")
+    if not harbor_home:
+        dcft = os.environ.get("DCFT")
+        if dcft:
+            harbor_home = os.path.join(os.path.dirname(dcft.rstrip("/")), "harbor")
+    if harbor_home:
+        # Harbor uses a src/ layout (importable package at harbor/src/harbor),
+        # so the importable root is harbor/src — add it when present (current
+        # marin harbor). Keep the repo root too for the flat-layout fallback.
+        harbor_src = os.path.join(harbor_home, "src")
+        if os.path.isdir(os.path.join(harbor_src, "harbor")):
+            parts.append(harbor_src)
+        parts.append(harbor_home)
+
+    workdir = os.environ.get("WORKDIR") or os.environ.get("DCFT")
+    if workdir:
+        parts.append(workdir)
+
+    existing = os.environ.get("PYTHONPATH")
+    if existing:
+        parts.append(existing)
+
+    # Flatten any colon-joined entries (e.g. the inherited $PYTHONPATH is itself
+    # a colon-list) and drop entries containing shell metacharacters. On Jupiter
+    # the inherited PYTHONPATH can still carry an UNEXPANDED dotenv tail like
+    #   $(resolve_rl_repo_dir "$DCFT")/skyrl-train:${DCFT_PRIVATE:-$DCFT}${PYTHONPATH:+:$PYTHONPATH}
+    # (when resolve_rl_repo.sh wasn't sourced in the shell that first exported
+    # PYTHONPATH, the `$()`/`${}` substitutions never ran). Such an entry is a
+    # bogus import path AND — because it contains spaces, `"`, and `)` — corrupts
+    # the `apptainer exec --env PYTHONPATH=<value>` argument: apptainer mis-reads
+    # the value tail as the SIF image path and dies with
+    #   FATAL: could not open image .../OpenThoughts-Agent/"...")/skyrl-train:...
+    # → the ray head exits 255 before producing output (80B step-4 651533-651541
+    # / 651960). The real importable roots (sif_pydeps, SkyRL, SkyRL/skyrl-train,
+    # harbor/src, harbor, OTA) are all added above and never contain shell
+    # syntax, so dropping the dirty entries is safe and keeps imports intact.
+    _SHELL_META = set(" \t$()`\"'{}")
+    flat: List[str] = []
+    for entry in parts:
+        for sub in entry.split(":"):
+            if not sub:
+                continue
+            if any(ch in _SHELL_META for ch in sub):
+                continue  # unexpanded/garbled path entry — skip
+            if not sub.startswith("/"):
+                continue  # only absolute paths are valid in-container imports;
+                # drops stray fragments left by splitting a garbled
+                # entry (e.g. the "+" from "${PYTHONPATH:+:...}")
+            flat.append(sub)
+
+    # De-dup while preserving order.
+    seen = set()
+    deduped = []
+    for p in flat:
+        if p and p not in seen:
+            seen.add(p)
+            deduped.append(p)
+    return ":".join(deduped)
 
 
 def prebuild_daytona_snapshots(
@@ -41,7 +333,11 @@ def prebuild_daytona_snapshots(
     then delegates to ``ensure_snapshots``. Any direct callers (e.g. external
     scripts) keep working unchanged.
     """
-    from hpc.snapshot_manager import ensure_snapshots, load_orgs_from_env, SnapshotCapExceeded
+    from hpc.snapshot_manager import (
+        ensure_snapshots,
+        load_orgs_from_env,
+        SnapshotCapExceeded,
+    )
 
     if not os.environ.get("DAYTONA_API_KEY", ""):
         print("WARNING: DAYTONA_API_KEY not set; skipping snapshot pre-build.")
@@ -70,7 +366,35 @@ def resolve_rl_train_data(
     on_exist: str = "skip",
     verbose: bool = True,
 ) -> List[str]:
+    """Resolve data paths while preserving the historical list-only API."""
+    return list(
+        resolve_rl_train_data_with_sources(
+            train_data,
+            scratch_dir=scratch_dir,
+            on_exist=on_exist,
+            verbose=verbose,
+        ).paths
+    )
+
+
+@dataclass(frozen=True)
+class ResolvedRLData:
+    """Local data paths paired with their immutable or local source references."""
+
+    paths: tuple[str, ...]
+    sources: tuple[str, ...]
+
+
+def resolve_rl_train_data_with_sources(
+    train_data: List[str],
+    scratch_dir: Optional[str] = None,
+    on_exist: str = "skip",
+    verbose: bool = True,
+) -> ResolvedRLData:
     """Resolve train_data paths, extracting HF datasets to local task directories.
+
+    ``sources`` preserves local inputs and replaces Hub inputs with canonical
+    selectors pinned to their resolved commit.
 
     SkyRL's TerminalBenchTaskDataset expects local directory paths where each
     subdirectory is a task containing an instruction.md file. This function:
@@ -93,7 +417,7 @@ def resolve_rl_train_data(
         ['/scratch/tasks/my-dataset', '/local/path/tasks']
     """
     if not train_data:
-        return []
+        return ResolvedRLData((), ())
 
     # Determine scratch directory for extracted tasks
     # IMPORTANT: Must use a shared filesystem visible to all compute nodes.
@@ -111,69 +435,110 @@ def resolve_rl_train_data(
                 break
         else:
             scratch_dir = "/tmp"
-            print(f"[rl_launch_utils] WARNING: Using /tmp for task extraction. "
-                  f"This is local to each node and may fail on multi-node jobs. "
-                  f"Set $SCRATCH, $DCFT, or $DCFT_PRIVATE to a shared filesystem path.")
+            print(
+                "[rl_launch_utils] WARNING: Using /tmp for task extraction. "
+                "This is local to each node and may fail on multi-node jobs. "
+                "Set $SCRATCH, $DCFT, or $DCFT_PRIVATE to a shared filesystem path."
+            )
     tasks_base = Path(scratch_dir) / "tasks"
 
     resolved_paths = []
+    sources = []
 
     for data_path in train_data:
         if is_hf_dataset_path(data_path):
-            # It's a HuggingFace dataset - extract to local directory
-            # Extract repo name from "org/repo-name" -> "repo-name"
-            repo_name = data_path.split("/")[-1]
-            output_dir = tasks_base / repo_name
+            selector = resolve_hf_dataset_selector(data_path)
+            canonical_source = selector.canonical()
+            output_dir = tasks_base / selector.cache_name()
 
             if verbose:
-                print(f"[rl_launch_utils] Extracting HF dataset: {data_path}")
+                print(f"[rl_launch_utils] Extracting HF dataset: {canonical_source}")
                 print(f"[rl_launch_utils] Output directory: {output_dir}")
 
             # Check if already extracted (when on_exist="skip")
             if on_exist == "skip" and output_dir.exists() and any(output_dir.iterdir()):
                 if verbose:
-                    print(f"[rl_launch_utils] Tasks already extracted, skipping: {output_dir}")
+                    print(
+                        f"[rl_launch_utils] Tasks already extracted, skipping: {output_dir}"
+                    )
                 resolved_paths.append(str(output_dir))
+                sources.append(canonical_source)
                 continue
 
             # Run extract_tasks_from_parquet
             cmd = [
-                sys.executable, "-m", "scripts.datagen.extract_tasks_from_parquet",
-                "--parquet", data_path,
-                "--output_dir", str(output_dir),
-                "--on_exist", on_exist,
+                sys.executable,
+                "-m",
+                "scripts.datagen.extract_tasks_from_parquet",
+                "--parquet",
+                canonical_source,
+                "--output_dir",
+                str(output_dir),
+                "--on_exist",
+                on_exist,
             ]
 
             if verbose:
                 print(f"[rl_launch_utils] Running: {' '.join(cmd)}")
 
-            try:
-                result = subprocess.run(
-                    cmd,
-                    check=True,
-                    capture_output=True,
-                    text=True,
+            # A stalled HF download INSIDE extract_tasks_from_parquet (mid-download socket
+            # hang — seen 2026-07-13 on rno2a v0: ranks 3,6 had a byte-frozen `.incomplete`
+            # parquet) used to block subprocess.run FOREVER, so the node never `ray start`ed and
+            # the head hit its "Only N/8 Ray nodes joined within 1800s" gang-timeout → TERMINAL
+            # (--max-retries does NOT rescue gang-formation). This mirrors the stage_model fix
+            # (start_rl_iris_controller.py, 2026-07-13): a per-attempt timeout converts a stall
+            # into a retry; HF resumes the partial `.incomplete` shard on the next attempt, so a
+            # killed-mid-download attempt loses nothing. 600s covers a clean extract yet fits
+            # several retries inside the 1800s gang-join budget.
+            EXTRACT_ATTEMPT_TIMEOUT_S = 600
+            last_err = ""
+            for attempt in range(1, 7):
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=EXTRACT_ATTEMPT_TIMEOUT_S,
+                    )
+                    if verbose and result.stdout:
+                        print(result.stdout)
+                    break
+                except subprocess.TimeoutExpired:
+                    last_err = (
+                        f"extract_tasks_from_parquet stalled > {EXTRACT_ATTEMPT_TIMEOUT_S}s "
+                        "(mid-download socket hang); killed, retrying (HF resumes the partial shard)"
+                    )
+                    print(
+                        f"[rl_launch_utils] extract attempt {attempt}/6 TIMED OUT for {data_path}: {last_err}"
+                    )
+                    time.sleep(min(30, 2**attempt))
+                except subprocess.CalledProcessError as e:
+                    last_err = f"stdout: {e.stdout}\n  stderr: {e.stderr}"
+                    print(
+                        f"[rl_launch_utils] extract attempt {attempt}/6 failed for {data_path}:"
+                    )
+                    print(f"  {last_err}")
+                    time.sleep(min(30, 2**attempt))
+            else:
+                raise RuntimeError(
+                    f"Failed to extract HF dataset after 6 attempts: {data_path}: {last_err}"
                 )
-                if verbose and result.stdout:
-                    print(result.stdout)
-            except subprocess.CalledProcessError as e:
-                print(f"[rl_launch_utils] ERROR extracting {data_path}:")
-                print(f"  stdout: {e.stdout}")
-                print(f"  stderr: {e.stderr}")
-                raise RuntimeError(f"Failed to extract HF dataset: {data_path}") from e
 
             # Fix permissions on extracted tasks (chmod -R a+rX)
             _fix_task_permissions(output_dir, verbose=verbose)
 
             resolved_paths.append(str(output_dir))
+            sources.append(canonical_source)
         else:
             # It's a local path - fix permissions just in case
             local_path = Path(data_path)
             if local_path.exists():
                 _fix_task_permissions(local_path, verbose=verbose)
             resolved_paths.append(data_path)
+            sources.append(data_path)
 
-    return resolved_paths
+    return ResolvedRLData(tuple(resolved_paths), tuple(sources))
 
 
 def _fix_task_permissions(task_dir: Path, verbose: bool = True) -> None:
@@ -182,12 +547,51 @@ def _fix_task_permissions(task_dir: Path, verbose: bool = True) -> None:
     Runs chmod -R a+rX on the directory to make all files readable
     and directories traversable.
 
+    IDEMPOTENCY GUARD (added 2026-06-19): the recursive ``chmod -R a+rX`` over a
+    large task tree (e.g. the 5000-task ``exp_rpt_pymethods2test-large``, ~100K
+    inodes) issues ~100K GPFS metadata WRITES on EVERY launch, even when the tree
+    is already world-readable from a prior successful launch. Under GPFS metadata
+    contention that recursive chmod has wedged the launcher in uninterruptible
+    D-state for 35+ min before ``sbatch`` is ever reached. So we first do a SINGLE
+    cheap ``stat`` of the top-level dir (fast even under contention, ~0.004s) and
+    SHORT-CIRCUIT when its perms already satisfy ``a+rX`` for a directory
+    (group+other readable AND group+other traversable). We only skip when perms are
+    VERIFIED already-correct; any dir that genuinely needs the fix (top-level bits
+    missing, or not yet stat-able) still gets the full recursive chmod. This is a
+    conservative top-level check: if the recursive walk were ever interrupted it
+    could leave inner files unfixed, but in practice the tree is written atomically
+    by extraction and re-chmod'd as a unit, so a correct top-level dir implies a
+    correct tree (and the prior-launch path proves it). NEVER use find/du here.
+
     Args:
         task_dir: Path to task directory.
         verbose: Whether to print status messages.
     """
     if not task_dir.exists():
         return
+
+    # Cheap idempotency probe: a single stat on the top-level dir. The bits
+    # `chmod a+rX` sets on a DIRECTORY are S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH (the
+    # owner already has them post-extraction). If all four are present, the
+    # recursive chmod would be a ~100K-write no-op -> skip it.
+    _RX_BITS = stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
+    try:
+        mode = task_dir.stat().st_mode
+        if (mode & _RX_BITS) == _RX_BITS:
+            if verbose:
+                print(
+                    f"[rl_launch_utils] Permissions already a+rX on top-level "
+                    f"dir, skipping recursive chmod: {task_dir}"
+                )
+            return
+    except OSError as e:
+        # stat failed (race / transient FS) -> fall through to the chmod, which
+        # is the safe, correctness-preserving default.
+        if verbose:
+            print(
+                f"[rl_launch_utils] stat probe failed on {task_dir} ({e}); "
+                f"running recursive chmod to be safe."
+            )
 
     if verbose:
         print(f"[rl_launch_utils] Fixing permissions on: {task_dir}")
@@ -268,33 +672,9 @@ def get_tensor_parallel_size(
         return 1
 
 
-def derive_skyrl_export_path(
-    experiments_dir: str,
-    run_name: str,
-    exports_subdir: str = "exports",
-) -> str:
-    """
-    Derive the SkyRL export path from experiments directory and run name.
-
-    The export path is where SkyRL saves model checkpoints during training.
-
-    Args:
-        experiments_dir: Base experiments directory.
-        run_name: Name of the training run.
-        exports_subdir: Subdirectory name for exports (default: "exports").
-
-    Returns:
-        Full path to the SkyRL export directory.
-
-    Example:
-        >>> derive_skyrl_export_path("/scratch/experiments", "qwen3_8b_nl2bash")
-        '/scratch/experiments/qwen3_8b_nl2bash/exports'
-    """
-    return str(Path(experiments_dir) / run_name / exports_subdir)
-
-
 def build_rl_env_vars(
     exp_args: Dict[str, Any],
+    run_paths: RLRunPaths,
     hpc: Optional[Any] = None,
 ) -> Dict[str, str]:
     """
@@ -302,6 +682,7 @@ def build_rl_env_vars(
 
     Args:
         exp_args: Experiment arguments dictionary.
+        run_paths: Validated durable RL paths.
         hpc: Optional HPC configuration object.
 
     Returns:
@@ -326,11 +707,7 @@ def build_rl_env_vars(
     else:
         env_vars["POLICY_NUM_NODES"] = str(num_nodes)
 
-    # SkyRL export path
-    experiments_dir = exp_args.get("experiments_dir", "")
-    run_name = exp_args.get("run_name") or exp_args.get("job_name", "")
-    if experiments_dir and run_name:
-        env_vars["SKYRL_EXPORT_PATH"] = derive_skyrl_export_path(experiments_dir, run_name)
+    env_vars["SKYRL_EXPORT_PATH"] = str(run_paths.export_dir)
 
     # Inherit all HPC-specific environment variables (WANDB_MODE, GLOO_USE_IPV6, etc.)
     if hpc is not None and hasattr(hpc, "env_vars"):
@@ -341,25 +718,33 @@ def build_rl_env_vars(
     return env_vars
 
 
-def get_rl_env_exports(exp_args: Dict[str, Any], hpc: Optional[Any] = None) -> str:
+def get_rl_env_exports(
+    exp_args: Dict[str, Any], run_paths: RLRunPaths, hpc: Optional[Any] = None
+) -> str:
     """
     Generate shell export statements for RL environment variables.
 
     Args:
         exp_args: Experiment arguments dictionary.
+        run_paths: Validated durable RL paths.
         hpc: Optional HPC configuration object.
 
     Returns:
         Multi-line string of export statements.
     """
-    env_vars = build_rl_env_vars(exp_args, hpc)
+    env_vars = build_rl_env_vars(exp_args, run_paths, hpc)
 
     if not env_vars:
         return "# No RL-specific environment variables"
 
     lines = ["# RL training environment variables"]
     for key, value in env_vars.items():
-        lines.append(f'export {key}="{value}"')
+        # shlex.quote keeps values with shell-special characters intact —
+        # notably the JSON RAY_object_spilling_config blob, whose inner
+        # double-quotes would otherwise prematurely close a naive
+        # `export KEY="value"` and mangle the spill config. shlex.quote is a
+        # no-op for plain values, so this is byte-identical for all other vars.
+        lines.append(f"export {key}={shlex.quote(str(value))}")
 
     return "\n".join(lines)
 
@@ -378,11 +763,26 @@ def get_rl_env_activation(exp_args: Dict[str, Any]) -> str:
     Returns:
         Multi-line shell script for environment activation.
     """
+    # Apptainer runtime mode (OPT-IN): when --rl_container_sif is set the Python
+    # comes from inside the SIF (and the bind-mounted host SkyRL/harbor), so the
+    # host venv/conda activation is skipped entirely. The three command seams
+    # (Ray head/worker, ray.init() wait, SkyRL driver) are wrapped in
+    # `apptainer exec --nv` downstream. Mirrors SFT-MCA, which `conda activate`s
+    # *inside* the container, not on the host.
+    container_sif = exp_args.get("rl_container_sif")
+    if container_sif:
+        return (
+            "# RL Apptainer runtime mode (--rl_container_sif set):\n"
+            "# Host venv/conda activation SKIPPED. Python is provided by the SIF\n"
+            f"# ({container_sif}); Ray + SkyRL run via `apptainer exec --nv`.\n"
+            'echo "RL runtime: Apptainer SIF (host venv/conda activation skipped)"'
+        )
+
     use_conda = exp_args.get("rl_use_conda", False)
     conda_env = exp_args.get("rl_conda_env", "dcagent-rl")
 
     if use_conda:
-        return f'''# Using conda environment for RL: {conda_env}
+        return f"""# Using conda environment for RL: {conda_env}
 echo "Activating conda environment: {conda_env}"
 # Disable unbound variable check during conda operations (conda scripts reference unset vars)
 set +u
@@ -404,7 +804,7 @@ else
 fi
 conda activate {conda_env}
 # Re-enable unbound variable check
-set -u'''
+set -u"""
     else:
         return '''# Using venv for RL (created by ./hpc/setup_rl_env.sh)
 # IMPORTANT: Deactivate conda environment to prevent import conflicts,
@@ -460,12 +860,16 @@ class RLJobConfig:
 
     # SkyRL settings
     skyrl_entrypoint: str
+    trials_dir: str
     skyrl_hydra_args: List[str] = field(default_factory=list)
+    resume_policy: str = RLResumePolicy.FIXED.value
 
     # Model and data
     model_path: str = ""
     train_data: List[str] = field(default_factory=list)
     val_data: List[str] = field(default_factory=list)
+    train_data_sources: List[str] = field(default_factory=list)
+    val_data_sources: List[str] = field(default_factory=list)
 
     # Resource allocation
     num_nodes: int = 1
@@ -489,14 +893,36 @@ class RLJobConfig:
     pinggy_persistent_url: Optional[str] = None
     pinggy_token: Optional[str] = None
 
+    # Ingress mode: "pinggy" (default, legacy) or "controller" (auth-gated
+    # controller ingress). ingress_host is the public controller-ingress host.
+    ingress_mode: str = "pinggy"
+    ingress_host: Optional[str] = None
+
+    # Literal-token capture: co-locate harbor's RecordProxy in front of the vLLM
+    # engines and route the agent endpoint through it. Default off = no proxy.
+    record_literal: bool = False
+
     # Agent/environment info (for needs_pinggy_tunnel decision)
     agent_name: str = "terminus-2"
     harbor_env: str = "daytona"
 
     proxychains_binary: Optional[str] = None
 
+    # Apptainer/Singularity RL runtime mode (OPT-IN). When container_sif is set,
+    # the SkyRL trainer + Ray head/workers run inside the SIF via
+    # `apptainer exec --nv` instead of activating the host venv/conda. See
+    # scope_rl_via_apptainer_launcher.md.
+    container_sif: Optional[str] = None
+    container_binds: List[str] = field(default_factory=list)
+
     # Ray object store size in GB (default: 40)
     ray_object_store_gb: float = 40.0
+
+    # Optional image-backed Harbor trial tree. The sbatch shell mounts the image
+    # before Ray/Apptainer starts and holds its writer lock for the whole link.
+    artifact_store_enabled: bool = False
+    artifact_store_image: Optional[str] = None
+    artifact_store_mount: Optional[str] = None
 
     # Post-training trace upload settings
     trace_upload_enabled: bool = False
@@ -504,6 +930,16 @@ class RLJobConfig:
     trace_upload_episodes: str = "last"
     trace_upload_dataset_type: str = "SFT"
     trace_upload_cleanup: bool = True
+
+
+@dataclass(frozen=True)
+class RLLaunchArtifacts:
+    """Resolved launch script and the exact SkyRL command it contains."""
+
+    sbatch_path: Path
+    skyrl_entrypoint: str
+    hydra_args: tuple[str, ...]
+
 
 def build_skyrl_command_string(config: RLJobConfig) -> str:
     """Build the full SkyRL command string for the sbatch template.
@@ -522,7 +958,133 @@ def build_skyrl_command_string(config: RLJobConfig) -> str:
     return " \\\n".join(parts)
 
 
-def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
+def _build_rl_container_env(container: Mapping[str, Any], exp_args: dict) -> str:
+    """Build the `{rl_container_env}` sbatch block from a yaml `container:` section.
+
+    Side effect: when ``container.sif`` is set and ``--rl_container_sif`` was NOT
+    passed on the CLI, populates ``exp_args["rl_container_sif"]`` (and
+    ``rl_container_binds`` from ``container.binds``) so the existing Apptainer
+    runtime mode activates downstream (host venv/conda activation skipped; Ray +
+    SkyRL run via ``apptainer exec --nv``). An explicit CLI ``--rl_container_sif``
+    always wins.
+
+    Emits ``export`` lines for:
+      - ``RL_CONTAINER_OVERLAYS`` — colon-joined ``container.overlays`` (each
+        mounted ``--overlay <p>:ro`` by build_apptainer_prefix).
+      - ``RL_CONTAINER_PYDEPS``  — ``container.pydeps`` (prepended to the
+        in-container PYTHONPATH by _build_container_pythonpath).
+      - one line per ``container.extra_env`` key (e.g. SKYRL_GDN_MASK_FLA,
+        PYTORCH_CUDA_ALLOC_CONF). ``APPTAINERENV_`` mirroring is the author's
+        responsibility (list both keys in extra_env) — kept verbatim, no magic.
+
+    Returns a comment-only stub when ``container`` is empty/absent, so configs
+    without a container section are byte-identical to the prior path.
+
+    Args:
+        container: The parsed yaml ``container:`` mapping (or empty dict).
+        exp_args: Experiment args dict (mutated to set rl_container_sif/binds).
+
+    Returns:
+        Multi-line shell string of export statements (or a single comment line).
+    """
+    if not container:
+        return "# (no container section in RL yaml — host venv/conda runtime)"
+
+    # SIF: populate the existing CLI-flag plumbing if not explicitly overridden.
+    sif = container.get("sif")
+    if sif and not exp_args.get("rl_container_sif"):
+        exp_args["rl_container_sif"] = sif
+        binds = container.get("binds")
+        if binds and not exp_args.get("rl_container_binds"):
+            exp_args["rl_container_binds"] = list(binds)
+
+    lines: List[str] = []
+
+    overlays = container.get("overlays") or []
+    if overlays:
+        joined = ":".join(str(o) for o in overlays)
+        lines.append(f'export RL_CONTAINER_OVERLAYS="{joined}"')
+
+    pydeps = container.get("pydeps")
+    if pydeps:
+        lines.append(f'export RL_CONTAINER_PYDEPS="{pydeps}"')
+
+    extra_env = container.get("extra_env") or {}
+    for key, value in extra_env.items():
+        # bool -> shell-friendly literal (True/False kept as-is for SKYRL_* flags
+        # that test truthiness via int(); most callers use 1/0 or strings).
+        if isinstance(value, bool):
+            value = int(value)
+        lines.append(f'export {key}="{value}"')
+
+    if not lines:
+        return "# (container section present but defined no overlays/pydeps/extra_env)"
+
+    return "\n".join(lines)
+
+
+def validate_trace_upload_environment(
+    terminal_bench: Mapping[str, Any], container: Mapping[str, Any]
+) -> None:
+    """Reject trace uploads from a runtime configured for offline Hub access."""
+    trace_upload = terminal_bench.get("trace_upload") or {}
+    if not trace_upload.get("enabled"):
+        return
+
+    extra_env = container.get("extra_env") or {}
+    offline_keys = ("HF_HUB_OFFLINE", "APPTAINERENV_HF_HUB_OFFLINE")
+    enabled = [
+        key
+        for key in offline_keys
+        if str(extra_env.get(key, "")).lower() in {"1", "true", "yes"}
+    ]
+    if enabled:
+        raise ValueError(
+            "terminal_bench.trace_upload.enabled=true conflicts with "
+            f"container.extra_env {', '.join(enabled)}; disable trace upload or remove offline Hub mode"
+        )
+
+
+def _parse_artifact_store(container: Mapping[str, Any]) -> tuple[bool, str, int]:
+    """Validate the optional ``container.artifact_store`` launcher contract."""
+    raw = container.get("artifact_store") or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("container.artifact_store must be a mapping")
+    unknown = set(raw) - {"enabled", "size", "inodes"}
+    if unknown:
+        raise ValueError(
+            "unknown container.artifact_store fields: " + ", ".join(sorted(unknown))
+        )
+    enabled_value = raw.get("enabled", False)
+    if not isinstance(enabled_value, bool):
+        raise ValueError("container.artifact_store.enabled must be a boolean")
+    enabled = enabled_value
+    size = str(raw.get("size", DEFAULT_IMAGE_SIZE))
+    inodes = raw.get("inodes", DEFAULT_INODE_COUNT)
+    if isinstance(inodes, bool) or not isinstance(inodes, int) or inodes <= 0:
+        raise ValueError("container.artifact_store.inodes must be a positive integer")
+    if not size:
+        raise ValueError("container.artifact_store.size must be non-empty")
+    return enabled, size, inodes
+
+
+def prefetch_rl_model(model_path: str) -> str:
+    """Populate the model cache while preserving a replayable SkyRL reference.
+
+    Returns:
+        The input model reference. Hub repository IDs are never replaced with
+        the cache snapshot path produced by ``pre_download_model``.
+    """
+    if not is_huggingface_repo(model_path):
+        return model_path
+
+    print(f"Pre-downloading model for SkyRL: {model_path}")
+    result = pre_download_model(model_path)
+    print(f"Model available at: {result.local_path}")
+    return model_path
+
+
+def construct_rl_sbatch_script(exp_args: dict, hpc) -> RLLaunchArtifacts:
     """Construct RL sbatch script using the universal template system.
 
     This follows the same pattern as construct_sft_sbatch_script() but for RL jobs.
@@ -532,7 +1094,7 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         hpc: HPC cluster configuration.
 
     Returns:
-        Path to the generated sbatch script.
+        Generated sbatch path and the exact SkyRL command.
     """
     from hpc.launch_utils import (
         resolve_job_and_paths,
@@ -540,7 +1102,12 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         build_sbatch_directives,
         resolve_conda_activate,
     )
-    from hpc.rl_config_utils import parse_rl_config, build_skyrl_hydra_args, extract_terminal_bench_agent_env
+    from hpc.rl_config_utils import (
+        apply_context_budget_overrides,
+        build_skyrl_hydra_args,
+        extract_terminal_bench_agent_env,
+        parse_rl_config,
+    )
 
     print("\n=== RL MODE (Universal Launcher) ===")
 
@@ -551,6 +1118,30 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
 
     parsed = parse_rl_config(rl_config_path, model_override=exp_args.get("model_path"))
     print(f"Loaded RL config from: {parsed.config_path}")
+    container = parsed.raw.get("container") or {}
+    validate_trace_upload_environment(parsed.terminal_bench or {}, container)
+    artifact_store_enabled, artifact_store_size, artifact_store_inodes = (
+        _parse_artifact_store(container)
+    )
+
+    # --- RL container section (Apptainer SIF + overlays + pydeps + extra env) ---
+    # Optional top-level `container:` block in the RL yaml. When present it lets a
+    # config self-describe its Apptainer runtime (the Qwen3-Next-80B case), so the
+    # standard `python -m hpc.launch` path reproduces the previously hand-baked
+    # sbatch without env-vars-at-launch-time or a giant --skyrl_override string.
+    #
+    #   container:
+    #     sif: /abs/path/to/image.sif            # -> --rl_container_sif (host venv skip)
+    #     binds: ["/e/scratch", "/e/data1"]      # -> --rl_container_binds (default if omitted)
+    #     overlays: ["/abs/a.img", "/abs/b.img"] # -> RL_CONTAINER_OVERLAYS (colon-joined, :ro)
+    #     pydeps: "/abs/sif_pydeps"              # -> RL_CONTAINER_PYDEPS (PYTHONPATH prepend)
+    #     extra_env:                             # -> verbatim `export K=V` lines
+    #       SKYRL_GDN_MASK_FLA: 1
+    #       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    #
+    # An explicit --rl_container_sif CLI flag still wins (only fills if unset), so
+    # nothing changes for configs without a `container:` section.
+    rl_container_env_block = _build_rl_container_env(container, exp_args)
 
     # Extract agent name and harbor_env from terminal_bench config
     yaml_agent_name, yaml_harbor_env = extract_terminal_bench_agent_env(parsed)
@@ -567,14 +1158,18 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
     if isinstance(train_data_raw, str):
         # Handle JSON string from CLI
         import ast
+
         try:
             train_data_raw = ast.literal_eval(train_data_raw)
         except (ValueError, SyntaxError):
             train_data_raw = [train_data_raw]
 
+    train_data_sources: list[str] = []
     if train_data_raw:
         print(f"Resolving train_data: {train_data_raw}")
-        resolved_train_data = resolve_rl_train_data(train_data_raw)
+        resolved_train = resolve_rl_train_data_with_sources(train_data_raw)
+        resolved_train_data = list(resolved_train.paths)
+        train_data_sources = list(resolved_train.sources)
         exp_args["train_data"] = resolved_train_data
         print(f"Resolved train_data: {resolved_train_data}")
 
@@ -587,7 +1182,9 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
             from hpc.snapshot_manager import OrgConfig, load_orgs_from_env
 
             api_key_override = get_daytona_api_key_override(exp_args)
-            if api_key_override and api_key_override != os.environ.get("DAYTONA_API_KEY", ""):
+            if api_key_override and api_key_override != os.environ.get(
+                "DAYTONA_API_KEY", ""
+            ):
                 orgs = [OrgConfig(name="cli", api_key=api_key_override)]
             else:
                 orgs = load_orgs_from_env(["default"])
@@ -605,16 +1202,19 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         val_data_raw = parsed.data.get("val_data", [])
     if isinstance(val_data_raw, str):
         import ast
+
         try:
             val_data_raw = ast.literal_eval(val_data_raw)
         except (ValueError, SyntaxError):
             val_data_raw = [val_data_raw]
 
+    val_data_sources: list[str] = []
     if val_data_raw:
         print(f"Resolving val_data: {val_data_raw}")
-        resolved_val_data = resolve_rl_train_data(val_data_raw)
-        exp_args["val_data"] = resolved_val_data
-        print(f"Resolved val_data: {resolved_val_data}")
+        resolved_val = resolve_rl_train_data_with_sources(val_data_raw)
+        exp_args["val_data"] = list(resolved_val.paths)
+        val_data_sources = list(resolved_val.sources)
+        print(f"Resolved val_data: {exp_args['val_data']}")
 
     # Pre-download model for RL jobs
     # SkyRL's FSDP and DeepSpeed strategies don't have built-in pre-download logic
@@ -622,26 +1222,15 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
     # - Multiple workers trying to download simultaneously
     # - Network timeouts on compute nodes
     # - Auth issues in distributed settings
-    from hpc.checkpoint_utils import pre_download_model, is_huggingface_repo
-    model_path = exp_args.get("model_path") or parsed.model.get("model_name_or_path", "")
-    if model_path and is_huggingface_repo(model_path):
-        print(f"Pre-downloading model for SkyRL: {model_path}")
-        result = pre_download_model(model_path)
-        exp_args["model_path"] = result.local_path
-        print(f"Model available at: {result.local_path}")
-    elif model_path:
-        exp_args["model_path"] = model_path
+    model_path = exp_args.get("model_path") or parsed.model.get(
+        "model_name_or_path", ""
+    )
+    if model_path:
+        exp_args["model_path"] = prefetch_rl_model(model_path)
 
-    # Build Hydra args from YAML + CLI overrides
-    hydra_args = build_skyrl_hydra_args(parsed, exp_args, hpc)
-
-    # Apply CLI overrides (--skyrl_override key=value)
-    skyrl_overrides = exp_args.get("skyrl_override") or []
-    if skyrl_overrides:
-        hydra_args.extend(skyrl_overrides)
-        print(f"Applied {len(skyrl_overrides)} CLI overrides")
-
-    # Resolve job_name and paths (job_name already set by get_job_name() in launch.py)
+    # Resolve launcher artifact paths before the durable RL paths. A collision
+    # may rename the artifact directory, while RLPathManager must still inspect
+    # the canonical directory and its numbered siblings.
     job_setup = resolve_job_and_paths(
         exp_args,
         job_type_label="RL",
@@ -649,6 +1238,52 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
     job_name = job_setup.job_name
     exp_paths = job_setup.paths
     experiments_subdir = str(exp_paths.root)
+
+    skyrl_overrides = exp_args.get("skyrl_override") or []
+    parsed, passthrough_overrides = apply_context_budget_overrides(
+        parsed, skyrl_overrides
+    )
+    print(f"Resolved context budget: {parsed.context_budget.as_dict()}")
+
+    # Validate the resume checkpoint's sharded world size at submit: FSDP2 loads
+    # one shard per rank and does not reshard, so a bank written at 16 ranks can
+    # never load into a 32-rank placement. Without this check the mismatch only
+    # surfaces ~15 minutes into the run, after node allocation and engine start.
+    placement = resolve_placement(parsed.trainer, exp_args, hpc)
+    expected_world_sizes = expected_rl_world_sizes(placement, passthrough_overrides)
+
+    run_paths = RLPathManager(
+        job_name,
+        exp_paths.canonical_root or exp_paths.root,
+        exp_paths.root,
+        artifact_store_enabled=artifact_store_enabled,
+    ).resolve(
+        trainer_config=parsed.trainer,
+        terminal_bench_config=parsed.terminal_bench or {},
+        skyrl_overrides=passthrough_overrides,
+        launch_intent=(
+            RLLaunchIntent.FRESH
+            if exp_args.get("overwrite_output_dir") or exp_args.get("allow_overwrite")
+            else RLLaunchIntent.AUTO
+        ),
+        expected_world_sizes=expected_world_sizes,
+    )
+    print(run_paths.describe())
+    if run_paths.artifact_store is not None:
+        ensure_image(
+            run_paths.artifact_store.image,
+            size=artifact_store_size,
+            inode_count=artifact_store_inodes,
+        )
+        print(
+            f"[artifact_store] image={run_paths.artifact_store.image}; "
+            f"mount={run_paths.artifact_store.mount}; trials={run_paths.trials_dir}"
+        )
+
+    hydra_args = build_skyrl_hydra_args(parsed, exp_args, hpc, run_paths=run_paths)
+    if passthrough_overrides:
+        hydra_args.extend(passthrough_overrides)
+        print(f"Applied {len(passthrough_overrides)} non-context CLI overrides")
 
     # Extract config values
     num_nodes = int(exp_args.get("num_nodes") or 1)
@@ -662,24 +1297,44 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
         cluster_name=hpc.name,
         skyrl_entrypoint=parsed.entrypoint,
         skyrl_hydra_args=hydra_args,
+        resume_policy=run_paths.resume_policy.value,
         model_path=exp_args.get("model_path", ""),
         train_data=exp_args.get("train_data", []),
         val_data=exp_args.get("val_data", []),
+        train_data_sources=train_data_sources,
+        val_data_sources=val_data_sources,
         num_nodes=num_nodes,
         gpus_per_node=gpus_per_node,
         cpus_per_node=cpus_per_node,
         tensor_parallel_size=parsed.tensor_parallel_size,
         ray_port=int(exp_args.get("ray_port") or 6379),
         master_port=int(exp_args.get("master_port") or 12345),
-        export_path=derive_skyrl_export_path(experiments_subdir, job_name),
+        export_path=str(run_paths.export_dir),
+        trials_dir=str(run_paths.trials_dir),
         needs_ssh_tunnel=hpc.needs_ssh_tunnel,
         needs_cuda_detection=getattr(hpc, "needs_cuda_detection", False),
         # Pinggy tunnel settings (for cloud backends with installed agents)
         pinggy_persistent_url=exp_args.get("pinggy_persistent_url"),
         pinggy_token=exp_args.get("pinggy_token"),
+        ingress_mode=exp_args.get("ingress_mode") or "pinggy",
+        ingress_host=exp_args.get("ingress_host"),
+        record_literal=bool(exp_args.get("record_literal")),
         agent_name=agent_name,
         harbor_env=harbor_env,
+        container_sif=exp_args.get("rl_container_sif"),
+        container_binds=list(
+            exp_args.get("rl_container_binds") or DEFAULT_RL_CONTAINER_BINDS
+        )
+        if exp_args.get("rl_container_sif")
+        else [],
         ray_object_store_gb=float(exp_args.get("ray_object_store_gb", 40.0)),
+        artifact_store_enabled=run_paths.artifact_store is not None,
+        artifact_store_image=(
+            str(run_paths.artifact_store.image) if run_paths.artifact_store else None
+        ),
+        artifact_store_mount=(
+            str(run_paths.artifact_store.mount) if run_paths.artifact_store else None
+        ),
     )
 
     # Populate trace upload settings from parsed terminal_bench config
@@ -708,7 +1363,7 @@ def construct_rl_sbatch_script(exp_args: dict, hpc) -> str:
     sbatch_directives = build_sbatch_directives(hpc, exp_args)
 
     # Generate RL environment exports
-    rl_env_exports = get_rl_env_exports(exp_args, hpc)
+    rl_env_exports = get_rl_env_exports(exp_args, run_paths, hpc)
 
     # Generate CUDA setup code
     cuda_setup = ""
@@ -724,7 +1379,15 @@ fi"""
     skyrl_command = build_skyrl_command_string(job_config)
 
     # Generate RL environment activation code (conda or venv)
-    rl_env_activation = get_rl_env_activation(exp_args)
+    # Containerized clusters (EmpireAI/Pyxis): skip host activation — env is in the .sqsh.
+    if hpc.is_containerized:
+        rl_env_activation = (
+            "# RL Pyxis/Enroot container mode (hpc.container_image set):\n"
+            "# Host venv/conda activation SKIPPED. Python is inside the container.\n"
+            'echo "RL runtime: Pyxis container (host venv/conda activation skipped)"'
+        )
+    else:
+        rl_env_activation = get_rl_env_activation(exp_args)
 
     substitutions = {
         "time_limit": exp_args.get("time_limit") or "24:00:00",
@@ -738,6 +1401,12 @@ fi"""
         "cluster_env_file": hpc.dotenv_filename,
         "cuda_setup": cuda_setup,
         "nccl_exports": hpc.get_nccl_exports(),
+        "rl_container_env": rl_container_env_block,
+        # LATE re-emit of the SAME container.extra_env block, placed after
+        # {rl_env_exports} in the template so config extra_env wins by shell
+        # last-write over the hardcoded `export TORCH_NCCL_*` defaults and the
+        # hpc.env_vars block (idempotent / no-op for non-colliding configs).
+        "rl_container_env_late": rl_container_env_block,
         "rl_env_exports": rl_env_exports,
         "ray_env_exports": hpc.get_ray_env_exports(experiments_subdir),
         "rl_env_activation": rl_env_activation,
@@ -751,6 +1420,9 @@ fi"""
         "email_address": os.environ.get("EMAIL_ADDRESS", ""),
         "harbor_env": job_config.harbor_env,
         "daytona_api_key_override": get_daytona_api_key_override(exp_args),
+        "artifact_store_enabled": "1" if job_config.artifact_store_enabled else "0",
+        "artifact_store_image": job_config.artifact_store_image or "",
+        "artifact_store_mount": job_config.artifact_store_mount or "",
     }
 
     sbatch_text = substitute_template(template_text, substitutions)
@@ -763,7 +1435,11 @@ fi"""
     os.chmod(sbatch_output, 0o750)
     print(f"Wrote RL sbatch script to {sbatch_output}")
 
-    return str(sbatch_output)
+    return RLLaunchArtifacts(
+        sbatch_path=sbatch_output,
+        skyrl_entrypoint=parsed.entrypoint,
+        hydra_args=tuple(hydra_args),
+    )
 
 
 def check_rl_environment() -> Optional[Path]:
@@ -810,7 +1486,6 @@ def launch_rl_job(exp_args: dict, hpc) -> Optional[str]:
         Job ID if submitted, None if dry_run.
     """
     from hpc.launch_utils import launch_sbatch
-    from hpc.rl_config_utils import get_skyrl_command_preview, parse_rl_config, build_skyrl_hydra_args
 
     # Check for RL environment
     rl_env_path = check_rl_environment()
@@ -825,7 +1500,8 @@ def launch_rl_job(exp_args: dict, hpc) -> Optional[str]:
         print("=" * 60 + "\n")
 
     # Construct the sbatch script
-    sbatch_path = construct_rl_sbatch_script(exp_args, hpc)
+    artifacts = construct_rl_sbatch_script(exp_args, hpc)
+    sbatch_path = str(artifacts.sbatch_path)
 
     # Get dependency if specified
     dependency = exp_args.get("dependency")
@@ -836,15 +1512,12 @@ def launch_rl_job(exp_args: dict, hpc) -> Optional[str]:
         if dependency:
             print(f"  Would submit with dependency: {dependency}")
 
-        # Show command preview
-        rl_config_path = exp_args.get("rl_config")
-        if rl_config_path:
-            parsed = parse_rl_config(rl_config_path)
-            hydra_args = build_skyrl_hydra_args(parsed, exp_args, hpc)
-            skyrl_overrides = exp_args.get("skyrl_override") or []
-            hydra_args.extend(skyrl_overrides)
-            print("\nSkyRL command preview:")
-            print(get_skyrl_command_preview(parsed.entrypoint, hydra_args))
+        print("\nSkyRL command preview:")
+        print(
+            get_skyrl_command_preview(
+                artifacts.skyrl_entrypoint, list(artifacts.hydra_args)
+            )
+        )
 
         return None
 
@@ -886,13 +1559,34 @@ class RLJobRunner:
     """
 
     def __init__(self, config: RLJobConfig):
+        if config.artifact_store_enabled and (
+            not config.artifact_store_image or not config.artifact_store_mount
+        ):
+            raise ValueError(
+                "artifact_store_enabled requires artifact_store_image and artifact_store_mount"
+            )
         self.config = config
         self._hpc = None
+        self._active_process: subprocess.Popen | None = None
+        self._termination_requested = False
+
+    def handle_termination(self, signum: int, _frame: object) -> None:
+        """Forward scheduler termination to the active trainer or uploader."""
+        process = self._active_process
+        if process is None or process.poll() is not None:
+            raise SystemExit(128 + signum)
+        self._termination_requested = True
+        print(
+            f"[RLJobRunner] Forwarding signal {signum} to child pid {process.pid}",
+            flush=True,
+        )
+        process.send_signal(signum)
 
     def _get_hpc(self):
         """Lazy-load HPC configuration."""
         if self._hpc is None:
             from hpc.hpc import detect_hpc, clusters
+
             if self.config.cluster_name:
                 for c in clusters:
                     if c.name.lower() == self.config.cluster_name.lower():
@@ -903,6 +1597,46 @@ class RLJobRunner:
             else:
                 self._hpc = detect_hpc()
         return self._hpc
+
+    def _already_complete_on_disk(self) -> bool:
+        """True iff the canonical checkpoint already reached max_steps.
+
+        Reads ``trainer.ckpt_path`` + ``trainer.max_steps`` from the job's Hydra
+        args and compares ``<ckpt_path>/latest_ckpt_global_step.txt`` (the atomic
+        completed-step marker SkyRL writes after each step) against max_steps.
+        Returns True only when BOTH are resolvable and ``completed >= max_steps``.
+
+        Fully defensive: any missing/unparseable input -> False (fall through to
+        normal training). The marker is the same file the trainer's resume-at-max
+        guard keys off, so the two guards agree on what "complete" means.
+        """
+        hydra_args = list(getattr(self.config, "skyrl_hydra_args", []) or [])
+        hydra_values = hydra_override_values(hydra_args)
+        max_steps_raw = hydra_values.get("trainer.max_steps")
+        ckpt_path = hydra_values.get("trainer.ckpt_path")
+        if not max_steps_raw or not ckpt_path:
+            return False
+        try:
+            max_steps = int(max_steps_raw)
+        except (TypeError, ValueError):
+            return False
+        if max_steps <= 0:
+            return False
+
+        marker = Path(ckpt_path) / LATEST_CHECKPOINT_FILE
+        try:
+            completed = int(marker.read_text().strip())
+        except (OSError, ValueError):
+            return False
+
+        if completed >= max_steps:
+            print(
+                f"[RLJobRunner] Completion marker {marker} reports global_step "
+                f"{completed} >= trainer.max_steps {max_steps}.",
+                flush=True,
+            )
+            return True
+        return False
 
     def run(self) -> int:
         """Execute the RL training job.
@@ -916,6 +1650,26 @@ class RLJobRunner:
         """
         print(f"=== RLJobRunner: {self.config.job_name} ===", flush=True)
 
+        # Resume-overshoot CHAIN guard. Each link in the afterany auto-restart
+        # chain runs this before bringing up Ray. If the canonical checkpoint dir
+        # already records a completed global_step >= max_steps, the run is DONE:
+        # skip Ray + training entirely and return 0. Without this, every queued
+        # afterany successor would still spin up a 14/16-node Ray cluster just to
+        # resume-and-immediately-exit (the trainer's own resume-at-max guard makes
+        # that exit clean, but it still wastes the node slot + bring-up time). This
+        # short-circuits the whole remaining chain at ~zero cost. afterany fires
+        # the successor regardless of the predecessor's exit status, so the marker
+        # check — not the exit code — is what actually terminates the chain.
+        self._resolve_resume_for_link()
+        if self._already_complete_on_disk():
+            print(
+                "[RLJobRunner] Canonical checkpoint already at/past max_steps — "
+                "run is COMPLETE. Skipping Ray bring-up and training; exiting 0 "
+                "(short-circuits the remaining afterany restart chain).",
+                flush=True,
+            )
+            return 0
+
         training_exit_code = 1
         try:
             self._setup_environment()
@@ -923,28 +1677,166 @@ class RLJobRunner:
         except Exception as e:
             print(f"RL job failed: {e}", file=sys.stderr, flush=True)
             import traceback
+
             traceback.print_exc()
+
+        if getattr(self, "_termination_requested", False):
+            print(
+                "[RLJobRunner] Trainer stopped for scheduler termination; "
+                "skipping post-run upload so the batch trap can flush artifacts.",
+                flush=True,
+            )
+            return 128 + signal.SIGTERM
+
+        # On a crash, preserve Ray logs BEFORE the (potentially slow) trace
+        # upload. The sbatch EXIT-trap also preserves them, but it only runs
+        # after this Python process returns — and this process then blocks on
+        # the trace upload below. If the wall clock kills the job during that
+        # upload, the trap never completes and the crash evidence (the dead
+        # worker's python-core-worker-*.log) is lost. Preserving here first
+        # guarantees the evidence survives even if the upload is later killed.
+        if training_exit_code != 0:
+            self._preserve_ray_logs_on_crash()
 
         # Upload traces after training (success or failure — partial traces are valuable)
         upload_proc = self._launch_trace_upload(training_exit_code)
         if upload_proc is not None:
-            print(f"[RLJobRunner] Waiting for trace upload to complete...", flush=True)
-            upload_exit_code = upload_proc.wait()
+            print("[RLJobRunner] Waiting for trace upload to complete...", flush=True)
+            self._active_process = upload_proc
+            try:
+                upload_exit_code = upload_proc.wait()
+            finally:
+                self._active_process = None
             if upload_exit_code == 0:
-                print(f"[RLJobRunner] Trace upload completed successfully.", flush=True)
+                print("[RLJobRunner] Trace upload completed successfully.", flush=True)
                 if self.config.trace_upload_cleanup:
-                    trace_jobs_dir = Path(self.config.experiments_dir) / self.config.job_name / "trace_jobs"
-                    if trace_jobs_dir.exists():
+                    trials_dir = Path(self.config.trials_dir)
+                    if trials_dir.exists():
                         import shutil
-                        print(f"[RLJobRunner] Cleaning up traces directory: {trace_jobs_dir}", flush=True)
-                        shutil.rmtree(trace_jobs_dir, ignore_errors=True)
-                        print(f"[RLJobRunner] Traces directory removed.", flush=True)
+
+                        print(
+                            f"[RLJobRunner] Cleaning up traces directory: {trials_dir}",
+                            flush=True,
+                        )
+                        shutil.rmtree(trials_dir, ignore_errors=True)
+                        print("[RLJobRunner] Traces directory removed.", flush=True)
             else:
-                print(f"[RLJobRunner] Trace upload failed with exit code {upload_exit_code}.", flush=True)
+                print(
+                    f"[RLJobRunner] Trace upload failed with exit code {upload_exit_code}.",
+                    flush=True,
+                )
 
         return training_exit_code
 
-    def _launch_trace_upload(self, training_exit_code: int) -> Optional[subprocess.Popen]:
+    def _resolve_resume_for_link(self) -> None:
+        """Re-evaluate automatic resume after a dependency-chain link starts."""
+        if self.config.resume_policy != RLResumePolicy.AT_LINK_START.value:
+            return
+
+        values = hydra_override_values(self.config.skyrl_hydra_args)
+        checkpoint_dir = Path(values["trainer.ckpt_path"])
+        state_root = checkpoint_dir.parent.parent
+        # Recover the resolved placement from the built hydra args so a link-start
+        # resume re-checks the checkpoint world size at the same geometry.
+        placement = {
+            f"{component}_{dimension}": int(values[key])
+            for component in ("policy", "ref")
+            for dimension, key in (
+                ("num_nodes", f"trainer.placement.{component}_num_nodes"),
+                (
+                    "num_gpus_per_node",
+                    f"trainer.placement.{component}_num_gpus_per_node",
+                ),
+            )
+            if key in values
+        }
+        resolved = RLPathManager(self.config.job_name, state_root, state_root).resolve(
+            trainer_config={
+                "ckpt_path": str(checkpoint_dir),
+                "export_path": values["trainer.export_path"],
+            },
+            terminal_bench_config={"trials_dir": self.config.trials_dir},
+            expected_world_sizes=expected_rl_world_sizes(placement),
+        )
+        replacements = {
+            "trainer.resume_mode": resolved.resume_mode.value,
+            "trainer.resume_path": str(resolved.resume_path)
+            if resolved.resume_path is not None
+            else "null",
+        }
+        retained = [
+            argument
+            for argument in self.config.skyrl_hydra_args
+            if argument.lstrip("+").partition("=")[0] not in replacements
+        ]
+        self.config.skyrl_hydra_args = [
+            *retained,
+            *(f"{key}={value}" for key, value in replacements.items()),
+        ]
+
+    def _preserve_ray_logs_on_crash(self) -> None:
+        """Best-effort: preserve Ray logs immediately after a training crash,
+        before the (potentially slow) trace upload, so a wall-clock kill can't
+        destroy the crash evidence.
+
+        Mirrors the sbatch EXIT-trap's ``cleanup_ray_logs`` exactly (head-node
+        ``/tmp/ray`` rsync + the shared ``collect_worker_ray_logs.sh`` for
+        worker nodes) but runs early. Bounded by a timeout so it can never
+        itself hang the job, and fully non-fatal — any failure is logged and
+        ignored. Running twice (here + the EXIT trap) is harmless: rsync is
+        additive.
+        """
+        job_dir = Path(self.config.experiments_dir) / self.config.job_name
+        dest = job_dir / "ray_logs"
+        repo_root = Path(__file__).resolve().parents[1]
+        collector = repo_root / "hpc" / "ray" / "collect_worker_ray_logs.sh"
+
+        # Same steps as the sbatch trap, in the same order.
+        script = (
+            'mkdir -p "$DEST"; '
+            'if [[ -d /tmp/ray ]]; then rsync -a --ignore-errors /tmp/ray/ "$DEST/" 2>/dev/null || true; fi; '
+            "for d in /tmp/ray_logs /tmp/ray_tmp; do "
+            '  if [[ -d "$d" ]]; then rsync -a --ignore-errors "$d/" "$DEST/$(basename "$d")/" 2>/dev/null || true; fi; '
+            "done; "
+            'if [[ -f "$COLLECTOR" ]]; then source "$COLLECTOR"; collect_worker_ray_logs "$DEST"; fi'
+        )
+        env = {**os.environ, "DEST": str(dest), "COLLECTOR": str(collector)}
+
+        print(
+            f"[RLJobRunner] Crash detected (exit!=0) — preserving Ray logs to {dest} "
+            f"BEFORE trace upload (so a wall-clock kill can't lose crash evidence)...",
+            flush=True,
+        )
+        try:
+            subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                # Bounded short (120s, was 600s): on a Ray-bringup failure the
+                # node raylets are already dead/unresponsive, so the worker-log
+                # rsync/collector just blocks until this timeout — adding a full
+                # extra 10min of wedged-allocation on top of the failed bringup
+                # (job 930367 hung ~1h holding 6 nodes while its chain queued
+                # behind it). 120s is ample to grab whatever logs are reachable;
+                # the EXIT-trap cleanup_ray_logs runs again afterward as a belt.
+                timeout=120,
+                stdout=sys.stdout,
+                stderr=subprocess.STDOUT,
+            )
+            print("[RLJobRunner] Crash-time Ray log preservation complete.", flush=True)
+        except subprocess.TimeoutExpired:
+            print(
+                "[RLJobRunner] Crash-time Ray log preservation timed out (120s); continuing.",
+                flush=True,
+            )
+        except Exception as e:
+            print(
+                f"[RLJobRunner] Crash-time Ray log preservation failed (non-fatal): {e}",
+                flush=True,
+            )
+
+    def _launch_trace_upload(
+        self, training_exit_code: int
+    ) -> Optional[subprocess.Popen]:
         """Launch post-training trace upload as a subprocess.
 
         Args:
@@ -954,14 +1846,15 @@ class RLJobRunner:
             Popen handle if upload was launched, None if skipped.
         """
         if not self.config.trace_upload_enabled:
-            print(f"[RLJobRunner] Trace upload disabled, skipping.", flush=True)
+            print("[RLJobRunner] Trace upload disabled, skipping.", flush=True)
             return None
 
-        # The trace jobs directory is where Harbor stores trial artifacts
-        job_dir = Path(self.config.experiments_dir) / self.config.job_name
-        trace_jobs_dir = job_dir / "trace_jobs"
-        if not trace_jobs_dir.exists():
-            print(f"[RLJobRunner] No trace_jobs directory found at {trace_jobs_dir}, skipping upload.", flush=True)
+        trials_dir = Path(self.config.trials_dir)
+        if not trials_dir.exists():
+            print(
+                f"[RLJobRunner] No trials directory found at {trials_dir}, skipping upload.",
+                flush=True,
+            )
             return None
 
         repo_id = f"{self.config.trace_upload_repo_org}/{self.config.job_name}"
@@ -972,16 +1865,25 @@ class RLJobRunner:
         log_path = log_dir / f"{self.config.job_name}_trace_upload.log"
 
         cmd = [
-            sys.executable, "-m", "scripts.harbor.make_and_upload_trace_dataset",
-            "--job_dir", str(job_dir),
-            "--repo_id", repo_id,
-            "--episodes", self.config.trace_upload_episodes,
-            "--dataset_type", self.config.trace_upload_dataset_type,
+            sys.executable,
+            "-m",
+            "scripts.harbor.make_and_upload_trace_dataset",
+            "--job_dir",
+            str(trials_dir),
+            "--repo_id",
+            repo_id,
+            "--episodes",
+            self.config.trace_upload_episodes,
+            "--dataset_type",
+            self.config.trace_upload_dataset_type,
         ]
 
-        print(f"[RLJobRunner] Launching trace upload (training exit code: {training_exit_code}):", flush=True)
+        print(
+            f"[RLJobRunner] Launching trace upload (training exit code: {training_exit_code}):",
+            flush=True,
+        )
         print(f"  repo_id: {repo_id}", flush=True)
-        print(f"  job_dir: {job_dir}", flush=True)
+        print(f"  trials_dir: {trials_dir}", flush=True)
         print(f"  episodes: {self.config.trace_upload_episodes}", flush=True)
         print(f"  log: {log_path}", flush=True)
 
@@ -1021,6 +1923,7 @@ class RLJobRunner:
 
         # Ensure WandB directory is writable
         from hpc.wandb_launch_utils import ensure_wandb_dir
+
         wandb_dir = ensure_wandb_dir(
             experiments_dir=self.config.experiments_dir,
             verbose=True,
@@ -1033,7 +1936,10 @@ class RLJobRunner:
         hf_hub_cache = os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME")
         if hf_token:
             # HF_TOKEN is already in environment, just log it's available
-            print(f"  HF_TOKEN=****{hf_token[-4:] if len(hf_token) > 4 else '****'}", flush=True)
+            print(
+                f"  HF_TOKEN=****{hf_token[-4:] if len(hf_token) > 4 else '****'}",
+                flush=True,
+            )
         if hf_hub_cache:
             os.environ["HF_HUB_CACHE"] = hf_hub_cache
             print(f"  HF_HUB_CACHE={hf_hub_cache}", flush=True)
@@ -1042,16 +1948,26 @@ class RLJobRunner:
         # KEYS should point to a file with SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
         keys_path = os.environ.get("KEYS")
         if keys_path:
-            print(f"  KEYS={keys_path} (Supabase credentials for DB registration)", flush=True)
+            print(
+                f"  KEYS={keys_path} (Supabase credentials for DB registration)",
+                flush=True,
+            )
         else:
             # Also check if Supabase vars are set directly
             supabase_url = os.environ.get("SUPABASE_URL")
             if supabase_url:
-                print(f"  SUPABASE_URL={supabase_url[:30]}... (direct Supabase config)", flush=True)
+                print(
+                    f"  SUPABASE_URL={supabase_url[:30]}... (direct Supabase config)",
+                    flush=True,
+                )
 
-        print(f"Environment configured:", flush=True)
-        print(f"  TENSOR_PARALLEL_SIZE={os.environ['TENSOR_PARALLEL_SIZE']}", flush=True)
-        print(f"  NUM_INFERENCE_ENGINES={os.environ['NUM_INFERENCE_ENGINES']}", flush=True)
+        print("Environment configured:", flush=True)
+        print(
+            f"  TENSOR_PARALLEL_SIZE={os.environ['TENSOR_PARALLEL_SIZE']}", flush=True
+        )
+        print(
+            f"  NUM_INFERENCE_ENGINES={os.environ['NUM_INFERENCE_ENGINES']}", flush=True
+        )
         print(f"  POLICY_NUM_NODES={os.environ['POLICY_NUM_NODES']}", flush=True)
         print(f"  WANDB_DIR={wandb_dir}", flush=True)
 
@@ -1065,11 +1981,12 @@ class RLJobRunner:
             RayCluster,
             RayClusterConfig,
             compute_ray_memory_from_slurm,
-            DEFAULT_OBJECT_STORE_MEMORY_BYTES,
         )
 
         hpc = self._get_hpc()
-        setattr(self.config, "proxychains_binary", getattr(hpc, "proxychains_binary", None))
+        setattr(
+            self.config, "proxychains_binary", getattr(hpc, "proxychains_binary", None)
+        )
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", self.config.num_nodes))
 
         # Use config values (from CLI overrides) instead of cluster defaults
@@ -1079,7 +1996,10 @@ class RLJobRunner:
         # Compute Ray memory limit from SLURM allocation (prevents OOM from over-detection)
         ray_memory = compute_ray_memory_from_slurm()
         if ray_memory:
-            print(f"[RLJobRunner] Ray memory limit: {ray_memory / (1024**3):.1f} GB", flush=True)
+            print(
+                f"[RLJobRunner] Ray memory limit: {ray_memory / (1024**3):.1f} GB",
+                flush=True,
+            )
 
         ray_cfg = RayClusterConfig(
             num_nodes=num_nodes,
@@ -1089,27 +2009,138 @@ class RLJobRunner:
             srun_export_env=hpc.get_srun_export_env(),
             ray_env_vars=hpc.get_ray_env_vars(),
             memory_per_node=ray_memory,
-            object_store_memory=int(self.config.ray_object_store_gb * 1024 * 1024 * 1024),
+            object_store_memory=int(
+                self.config.ray_object_store_gb * 1024 * 1024 * 1024
+            ),
             disable_cpu_bind=getattr(hpc, "disable_cpu_bind", False),
             gpu_bind=getattr(hpc, "gpu_bind", "none"),
             proxychains_binary=getattr(hpc, "proxychains_binary", None),
+            # Apptainer RL runtime mode (OPT-IN): wrap ray start / ray.init()
+            # wait scripts in `apptainer exec --nv` when a SIF is configured.
+            container_sif=getattr(self.config, "container_sif", None),
+            container_binds=list(getattr(self.config, "container_binds", []) or []),
+            container_pythonpath=_build_container_pythonpath()
+            if getattr(self.config, "container_sif", None)
+            else "",
         )
 
-        print(f"Starting Ray cluster with {num_nodes} nodes, {gpus_per_node} GPUs/node", flush=True)
+        print(
+            f"Starting Ray cluster with {num_nodes} nodes, {gpus_per_node} GPUs/node",
+            flush=True,
+        )
 
         with RayCluster.from_slurm(ray_cfg) as ray_cluster:
             # Set RAY_ADDRESS for SkyRL to connect
             os.environ["RAY_ADDRESS"] = ray_cluster.address
             print(f"Ray cluster ready at {ray_cluster.address}", flush=True)
             print(f"Total GPUs available: {ray_cluster.total_gpus}", flush=True)
+            if self.config.artifact_store_enabled:
+                self._set_hydra_override(
+                    "trainer.entrypoint_node_ip", ray_cluster.head_ip, optional=True
+                )
+                record = write_authority_record(
+                    Path(self.config.artifact_store_image),
+                    job_id=os.environ.get("SLURM_JOB_ID", ""),
+                    node=ray_cluster.node_list[0],
+                    node_ip=ray_cluster.head_ip,
+                    mount_path=Path(self.config.artifact_store_mount),
+                )
+                print(
+                    "[artifact_store] Pinned the SkyRL entrypoint and Harbor coordinators "
+                    f"to the artifact authority node at {ray_cluster.head_ip}; record={record}",
+                    flush=True,
+                )
 
             # Enable distributed containers for multi-node local backend jobs
             # This allows Harbor to spread container workload across all Ray nodes
             local_backends = {"podman_hpc", "docker", "apptainer"}
             if ray_cluster.total_nodes > 1 and self.config.harbor_env in local_backends:
                 os.environ["HARBOR_DISTRIBUTED_CONTAINERS"] = "1"
-                print(f"[RLJobRunner] Enabled distributed {self.config.harbor_env} "
-                      f"across {ray_cluster.total_nodes} nodes", flush=True)
+                print(
+                    f"[RLJobRunner] Enabled distributed {self.config.harbor_env} "
+                    f"across {ray_cluster.total_nodes} nodes",
+                    flush=True,
+                )
+
+            # Controller-ingress mode: replace the pinggy tunnel with a stable
+            # public URL fronting the controller proxy. Only reroutes cloud
+            # backends (needs_pinggy_tunnel); local backends keep direct vLLM.
+            # In the default "pinggy" mode this branch is skipped entirely, so
+            # the legacy path below is byte-identical.
+            if self.config.ingress_mode == "controller":
+                from hpc.pinggy_utils import needs_pinggy_tunnel
+                from hpc.ingress_utils import (
+                    capability_api_base,
+                    controller_registration_plan,
+                    inject_ingress_agent_key,
+                    register_controller_endpoint,
+                )
+
+                if needs_pinggy_tunnel(self.config.agent_name, self.config.harbor_env):
+                    if not self.config.ingress_host:
+                        raise ValueError(
+                            "--ingress-mode controller requires --ingress-host "
+                            "(the public controller-ingress host)."
+                        )
+                    # Register the co-located upstream with the iris controller under
+                    # ENDPOINT_ACCESS_LINK, then mint a scoped capability token and
+                    # build the /proxy/t/<token>/<name>/v1 api_base. The upstream is
+                    # the RecordProxy (record_literal: controller -> RecordProxy ->
+                    # vLLM, so literal tokens are captured) or raw vLLM otherwise; the
+                    # proxy binds 0.0.0.0 so the (remote) controller reaches it at
+                    # IRIS_ADVERTISE_HOST. record_literal off = maybe_serve_literal_proxy
+                    # is a null CM (no proxy) and the plan registers raw vLLM's port.
+                    from hpc.literal_proxy_utils import (
+                        maybe_serve_literal_proxy,
+                        DEFAULT_LITERAL_PROXY_PORT,
+                    )
+
+                    endpoint_name, register_address = controller_registration_plan(
+                        self.config.job_name,
+                        record_literal=self.config.record_literal,
+                        proxy_port=DEFAULT_LITERAL_PROXY_PORT,
+                    )
+                    _RL_VLLM_LOCAL = "http://localhost:8000/v1"
+                    with maybe_serve_literal_proxy(
+                        self.config.record_literal,
+                        _RL_VLLM_LOCAL,
+                        experiments_dir=self.config.experiments_dir,
+                        job_name=self.config.job_name,
+                        host="0.0.0.0",
+                    ):
+                        # The leased EndpointClient must stay alive for the whole
+                        # skyrl run; _run_skyrl runs synchronously here, so close
+                        # (stop renewal + unregister) after it.
+                        registration = register_controller_endpoint(
+                            endpoint_name, register_address
+                        )
+                        try:
+                            # Mint + build the capability api_base AFTER register
+                            # (the mint resolves the just-registered endpoint).
+                            api_base = capability_api_base(
+                                self.config.ingress_host, endpoint_name
+                            )
+                            os.environ["HARBOR_MODEL_ENDPOINT"] = api_base
+                            injected = inject_ingress_agent_key()
+                            print(
+                                f"[RLJobRunner] ingress_mode=controller "
+                                f"record_literal={self.config.record_literal}: registered "
+                                f"{endpoint_name} -> {register_address} "
+                                f"(id={registration.endpoint_id}, access=LINK); "
+                                f"HARBOR_MODEL_ENDPOINT=/proxy/t/<token>/{endpoint_name}/v1 "
+                                f"(dummy key injected={injected})",
+                                flush=True,
+                            )
+                            return self._run_skyrl()
+                        finally:
+                            registration.close()
+                else:
+                    print(
+                        "[RLJobRunner] ingress_mode=controller but local backend "
+                        "(no ingress needed), using local vLLM",
+                        flush=True,
+                    )
+                    return self._run_skyrl()
 
             # Check if Pinggy tunnel is needed for installed agents in cloud backends
             from hpc.pinggy_utils import (
@@ -1120,41 +2151,86 @@ class RLJobRunner:
 
             has_url = bool(self.config.pinggy_persistent_url)
             has_token = bool(self.config.pinggy_token)
-            needs_tunnel = needs_pinggy_tunnel(self.config.agent_name, self.config.harbor_env)
+            needs_tunnel = needs_pinggy_tunnel(
+                self.config.agent_name, self.config.harbor_env
+            )
             use_pinggy = has_url and has_token and needs_tunnel
 
-            print(f"[RLJobRunner] Pinggy check: url={has_url}, token={has_token}, "
-                  f"needs_tunnel={needs_tunnel} (agent={self.config.agent_name}, "
-                  f"env={self.config.harbor_env})", flush=True)
+            print(
+                f"[RLJobRunner] Pinggy check: url={has_url}, token={has_token}, "
+                f"needs_tunnel={needs_tunnel} (agent={self.config.agent_name}, "
+                f"env={self.config.harbor_env})",
+                flush=True,
+            )
 
-            if use_pinggy:
-                # SkyRL's vLLM HTTP endpoint typically runs on port 8000
-                # The tunnel must be started BEFORE SkyRL so the port is available
-                vllm_port = 8000
+            # Co-locate harbor's RecordProxy in front of SkyRL's vLLM (localhost:8000)
+            # when --record_literal is set, so agent completions are captured to a
+            # literal.jsonl log. Default off = a null context manager that starts no
+            # server and leaves the tunnel port + HARBOR_MODEL_ENDPOINT exactly as
+            # today (byte-identical). When on, the tunnel fronts the proxy port and
+            # the local path routes Harbor through the proxy.
+            from hpc.literal_proxy_utils import (
+                maybe_serve_literal_proxy,
+                DEFAULT_LITERAL_PROXY_PORT,
+            )
 
-                pinggy_cfg = PinggyConfig(
-                    persistent_url=self.config.pinggy_persistent_url,
-                    token=self.config.pinggy_token,
-                    local_port=vllm_port,
-                    local_host="localhost",
-                )
+            _RL_VLLM_LOCAL = "http://localhost:8000/v1"
+            with maybe_serve_literal_proxy(
+                self.config.record_literal,
+                _RL_VLLM_LOCAL,
+                experiments_dir=self.config.experiments_dir,
+                job_name=self.config.job_name,
+            ) as literal_endpoint:
+                if use_pinggy:
+                    # SkyRL's vLLM HTTP endpoint typically runs on port 8000; when
+                    # capturing literal tokens the tunnel must front the proxy port.
+                    # The tunnel must be started BEFORE SkyRL so the port is available.
+                    vllm_port = (
+                        DEFAULT_LITERAL_PROXY_PORT
+                        if self.config.record_literal
+                        else 8000
+                    )
 
-                log_dir = Path(self.config.experiments_dir) / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                pinggy_log = log_dir / f"{self.config.job_name}_pinggy.log"
+                    pinggy_cfg = PinggyConfig(
+                        persistent_url=self.config.pinggy_persistent_url,
+                        token=self.config.pinggy_token,
+                        local_port=vllm_port,
+                        local_host="localhost",
+                    )
 
-                print(f"[RLJobRunner] Starting Pinggy tunnel: localhost:{vllm_port} -> "
-                      f"{self.config.pinggy_persistent_url}", flush=True)
+                    log_dir = Path(self.config.experiments_dir) / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    pinggy_log = log_dir / f"{self.config.job_name}_pinggy.log"
 
-                with PinggyTunnel(pinggy_cfg, log_path=pinggy_log) as tunnel:
-                    # Set environment variable for SkyRL/Harbor to use public endpoint
-                    # Terminal bench reads this to configure the hosted_vllm backend
-                    os.environ["HARBOR_MODEL_ENDPOINT"] = tunnel.public_endpoint
-                    print(f"[RLJobRunner] HARBOR_MODEL_ENDPOINT={tunnel.public_endpoint}", flush=True)
+                    print(
+                        f"[RLJobRunner] Starting Pinggy tunnel: localhost:{vllm_port} -> "
+                        f"{self.config.pinggy_persistent_url}",
+                        flush=True,
+                    )
+
+                    with PinggyTunnel(pinggy_cfg, log_path=pinggy_log) as tunnel:
+                        # Set environment variable for SkyRL/Harbor to use public endpoint
+                        # Terminal bench reads this to configure the hosted_vllm backend
+                        os.environ["HARBOR_MODEL_ENDPOINT"] = tunnel.public_endpoint
+                        print(
+                            f"[RLJobRunner] HARBOR_MODEL_ENDPOINT={tunnel.public_endpoint}",
+                            flush=True,
+                        )
+                        return self._run_skyrl()
+                else:
+                    if self.config.record_literal:
+                        # Route Harbor through the co-located proxy instead of vLLM directly.
+                        os.environ["HARBOR_MODEL_ENDPOINT"] = literal_endpoint
+                        print(
+                            f"[RLJobRunner] record_literal: HARBOR_MODEL_ENDPOINT={literal_endpoint}",
+                            flush=True,
+                        )
+                        return self._run_skyrl()
+                    print(
+                        "[RLJobRunner] No Pinggy tunnel needed, using local vLLM",
+                        flush=True,
+                    )
                     return self._run_skyrl()
-            else:
-                print(f"[RLJobRunner] No Pinggy tunnel needed, using local vLLM", flush=True)
-                return self._run_skyrl()
 
     def _run_skyrl(self) -> int:
         """Execute SkyRL training.
@@ -1162,18 +2238,36 @@ class RLJobRunner:
         Returns:
             Exit code from SkyRL process.
         """
-        # Build command - use sys.executable to ensure we use the same Python
-        # as the current process (respects conda/venv activation)
-        cmd = [sys.executable, "-m", self.config.skyrl_entrypoint]
+        # Build command. In the default (host venv/conda) path we use
+        # sys.executable so we run the same Python as the current process
+        # (which the sbatch activated). In Apptainer mode the Python comes
+        # from inside the SIF, so we use a bare "python" prefixed with the
+        # apptainer-exec list.
+        container_sif = getattr(self.config, "container_sif", None)
+        if container_sif:
+            apptainer_prefix = build_apptainer_prefix(
+                container_sif,
+                binds=self.config.container_binds or None,
+                pythonpath=_build_container_pythonpath(),
+            )
+            cmd = apptainer_prefix + ["python", "-m", self.config.skyrl_entrypoint]
+        else:
+            cmd = [sys.executable, "-m", self.config.skyrl_entrypoint]
         cmd.extend(self.config.skyrl_hydra_args)
 
-        print(f"\nRunning SkyRL:", flush=True)
-        print(f"  Python: {sys.executable}", flush=True)
+        print("\nRunning SkyRL:", flush=True)
+        if container_sif:
+            print(f"  Runtime: Apptainer SIF {container_sif}", flush=True)
+        else:
+            print(f"  Python: {sys.executable}", flush=True)
         print(f"  Entrypoint: {self.config.skyrl_entrypoint}", flush=True)
-        print(f"  Args: {len(self.config.skyrl_hydra_args)} Hydra arguments", flush=True)
+        print(
+            f"  Args: {len(self.config.skyrl_hydra_args)} Hydra arguments", flush=True
+        )
 
-        # Change to SKYRL_HOME if set
-        skyrl_home = os.environ.get("SKYRL_HOME")
+        # Change to SKYRL_HOME if set (resolved with {SkyRL, MarinSkyRL}
+        # dir-name hardening; honors SKYRL_HOME / RL_REPO_DIR override first).
+        skyrl_home = _resolve_skyrl_home()
         cwd = None
         if skyrl_home:
             cwd = os.path.join(skyrl_home, "skyrl-train")
@@ -1182,16 +2276,40 @@ class RLJobRunner:
             else:
                 cwd = None
 
+        # Proxychains stays OUTSIDE the apptainer exec: egress is handled at the
+        # host layer (proxychains4 -f <conf> apptainer exec ... python ...), so
+        # the container needn't know about proxychains. See design doc §5.
         if self.config.proxychains_binary:
-            print(f"Using proxychains binary: {self.config.proxychains_binary}", flush=True)
-            cmd = [f'{self.config.proxychains_binary}', '-f', "$PROXYCHAINS_CONF_FILE"] + cmd
+            print(
+                f"Using proxychains binary: {self.config.proxychains_binary}",
+                flush=True,
+            )
+            cmd = [
+                f"{self.config.proxychains_binary}",
+                "-f",
+                "$PROXYCHAINS_CONF_FILE",
+            ] + cmd
 
         srun_cmd = cmd
 
         print(f"\nExecuting command with srun: {' '.join(srun_cmd)}", flush=True)
 
-        result = subprocess.run(srun_cmd, cwd=cwd)
-        return result.returncode
+        process = subprocess.Popen(srun_cmd, cwd=cwd)
+        self._active_process = process
+        try:
+            return process.wait()
+        finally:
+            self._active_process = None
+
+    def _set_hydra_override(self, key: str, value: object, *, optional: bool) -> None:
+        """Replace one Hydra value while preserving all unrelated arguments."""
+        retained = [
+            argument
+            for argument in self.config.skyrl_hydra_args
+            if argument.lstrip("+").partition("=")[0] != key
+        ]
+        prefix = "++" if optional else ""
+        self.config.skyrl_hydra_args = [*retained, f"{prefix}{key}={value}"]
 
 
 def run_rl_job_main():
@@ -1211,6 +2329,7 @@ def run_rl_job_main():
 
     config = RLJobConfig(**config_dict)
     runner = RLJobRunner(config)
+    signal.signal(signal.SIGTERM, runner.handle_termination)
     sys.exit(runner.run())
 
 

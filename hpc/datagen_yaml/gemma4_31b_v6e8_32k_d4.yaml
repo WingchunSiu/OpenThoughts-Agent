@@ -1,8 +1,3 @@
-# D4: A3 + prefix + chunked + FP8
-# Based on A3 (TP=8 seqs=8 block=64 mem=0.85 bf16-KV flax_nnx) = best stable
-# C-tier baseline at 129.9 tok/s gen avg. D-tier adds one or more of:
-# prefix caching, chunked prefill, FP8 KV cache. 2-bit/turboquant KV is not
-# supported in tpu-inference 0.20.0 → skipped.
 env_vars:
   MODEL_IMPL_TYPE: auto
 engine:

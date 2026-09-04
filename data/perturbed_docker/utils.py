@@ -28,12 +28,16 @@ def _coerce_model(model_cls: type[BaseModel], payload: object) -> BaseModel:
         return model_cls.model_validate(payload)
     if isinstance(payload, str):
         return model_cls.model_validate_json(payload)
-    raise TypeError(f"Unexpected payload type for {model_cls.__name__}: {type(payload)!r}")
+    raise TypeError(
+        f"Unexpected payload type for {model_cls.__name__}: {type(payload)!r}"
+    )
 
 
 class BaselineBlock(curator.LLM):
     def __init__(self, **kwargs):
-        super().__init__(model_name=MODEL_NAME, response_format=BaselineDockerfile, **kwargs)
+        super().__init__(
+            model_name=MODEL_NAME, response_format=BaselineDockerfile, **kwargs
+        )
 
     def prompt(self, row: dict[str, str]) -> str:
         return build_baseline_prompt(row["instruction"])
@@ -50,7 +54,9 @@ class BaselineBlock(curator.LLM):
 
 class VariantBlock(curator.LLM):
     def __init__(self, **kwargs):
-        super().__init__(model_name=MODEL_NAME, response_format=VariantResponse, **kwargs)
+        super().__init__(
+            model_name=MODEL_NAME, response_format=VariantResponse, **kwargs
+        )
 
     def prompt(self, row: dict[str, str]) -> str:
         return build_variant_prompt(row)
@@ -65,7 +71,9 @@ class VariantBlock(curator.LLM):
 
 class JudgeBlock(curator.LLM):
     def __init__(self, **kwargs):
-        super().__init__(model_name=MODEL_NAME, response_format=JudgmentResponse, **kwargs)
+        super().__init__(
+            model_name=MODEL_NAME, response_format=JudgmentResponse, **kwargs
+        )
 
     def prompt(self, row: dict[str, object]) -> str:
         return build_judge_prompt(row)
@@ -118,11 +126,14 @@ def _select_variant(row: dict[str, object]) -> SelectionResult:
         selection_reason=reason or "Selected based on reviewer scores.",
     )
 
+
 @gcs_cache()
 def generate_dockerfiles_with_perturbations(instructions: list[str]) -> list[str]:
     """Run the baseline -> variants -> judge -> select pipeline and return final Dockerfiles."""
 
-    rows: list[dict[str, object]] = [{"instruction": instruction} for instruction in instructions]
+    rows: list[dict[str, object]] = [
+        {"instruction": instruction} for instruction in instructions
+    ]
 
     baseline_block = BaselineBlock()
     variant_block = VariantBlock()

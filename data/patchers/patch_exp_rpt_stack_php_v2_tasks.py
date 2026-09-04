@@ -64,6 +64,7 @@ Constraints (per upload spec):
     so re-running either patcher on the wrong tree leaves a
     different-but-still-idempotent fingerprint.
 """
+
 from __future__ import annotations
 
 import argparse

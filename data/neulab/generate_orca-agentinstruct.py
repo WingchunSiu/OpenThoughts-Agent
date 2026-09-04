@@ -6,8 +6,12 @@ Always upsamples to 10k tasks, then subsamples to 10k (in case dataset is larger
 
 from typing import List
 from datasets import load_dataset
-from data.commons import generate_tasks_from_questions, upsample_tasks_directory, subsample_tasks_directory, upload_tasks_to_hf, upload_traces_to_hf
-from scripts.harbor.run_and_export_traces import run_dataset_to_traces
+from data.commons import (
+    generate_tasks_from_questions,
+    upsample_tasks_directory,
+    subsample_tasks_directory,
+    upload_tasks_to_hf,
+)
 
 
 def extract_orca_agentinstruct_questions() -> List[str]:
@@ -15,7 +19,10 @@ def extract_orca_agentinstruct_questions() -> List[str]:
     Load orca_agentinstruct subset directly from raw jsonl file and extract questions.
     """
     print("Loading orca_agentinstruct dataset from raw jsonl...")
-    ds = load_dataset("json", data_files="hf://datasets/neulab/agent-data-collection/orca_agentinstruct/full_raw.jsonl")
+    ds = load_dataset(
+        "json",
+        data_files="hf://datasets/neulab/agent-data-collection/orca_agentinstruct/full_raw.jsonl",
+    )
     dataset = ds["train"]
     print(f"Loaded {len(dataset)} examples")
 
@@ -34,11 +41,13 @@ def extract_orca_agentinstruct_questions() -> List[str]:
 def main() -> None:
     # Extract questions from the subset (using custom loader)
     questions = extract_orca_agentinstruct_questions()
-    
+
     # Generate tasks from questions
     print("Generating tasks from questions...")
-    tasks_dir = generate_tasks_from_questions(questions, dataset_prefix="orca-agentinstruct")
-    
+    tasks_dir = generate_tasks_from_questions(
+        questions, dataset_prefix="orca-agentinstruct"
+    )
+
     # Upsample to 10k (if less than 10k)
     print("Upsampling to 10k tasks...")
     tasks_dir = upsample_tasks_directory(
@@ -46,7 +55,7 @@ def main() -> None:
         num_samples=10_000,
         dataset_prefix="orca-agentinstruct",
     )
-    
+
     # Subsample to 10k (in case more than 10k)
     print("Subsampling to 10k tasks...")
     tasks_dir = subsample_tasks_directory(
@@ -54,7 +63,7 @@ def main() -> None:
         num_samples=10_000,
         dataset_prefix="orca-agentinstruct",
     )
-    
+
     # Upload tasks to HF
     print("Uploading tasks to HuggingFace...")
     upload_tasks_to_hf(
@@ -62,7 +71,7 @@ def main() -> None:
         repo_id="DCAgent/neulab-orca-agentinstruct-sandboxes",
         commit_message="Upload orca_agentinstruct sandboxes (10k tasks)",
     )
-    
+
     # Generate and upload traces
     # print("Generating traces...")
     # hf_dataset = run_dataset_to_traces(
@@ -72,14 +81,14 @@ def main() -> None:
     #     n_concurrent=256,
     #     agent_kwargs={"max_episodes": 8},
     # )
-    
+
     # print("Uploading traces...")
     # upload_traces_to_hf(
     #     hf_dataset,
     #     "DCAgent/neulab-orca-agentinstruct-sandboxes-traces-terminus-2",
     #     "SFT"
     # )
-    
+
     print("Done!")
 
 

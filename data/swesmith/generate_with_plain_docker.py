@@ -9,7 +9,11 @@ from pathlib import Path
 import tempfile
 
 from datasets import load_dataset
-from data.commons import upload_tasks_to_hf, upload_traces_to_hf, subsample_tasks_directory
+from data.commons import (
+    upload_tasks_to_hf,
+    upload_traces_to_hf,
+    subsample_tasks_directory,
+)
 from data.swesmith.task_templates import (
     PLAIN_DOCKERFILE,
     TASK_TOML,
@@ -27,7 +31,7 @@ def create_sandboxed_task(datum: dict, out_root: Path, idx: int) -> None:
     """Create one sandbox directory with instruction, environment, solution, basic test harness, and metadata."""
     rp = registry.get_from_inst(datum)
     test_commands, _ = rp.get_test_cmd(datum)
-    
+
     d = out_root / f"swesmith-{idx:05d}"
 
     (d / "environment").mkdir(parents=True, exist_ok=True)
@@ -35,7 +39,7 @@ def create_sandboxed_task(datum: dict, out_root: Path, idx: int) -> None:
     (d / "tests").mkdir(parents=True, exist_ok=True)
 
     (d / "task.toml").write_text(TASK_TOML, encoding="utf-8")
-    
+
     instruction = (
         f"{datum['problem_statement'].strip()}\n\n"
         f"Before starting to solve the problem, make sure you clone the repo "
@@ -45,7 +49,7 @@ def create_sandboxed_task(datum: dict, out_root: Path, idx: int) -> None:
         render_instruction_md(instruction),
         encoding="utf-8",
     )
-    
+
     (d / "environment" / "Dockerfile").write_text(PLAIN_DOCKERFILE, encoding="utf-8")
 
     if datum["patch"].strip():
@@ -60,8 +64,7 @@ def create_sandboxed_task(datum: dict, out_root: Path, idx: int) -> None:
         encoding="utf-8",
     )
 
-    
-    instance_id = datum['instance_id']
+    instance_id = datum["instance_id"]
     test_commands, _ = rp.get_test_cmd(datum)
     run_command = f"git checkout {instance_id}; git checkout HEAD~1; {test_commands}"
     test_sh = render_test_sh(run_command)
@@ -97,19 +100,33 @@ def create_sandboxed_tasks(limit: int, offset: int = 0) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Generate swesmith sandboxes and upload to HF")
-    p.add_argument("--out-dir", type=Path, default=Path("data/swesmith/swesmith_with_plain_docker-sandboxes"),
-                   help="Local directory to generate tasks into")
-    p.add_argument("--limit", type=int, default=10000,
-                   help="Max number of tasks to generate")
-    p.add_argument("--offset", type=int, default=0,
-                   help="Dataset row offset to start from")
-    p.add_argument("--repo-id", type=str, default="mlfoundations-dev/swesmith_with_plain_docker-sandboxes",
-                   help="Dataset repo id on HF")
-    p.add_argument("--private", action="store_true",
-                   help="Create/update HF repo as private")
-    p.add_argument("--no-upload", action="store_true",
-                   help="Skip the upload step (generate only)")
+    p = argparse.ArgumentParser(
+        description="Generate swesmith sandboxes and upload to HF"
+    )
+    p.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("data/swesmith/swesmith_with_plain_docker-sandboxes"),
+        help="Local directory to generate tasks into",
+    )
+    p.add_argument(
+        "--limit", type=int, default=10000, help="Max number of tasks to generate"
+    )
+    p.add_argument(
+        "--offset", type=int, default=0, help="Dataset row offset to start from"
+    )
+    p.add_argument(
+        "--repo-id",
+        type=str,
+        default="mlfoundations-dev/swesmith_with_plain_docker-sandboxes",
+        help="Dataset repo id on HF",
+    )
+    p.add_argument(
+        "--private", action="store_true", help="Create/update HF repo as private"
+    )
+    p.add_argument(
+        "--no-upload", action="store_true", help="Skip the upload step (generate only)"
+    )
     return p.parse_args()
 
 
@@ -117,17 +134,27 @@ def main() -> None:
     args = parse_args()
 
     print(f"[1/2] Generating sandboxes (limit={args.limit}, offset={args.offset})")
-    tasks_dir = create_sandboxed_tasks(limit=args.limit, offset=args.offset) 
+    tasks_dir = create_sandboxed_tasks(limit=args.limit, offset=args.offset)
     final_dataset_dir = subsample_tasks_directory(
         source_dir=tasks_dir,
         num_samples=10_000,
     )
     upload_tasks_to_hf(
         dataset_path=final_dataset_dir,
-        repo_id="mlfoundations-dev/swesmith_with_plain_docker-sandboxes"
+        repo_id="mlfoundations-dev/swesmith_with_plain_docker-sandboxes",
     )
-    hf_dataset = run_dataset_to_traces(final_dataset_dir, model_name="gpt-5-nano-2025-08-07", agent_name="terminus-2", n_concurrent=128, agent_kwargs={"max_episodes": 8})
-    upload_traces_to_hf(hf_dataset, "mlfoundations-dev/swesmith_with_plain_docker-sandboxes-traces-terminus-2", "SFT")
+    hf_dataset = run_dataset_to_traces(
+        final_dataset_dir,
+        model_name="gpt-5-nano-2025-08-07",
+        agent_name="terminus-2",
+        n_concurrent=128,
+        agent_kwargs={"max_episodes": 8},
+    )
+    upload_traces_to_hf(
+        hf_dataset,
+        "mlfoundations-dev/swesmith_with_plain_docker-sandboxes-traces-terminus-2",
+        "SFT",
+    )
 
 
 if __name__ == "__main__":

@@ -163,8 +163,10 @@ def start_podman_socket(timeout: int = 10) -> bool:
         log_debug(f"Failed to start podman-hpc service: {e}")
 
     log_error(f"Podman socket not found at {socket_path}")
-    log_debug(f"Attempted to start via 'podman-hpc system service --time=0'")
-    log_hint("Run 'systemctl --user start podman.socket' or check podman-hpc installation")
+    log_debug("Attempted to start via 'podman-hpc system service --time=0'")
+    log_hint(
+        "Run 'systemctl --user start podman.socket' or check podman-hpc installation"
+    )
     return False
 
 
@@ -255,11 +257,13 @@ def ensure_podman_hpc_ready(timeout: int = 10) -> PodmanHPCConfig:
     if not is_podman_hpc_available():
         log_error("podman-hpc command not found")
         log_debug("Checked: which podman-hpc")
-        log_hint("On Perlmutter, podman-hpc should be available. Contact support if missing.")
+        log_hint(
+            "On Perlmutter, podman-hpc should be available. Contact support if missing."
+        )
         raise RuntimeError(
-            f"podman-hpc not available. "
-            f"Checked 'which podman-hpc'. "
-            f"On NERSC Perlmutter, this should be available by default."
+            "podman-hpc not available. "
+            "Checked 'which podman-hpc'. "
+            "On NERSC Perlmutter, this should be available by default."
         )
 
     socket_path = get_podman_socket_path()
@@ -379,13 +383,19 @@ def get_squashed_images() -> List[str]:
             timeout=30,
         )
         if result.returncode == 0:
-            return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+            return [
+                line.strip()
+                for line in result.stdout.strip().split("\n")
+                if line.strip()
+            ]
     except Exception:
         pass
     return []
 
 
-def pre_migrate_images(images: List[str], timeout_per_image: int = 600) -> Dict[str, bool]:
+def pre_migrate_images(
+    images: List[str], timeout_per_image: int = 600
+) -> Dict[str, bool]:
     """Pre-migrate multiple images for HPC shared storage.
 
     This is similar to pre_download_dataset() for JSC clusters - it runs

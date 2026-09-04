@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Bi-directional converter between a directory of Harbor tasks and a Parquet
 dataset (HF-compatible) with one row per task.
@@ -8,38 +6,21 @@ Schema:
 - path: str (relative path from the provided base directory to the task dir)
 - task_binary: binary (tar archive bytes; defaults to gzip-compressed)
 
-Usage examples:
+Usage:
 
-  # Directory -> Parquet (recursive)
-  python scripts/harbor/tasks_parquet_converter.py to-parquet \
-      --base harbor/tasks \
-      --out tasks.parquet \
-      --recursive \
-      --compression gz
+  # Convert a task directory and upload it to a Hub dataset repository.
+  python -m scripts.harbor.tasks_parquet_converter upload-hf \
+      --tasks-dir harbor/tasks \
+      --repo-id laion/my-tasks
 
-  # Directory -> Parquet (fixed depth: 1 means direct children)
-  python scripts/harbor/tasks_parquet_converter.py to-parquet \
-      --base harbor/tasks \
-      --out tasks.parquet \
-      --depth 1
-
-  # Parquet -> Directory (extract back)
-  python scripts/harbor/tasks_parquet_converter.py from-parquet \
-      --parquet tasks.parquet \
-      --base harbor/tasks_restored \
-      --on-exist error
-
-  # Roundtrip test (compress then decompress and verify)
-  python scripts/harbor/tasks_parquet_converter.py roundtrip-test \
-      --base harbor/tasks \
-      --out /tmp/rt \
-      --recursive \
-      --compression gz
+Use ``to_parquet()`` and ``from_parquet()`` from Python for local conversion.
 
 Notes:
 - Requires pyarrow to write/read Parquet (install via `pip install pyarrow`).
 - Task detection relies on presence of an `instruction.md` inside the task directory.
 """
+
+from __future__ import annotations
 
 import argparse
 import io
@@ -50,10 +31,9 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Iterator, Sequence
+from typing import Iterator, Sequence
 from tqdm import tqdm
 from datasets import load_dataset
-from data.gcs_cache import gcs_cache
 
 # Optional heavy imports; provide clear error if missing when used.
 try:
@@ -80,9 +60,11 @@ def _require_pyarrow() -> tuple[object, object]:
         )
     return pa, pq  # type: ignore[return-value]
 
+
 def find_logs(base: Path) -> list[Path]:
     """Return all subdirectories under the given base directory."""
     return sorted([p for p in base.iterdir() if p.is_dir()])
+
 
 def find_tasks(
     base: Path,
@@ -189,21 +171,63 @@ def build_tar_bytes(task_dir: Path, compression: str = "gz") -> bytes:
                 tf.add(path, arcname=arcname, recursive=False)
     return buf.getvalue()
 
+
 def convert_to_parquet(tasks_dir: str) -> str:
     tasks = find_tasks(Path(tasks_dir), recursive=True)
     temp_dir = tempfile.mkdtemp()
     temp_folder = Path(temp_dir)
     parquet_path = temp_folder / "tasks.parquet"
-    records = to_parquet(Path(tasks_dir), parquet_path, tasks, compression="gz")
+    to_parquet(Path(tasks_dir), parquet_path, tasks, compression="gz")
     return str(temp_folder)
+
 
 def convert_logs_to_parquet(tasks_dir: str) -> str:
     tasks = find_logs(Path(tasks_dir))
     temp_dir = tempfile.mkdtemp()
     temp_folder = Path(temp_dir)
     parquet_path = temp_folder / "logs.parquet"
-    records = to_parquet(Path(tasks_dir), parquet_path, tasks, compression="gz")
+    to_parquet(Path(tasks_dir), parquet_path, tasks, compression="gz")
     return str(temp_folder)
+
+
+def upload_tasks_to_hf(
+    tasks_dir: Path,
+    *,
+    repo_id: str,
+    private: bool = False,
+    token: str | None = None,
+    commit_message: str = "Upload tasks parquet",
+    delete_existing: bool = False,
+) -> str:
+    """Convert a task directory and upload its Parquet snapshot to the Hub."""
+    from huggingface_hub import HfApi, create_repo
+
+    tasks_dir = tasks_dir.expanduser().resolve()
+    if not tasks_dir.is_dir():
+        raise FileNotFoundError(f"Task directory does not exist: {tasks_dir}")
+
+    token = token or os.environ.get("HF_TOKEN")
+    api = HfApi(token=token)
+    create_repo(
+        repo_id=repo_id,
+        repo_type="dataset",
+        private=private,
+        token=token,
+        exist_ok=True,
+    )
+    with tempfile.TemporaryDirectory(prefix="harbor_tasks_parquet_") as temporary_dir:
+        parquet_path = Path(temporary_dir) / "tasks.parquet"
+        tasks = find_tasks(tasks_dir, recursive=True)
+        to_parquet(tasks_dir, parquet_path, tasks, compression="gz")
+        result = api.upload_folder(
+            folder_path=temporary_dir,
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=commit_message,
+            delete_patterns="*" if delete_existing else None,
+        )
+    return str(result)
+
 
 def to_parquet(
     base: Path,
@@ -219,17 +243,23 @@ def to_parquet(
         archive = build_tar_bytes(t, compression=compression)
         records.append(TaskRecord(rel_path=rel, archive_bytes=archive))
 
-    table = pa_mod.table({  # type: ignore[attr-defined]
-        "path": pa_mod.array([r.rel_path for r in records], type=pa_mod.string()),
-        "task_binary": pa_mod.array([r.archive_bytes for r in records], type=pa_mod.binary()),
-    })
+    table = pa_mod.table(
+        {  # type: ignore[attr-defined]
+            "path": pa_mod.array([r.rel_path for r in records], type=pa_mod.string()),
+            "task_binary": pa_mod.array(
+                [r.archive_bytes for r in records], type=pa_mod.binary()
+            ),
+        }
+    )
     pq_mod.write_table(table, out_path)
     return records
 
 
 def _is_within(base: Path, target: Path) -> bool:
     try:
-        return os.path.commonpath([str(base.resolve()), str(target.resolve())]) == str(base.resolve())
+        return os.path.commonpath([str(base.resolve()), str(target.resolve())]) == str(
+            base.resolve()
+        )
     except Exception:
         return False
 
@@ -237,7 +267,9 @@ def _is_within(base: Path, target: Path) -> bool:
 def _sanitize_tar_member_name(name: str) -> str:
     # Remove leading slashes and collapse to posix; strip .. components
     p = PurePosixPath(name)
-    parts = [part for part in p.parts if part not in ("..", ".", "")]  # keep '.' implicitly removed by PurePosixPath
+    parts = [
+        part for part in p.parts if part not in ("..", ".", "")
+    ]  # keep '.' implicitly removed by PurePosixPath
     while parts and parts[0] == "/":
         parts.pop(0)
     return str(PurePosixPath(*parts))
@@ -275,6 +307,7 @@ def safe_extract_tar(archive_bytes: bytes, dest_dir: Path) -> None:
                 # Skip other types (symlinks, etc.) for safety
                 continue
 
+
 def from_hf_dataset(
     dataset_name: str,
     base: str | None = None,
@@ -288,6 +321,7 @@ def from_hf_dataset(
     Returns the base directory path where tasks were extracted.
     """
     import sys
+
     # Load dataset from HuggingFace (this uses HF's own caching)
     print(f"Loading dataset: {dataset_name}", file=sys.stderr)
     dataset = load_dataset(dataset_name)
@@ -299,7 +333,12 @@ def from_hf_dataset(
     # Create a deterministic path in /tmp based on dataset name and fingerprint
     # Sanitize dataset name for use in path (replace / with --)
     safe_dataset_name = dataset_name.replace("/", "--")
-    dataset_cache_dir = Path(tempfile.gettempdir()) / "hf_datasets" / safe_dataset_name / fingerprint[:12]
+    dataset_cache_dir = (
+        Path(tempfile.gettempdir())
+        / "hf_datasets"
+        / safe_dataset_name
+        / fingerprint[:12]
+    )
 
     # Check if dataset is already cached
     marker_file = dataset_cache_dir / ".download_complete"
@@ -332,7 +371,9 @@ def from_hf_dataset(
         from_parquet(str(temp_parquet), base=str(extraction_dir), on_exist=on_exist)
 
         # Write marker file to indicate download is complete
-        marker_file.write_text(f"fingerprint={fingerprint}\ndataset_name={dataset_name}\n")
+        marker_file.write_text(
+            f"fingerprint={fingerprint}\ndataset_name={dataset_name}\n"
+        )
 
         print(f"Dataset extraction complete: {extraction_dir}")
         return extraction_dir
@@ -341,8 +382,25 @@ def from_hf_dataset(
         # Clean up temporary parquet directory
         shutil.rmtree(temp_parquet_dir, ignore_errors=True)
 
-@gcs_cache()
+
 def from_hf_dataset_hdf5(
+    dataset_name: str,
+    output_path: str | None = None,
+    compression: str = "gzip",
+    compression_opts: int = 4,
+) -> str:
+    """Run the GCS-cached HDF5 conversion without importing GCS for other operations."""
+    from data.gcs_cache import gcs_cache
+
+    return gcs_cache()(_from_hf_dataset_hdf5)(
+        dataset_name,
+        output_path=output_path,
+        compression=compression,
+        compression_opts=compression_opts,
+    )
+
+
+def _from_hf_dataset_hdf5(
     dataset_name: str,
     output_path: str | None = None,
     compression: str = "gzip",
@@ -368,7 +426,9 @@ def from_hf_dataset_hdf5(
         import h5py
         import numpy as np
     except ImportError:
-        raise ImportError("h5py and numpy are required for HDF5 conversion. Install with: pip install h5py numpy")
+        raise ImportError(
+            "h5py and numpy are required for HDF5 conversion. Install with: pip install h5py numpy"
+        )
 
     pa_mod, pq_mod = _require_pyarrow()
 
@@ -380,7 +440,6 @@ def from_hf_dataset_hdf5(
     temp_dir = tempfile.mkdtemp()
     temp_parquet = Path(temp_dir) / "dataset.parquet"
 
-    
     # Save to parquet
     print("Saving dataset to temporary parquet...")
     dataset["train"].to_parquet(str(temp_parquet))
@@ -404,7 +463,7 @@ def from_hf_dataset_hdf5(
     output_path = Path(output_path)
     print(f"Converting {len(path_col)} tasks directly to HDF5: {output_path}")
 
-    with h5py.File(output_path, 'w') as h5file:
+    with h5py.File(output_path, "w") as h5file:
         for i, (rel_path, archive_bytes) in tqdm(enumerate(zip(path_col, data_col))):
             if i % 100 == 0:
                 print(f"Processing task {i}/{len(path_col)}...")
@@ -417,9 +476,11 @@ def from_hf_dataset_hdf5(
             with tarfile.open(fileobj=buf, mode="r:*") as tf:
                 # Store task metadata
                 task_name = rel_path.split("/")[-1] if "/" in rel_path else rel_path
-                task_group.attrs['task_name'] = task_name
-                task_group.attrs['task_id'] = i
-                task_group.attrs['dataset_prefix'] = task_name.rsplit("-", 1)[0] if "-" in task_name else "task"
+                task_group.attrs["task_name"] = task_name
+                task_group.attrs["task_id"] = i
+                task_group.attrs["dataset_prefix"] = (
+                    task_name.rsplit("-", 1)[0] if "-" in task_name else "task"
+                )
 
                 # Extract each file from tar and write to HDF5
                 seen_members = set()
@@ -448,9 +509,9 @@ def from_hf_dataset_hdf5(
                     # Files with NULL bytes or invalid UTF-8 are treated as binary
                     is_binary = False
                     try:
-                        text_content = content.decode('utf-8')
+                        text_content = content.decode("utf-8")
                         # Check for embedded NULL bytes (not supported by HDF5 strings)
-                        if '\x00' in text_content:
+                        if "\x00" in text_content:
                             is_binary = True
                     except (UnicodeDecodeError, ValueError):
                         is_binary = True
@@ -460,7 +521,7 @@ def from_hf_dataset_hdf5(
                         task_group.create_dataset(
                             member_name,
                             data=text_content,
-                            dtype=h5py.string_dtype(encoding='utf-8')
+                            dtype=h5py.string_dtype(encoding="utf-8"),
                         )
                     else:
                         # Store as binary (arrays support compression)
@@ -468,9 +529,11 @@ def from_hf_dataset_hdf5(
                             member_name,
                             data=np.frombuffer(content, dtype=np.uint8),
                             compression=compression,
-                            compression_opts=compression_opts if compression == 'gzip' else None
+                            compression_opts=compression_opts
+                            if compression == "gzip"
+                            else None,
                         )
-                        task_group[member_name].attrs['binary'] = True
+                        task_group[member_name].attrs["binary"] = True
 
     print(f"Successfully converted HuggingFace dataset to HDF5: {output_path}")
     return str(output_path)
@@ -520,6 +583,7 @@ def from_parquet(
     on_exist: str = "error",
     max_workers: int = 10,
     batch_size: int = 256,
+    max_tasks: int | None = None,
 ) -> list[Path]:
     """Extract tasks from parquet file to directory in parallel batches.
 
@@ -532,6 +596,7 @@ def from_parquet(
         on_exist: What to do if target exists ('skip', 'error', 'overwrite')
         max_workers: Number of parallel workers (10 by default)
         batch_size: Rows to process per batch (default 256)
+        max_tasks: Extract at most this many rows, preserving parquet row order.
 
     Returns:
         List of extracted task directories
@@ -540,6 +605,11 @@ def from_parquet(
 
     pf = pq_mod.ParquetFile(parquet_path)
     total_rows = pf.metadata.num_rows
+    if max_tasks is not None and max_tasks <= 0:
+        raise ValueError("max_tasks must be positive")
+    extraction_rows = (
+        min(total_rows, max_tasks) if max_tasks is not None else total_rows
+    )
 
     # Validate schema on first row group
     schema_names = [f.name for f in pf.schema_arrow]
@@ -550,10 +620,15 @@ def from_parquet(
     written: list[Path] = []
     row_offset = 0
 
-    with tqdm(total=total_rows, desc="Extracting tasks") as pbar:
-        for batch in pf.iter_batches(batch_size=batch_size, columns=["path", "task_binary"]):
+    with tqdm(total=extraction_rows, desc="Extracting tasks") as pbar:
+        for batch in pf.iter_batches(
+            batch_size=batch_size, columns=["path", "task_binary"]
+        ):
             path_col = batch.column("path").to_pylist()
             data_col = batch.column("task_binary").to_pylist()
+            remaining = extraction_rows - row_offset
+            path_col = path_col[:remaining]
+            data_col = data_col[:remaining]
 
             tasks_args = [
                 (row_offset + i, rel_path, data, base, on_exist)
@@ -561,7 +636,9 @@ def from_parquet(
             ]
 
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(_process_parquet_row, args) for args in tasks_args]
+                futures = [
+                    executor.submit(_process_parquet_row, args) for args in tasks_args
+                ]
                 for future in as_completed(futures):
                     result = future.result()
                     if result is not None:
@@ -571,5 +648,39 @@ def from_parquet(
             row_offset += len(path_col)
             # Let GC reclaim batch memory
             del path_col, data_col, tasks_args
+            if row_offset >= extraction_rows:
+                break
 
     return written
+
+
+def _parse_upload_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Convert Harbor tasks to Parquet and upload the snapshot to Hugging Face.",
+    )
+    parser.add_argument("command", choices=("upload-hf",))
+    parser.add_argument("--tasks-dir", required=True, type=Path)
+    parser.add_argument("--repo-id", required=True)
+    parser.add_argument("--private", action="store_true")
+    parser.add_argument("--token")
+    parser.add_argument("--commit-message", default="Upload tasks parquet")
+    parser.add_argument("--delete-existing", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Run the task-dataset upload command."""
+    args = _parse_upload_args(argv)
+    result = upload_tasks_to_hf(
+        args.tasks_dir,
+        repo_id=args.repo_id,
+        private=args.private,
+        token=args.token,
+        commit_message=args.commit_message,
+        delete_existing=args.delete_existing,
+    )
+    print(f"Uploaded https://huggingface.co/datasets/{args.repo_id}: {result}")
+
+
+if __name__ == "__main__":
+    main()

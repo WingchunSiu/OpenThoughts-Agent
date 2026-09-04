@@ -10,8 +10,17 @@ import random
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from data.r2egym.utils import load_r2egym_instances, create_r2egym_instruction, create_r2egym_task_toml
-from data.commons import generate_tasks_to_hdf5, extract_hdf5_to_task_paths, upload_tasks_to_hf, create_standard_dockerfile
+from data.r2egym.utils import (
+    load_r2egym_instances,
+    create_r2egym_instruction,
+    create_r2egym_task_toml,
+)
+from data.commons import (
+    generate_tasks_to_hdf5,
+    extract_hdf5_to_task_paths,
+    upload_tasks_to_hf,
+    create_standard_dockerfile,
+)
 
 TARGET_TOTAL = 10_000
 UPSAMPLE_RATIO = 16.8
@@ -32,7 +41,9 @@ def filter_unique_instructions(
     unique_dockerfiles = []
     unique_task_tomls = []
 
-    for inst, meta, dockerfile, task_toml in zip(instructions, metadata, dockerfiles, task_tomls):
+    for inst, meta, dockerfile, task_toml in zip(
+        instructions, metadata, dockerfiles, task_tomls
+    ):
         if inst not in seen_instructions:
             seen_instructions.add(inst)
             unique_instructions.append(inst)
@@ -86,7 +97,12 @@ def upsample_to_target(
         upsampled_task_tomls.append(task_tomls[idx % len(task_tomls)])
         idx += 1
 
-    return upsampled_instructions, upsampled_metadata, upsampled_dockerfiles, upsampled_task_tomls
+    return (
+        upsampled_instructions,
+        upsampled_metadata,
+        upsampled_dockerfiles,
+        upsampled_task_tomls,
+    )
 
 
 def main() -> str:

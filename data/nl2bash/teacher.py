@@ -100,7 +100,9 @@ def run_job(job_config: JobConfig) -> Tuple[Job, Any]:
     return asyncio.run(run_job_async(job_config))
 
 
-def locate_generated_task(job: Job, dirname: str, result_payload: Optional[dict] = None) -> Optional[Path]:
+def locate_generated_task(
+    job: Job, dirname: str, result_payload: Optional[dict] = None
+) -> Optional[Path]:
     """Locate the generated task directory from the teacher job outputs.
 
     Returns ``None`` if no trials achieved positive reward, indicating no task

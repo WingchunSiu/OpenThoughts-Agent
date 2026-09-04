@@ -18,6 +18,7 @@ DEFAULT_GEMINI_MODELS = [
     "gemini-pro",
 ]
 
+
 class InferenceEngine(ABC):
     """Base class for inference engines used during data generation."""
 
@@ -42,7 +43,9 @@ class InferenceEngine(ABC):
         """Return metadata describing this engine without sensitive fields."""
         return {
             "engine_type": self.__class__.__name__,
-            "kwargs": {k: v for k, v in self.kwargs.items() if k not in ["api_key", "token"]},
+            "kwargs": {
+                k: v for k, v in self.kwargs.items() if k not in ["api_key", "token"]
+            },
         }
 
 
@@ -56,21 +59,27 @@ class OpenAIEngine(InferenceEngine):
         self._default_max_tokens = kwargs.get("max_tokens")
 
         if not self.api_key:
-            raise ValueError("OpenAI API key required. Set OPENAI_API_KEY or pass api_key parameter.")
+            raise ValueError(
+                "OpenAI API key required. Set OPENAI_API_KEY or pass api_key parameter."
+            )
 
     def generate(self, prompt: str, **generation_kwargs) -> str:
         """Generate using OpenAI API."""
         try:
             from openai import OpenAI
         except ImportError as exc:
-            raise ImportError("openai package required. Install with: pip install openai") from exc
+            raise ImportError(
+                "openai package required. Install with: pip install openai"
+            ) from exc
 
         client = OpenAI(api_key=self.api_key)
 
         # Newer OpenAI models require max_completion_tokens instead of max_tokens.
         # Normalise both the default and any caller-supplied value.
         if "max_tokens" in generation_kwargs:
-            generation_kwargs["max_completion_tokens"] = generation_kwargs.pop("max_tokens")
+            generation_kwargs["max_completion_tokens"] = generation_kwargs.pop(
+                "max_tokens"
+            )
         if (
             self._default_max_tokens is not None
             and "max_completion_tokens" not in generation_kwargs
@@ -80,7 +89,7 @@ class OpenAIEngine(InferenceEngine):
         response = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            **generation_kwargs
+            **generation_kwargs,
         )
 
         return response.choices[0].message.content
@@ -89,6 +98,7 @@ class OpenAIEngine(InferenceEngine):
         """Check OpenAI API availability."""
         try:
             from openai import OpenAI
+
             client = OpenAI(api_key=self.api_key)
             client.models.list()
             return True
@@ -100,32 +110,45 @@ class OpenAIEngine(InferenceEngine):
 class AnthropicEngine(InferenceEngine):
     """Anthropic API inference engine."""
 
-    def __init__(self, model: str = "claude-3-5-sonnet-20241022", api_key: Optional[str] = None, **kwargs):
+    def __init__(
+        self,
+        model: str = "claude-3-5-sonnet-20241022",
+        api_key: Optional[str] = None,
+        **kwargs,
+    ):
         super().__init__(model=model, api_key=api_key, **kwargs)
         self.model = model
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._default_max_tokens = kwargs.get("max_tokens")
 
         if not self.api_key:
-            raise ValueError("Anthropic API key required. Set ANTHROPIC_API_KEY or pass api_key parameter.")
+            raise ValueError(
+                "Anthropic API key required. Set ANTHROPIC_API_KEY or pass api_key parameter."
+            )
 
     def generate(self, prompt: str, **generation_kwargs) -> str:
         try:
             from anthropic import Anthropic
         except ImportError as exc:
-            raise ImportError("anthropic package required. Install with: pip install anthropic") from exc
+            raise ImportError(
+                "anthropic package required. Install with: pip install anthropic"
+            ) from exc
 
         client = Anthropic(api_key=self.api_key)
 
         max_tokens = generation_kwargs.pop("max_tokens", None)
         if max_tokens is None:
-            max_tokens = self._default_max_tokens if self._default_max_tokens is not None else 4096
+            max_tokens = (
+                self._default_max_tokens
+                if self._default_max_tokens is not None
+                else 4096
+            )
 
         response = client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
-            **generation_kwargs
+            **generation_kwargs,
         )
 
         return response.content[0].text
@@ -133,6 +156,7 @@ class AnthropicEngine(InferenceEngine):
     def healthcheck(self) -> bool:
         try:
             from anthropic import Anthropic
+
             client = Anthropic(api_key=self.api_key)
             client.models.list()
             return True
@@ -201,7 +225,9 @@ class GenericOpenAIEngine(InferenceEngine):
             self.model_name = config["model_name"]
             if config.get("api_key"):
                 api_key = config["api_key"]
-            self.logger.info("Loaded endpoint from %s: %s", endpoint_json, self.base_url)
+            self.logger.info(
+                "Loaded endpoint from %s: %s", endpoint_json, self.base_url
+            )
         elif base_url and model_name:
             base_url = base_url.rstrip("/")
             if not base_url.endswith("/v1"):
@@ -209,7 +235,9 @@ class GenericOpenAIEngine(InferenceEngine):
             self.base_url = base_url
             self.model_name = model_name
         else:
-            raise ValueError("Must provide either endpoint_json or both base_url and model_name")
+            raise ValueError(
+                "Must provide either endpoint_json or both base_url and model_name"
+            )
 
         self.api_key = api_key
         self._default_max_tokens = kwargs.get("max_tokens")
@@ -221,7 +249,10 @@ class GenericOpenAIEngine(InferenceEngine):
                 merged_headers = {**existing, **merged_headers}
             client_kwargs["default_headers"] = merged_headers
 
-        self._client_kwargs: Dict[str, Any] = {"base_url": self.base_url, "api_key": self.api_key}
+        self._client_kwargs: Dict[str, Any] = {
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+        }
         self._client_kwargs.update(client_kwargs)
         self._requests_kwargs: Dict[str, Any] = dict(http_request_kwargs or {})
 
@@ -229,7 +260,9 @@ class GenericOpenAIEngine(InferenceEngine):
         try:
             from openai import OpenAI
         except ImportError as exc:
-            raise ImportError("openai package required. Install with: pip install openai") from exc
+            raise ImportError(
+                "openai package required. Install with: pip install openai"
+            ) from exc
 
         current_time = time.time()
         if current_time - self.last_healthcheck > self.healthcheck_interval:
@@ -237,7 +270,10 @@ class GenericOpenAIEngine(InferenceEngine):
                 raise RuntimeError(f"Healthcheck failed for endpoint: {self.base_url}")
 
         client = OpenAI(**self._client_kwargs)
-        if self._default_max_tokens is not None and "max_tokens" not in generation_kwargs:
+        if (
+            self._default_max_tokens is not None
+            and "max_tokens" not in generation_kwargs
+        ):
             generation_kwargs["max_tokens"] = self._default_max_tokens
         response = client.chat.completions.create(
             model=self.model_name,
@@ -446,9 +482,8 @@ class GeminiOpenAIEngine(InferenceEngine):
         if explicit_project_id:
             return explicit_project_id
 
-        credential_source = (
-            self.credentials_path
-            or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        credential_source = self.credentials_path or os.environ.get(
+            "GOOGLE_APPLICATION_CREDENTIALS"
         )
         if credential_source:
             cred_path = Path(credential_source).expanduser()
@@ -469,9 +504,11 @@ class GeminiOpenAIEngine(InferenceEngine):
         return None
 
     @staticmethod
-    def _build_model_sequence(primary: str, candidates: Optional[List[str]]) -> List[str]:
+    def _build_model_sequence(
+        primary: str, candidates: Optional[List[str]]
+    ) -> List[str]:
         sequence = [primary]
-        for candidate in (candidates or DEFAULT_GEMINI_MODELS):
+        for candidate in candidates or DEFAULT_GEMINI_MODELS:
             if candidate and candidate not in sequence:
                 sequence.append(candidate)
         return sequence
@@ -484,7 +521,9 @@ class GeminiOpenAIEngine(InferenceEngine):
             return getattr(self._genai_types.ThinkingLevel, normalized)
         except AttributeError as exc:
             valid = ", ".join(level.upper() for level in ("low", "medium", "high"))
-            raise ValueError(f"Unsupported thinking level '{label}'. Choose from: {valid}") from exc
+            raise ValueError(
+                f"Unsupported thinking level '{label}'. Choose from: {valid}"
+            ) from exc
 
     def _build_generation_config(self, **config_overrides: Any):
         config_kwargs: Dict[str, Any] = {}
@@ -496,13 +535,19 @@ class GeminiOpenAIEngine(InferenceEngine):
                 raise TypeError("prompt_kwargs overrides must be a mapping")
             config_kwargs.update(prompt_override)
 
-        config_kwargs.update({k: v for k, v in config_overrides.items() if v is not None})
+        config_kwargs.update(
+            {k: v for k, v in config_overrides.items() if v is not None}
+        )
 
         if "max_tokens" in config_kwargs and "max_output_tokens" not in config_kwargs:
             config_kwargs["max_output_tokens"] = config_kwargs.pop("max_tokens")
 
-        thinking_level = config_kwargs.pop("thinking_level", None) or self.thinking_level
-        system_instruction = config_kwargs.pop("system_instruction", None) or self.system_instruction
+        thinking_level = (
+            config_kwargs.pop("thinking_level", None) or self.thinking_level
+        )
+        system_instruction = (
+            config_kwargs.pop("system_instruction", None) or self.system_instruction
+        )
 
         if thinking_level:
             tl_enum = self._normalize_thinking_level(thinking_level)
@@ -564,7 +609,9 @@ class GeminiOpenAIEngine(InferenceEngine):
                 if text:
                     return text
             except self._api_exceptions.NotFound as exc:
-                self.logger.warning("Gemini model %s unavailable: %s", model_name, exc.message)
+                self.logger.warning(
+                    "Gemini model %s unavailable: %s", model_name, exc.message
+                )
                 last_exception = exc
                 continue
             except Exception as exc:  # pragma: no cover - network dependency

@@ -57,7 +57,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -68,13 +67,14 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 # Import strictly the things we need; the listener's top-level is mostly defs/constants
 from eval.unified_eval_listener import (  # noqa: E402
-    INFRA_ERROR_TYPES,
     PRESETS,
     _parse_job_dir,
     get_active_model_dataset_pairs,
 )
 
-DEFAULT_INFRA_ERROR_THRESHOLD = 10  # matches listener CLI default --resume-error-threshold
+DEFAULT_INFRA_ERROR_THRESHOLD = (
+    10  # matches listener CLI default --resume-error-threshold
+)
 DEFAULT_MAX_RESUME_COUNT = 5  # matches listener CLI default --max-resume-count
 DEFAULT_MAX_TOTAL_FIRES = 2  # 1 original + 1 resume = 24h on a 12h-cap cluster
 
@@ -120,6 +120,7 @@ def mark_rejected(job_dir: Path, reason: str = "") -> bool:
     if marker.exists():
         return False
     from datetime import datetime, timezone
+
     body = f"# Rejected at {datetime.now(timezone.utc).isoformat()} UTC\n"
     if reason:
         body += f"# Reason: {reason}\n"
@@ -185,6 +186,7 @@ def classify(
 
 # ---- Slurm-log fire count ---------------------------------------------------
 
+
 def build_run_tag_fire_index(log_dir: Path) -> Dict[str, List[str]]:
     """Walk eval/logs/data_*.out, return run_tag -> [JID, ...]. Count = len(list).
 
@@ -207,7 +209,7 @@ def build_run_tag_fire_index(log_dir: Path) -> Dict[str, List[str]]:
                     if i > 200:
                         break
                     if line.startswith("Run tag: "):
-                        rt = line[len("Run tag: "):].strip()
+                        rt = line[len("Run tag: ") :].strip()
                         if rt:
                             index.setdefault(rt, []).append(jid)
                         break
@@ -216,7 +218,9 @@ def build_run_tag_fire_index(log_dir: Path) -> Dict[str, List[str]]:
     return index
 
 
-def fires_for_run_tag(index: Dict[str, List[str]], run_tag: str, resume_count: int) -> int:
+def fires_for_run_tag(
+    index: Dict[str, List[str]], run_tag: str, resume_count: int
+) -> int:
     """Effective fire count for a run_tag.
 
     Combines two sources, taking the max so we err on the conservative side
@@ -237,6 +241,7 @@ def fires_for_run_tag(index: Dict[str, List[str]], run_tag: str, resume_count: i
 
 
 # ---- Preset / dataset prefix helpers ----------------------------------------
+
 
 def preset_dataset_prefixes(preset_filter: Optional[str]) -> List[Tuple[str, str]]:
     """Return [(preset_name, dir_prefix), ...]. dir_prefix matches scan_jobs_dir_for_resume's
@@ -261,6 +266,7 @@ def detect_preset(run_tag: str, prefix_map: List[Tuple[str, str]]) -> Optional[s
 
 # ---- Main scan loop ---------------------------------------------------------
 
+
 def scan(
     jobs_dirs: List[Path],
     preset_filter: Optional[str],
@@ -283,7 +289,9 @@ def scan(
         sys.exit(2)
 
     # Pull active SLURM state once
-    active_models, active_pairs, active_run_tags = get_active_model_dataset_pairs(log_dir=log_dir)
+    active_models, active_pairs, active_run_tags = get_active_model_dataset_pairs(
+        log_dir=log_dir
+    )
 
     # Build run_tag → [JIDs] index from slurm logs once (24h-cap accounting)
     fire_index = build_run_tag_fire_index(Path(log_dir))
@@ -307,50 +315,78 @@ def scan(
             if rejected and not show_rejected:
                 n_skipped_rejected += 1
                 continue
-            n_fires = fires_for_run_tag(fire_index, info["run_tag"], info["resume_count"])
+            n_fires = fires_for_run_tag(
+                fire_index, info["run_tag"], info["resume_count"]
+            )
             fire_jids = ",".join(fire_index.get(info["run_tag"], []))
             if rejected:
                 status = STATUS_REJECTED
             else:
                 status = classify(
-                    info, entry, active_pairs, active_run_tags,
-                    infra_error_threshold, max_resume_count,
-                    max_total_fires, n_fires,
+                    info,
+                    entry,
+                    active_pairs,
+                    active_run_tags,
+                    infra_error_threshold,
+                    max_resume_count,
+                    max_total_fires,
+                    n_fires,
                 )
-            slurm_jid = active_run_tags.get(info["run_tag"]) or (info["slurm_job_id"] or "")
-            rows.append({
-                "preset": preset,
-                "status": status,
-                "slurm_jid": slurm_jid,
-                "run_tag": info["run_tag"],
-                "hf_model": info["hf_model"] or "",
-                "dataset": info["dataset"] or "",
-                "n_completed": info["n_completed"],
-                "n_total": info["n_total"],
-                "infra_errors": info["infra_errors"],
-                "total_errors": info["total_errors"],
-                "finished_at": info["finished_at"] or "",
-                "resume_count": info["resume_count"],
-                "n_fires": n_fires,
-                "fire_jids": fire_jids,
-                "db_job_id": info["db_job_id"] or "",
-                "jobs_dir": str(jd),
-            })
+            slurm_jid = active_run_tags.get(info["run_tag"]) or (
+                info["slurm_job_id"] or ""
+            )
+            rows.append(
+                {
+                    "preset": preset,
+                    "status": status,
+                    "slurm_jid": slurm_jid,
+                    "run_tag": info["run_tag"],
+                    "hf_model": info["hf_model"] or "",
+                    "dataset": info["dataset"] or "",
+                    "n_completed": info["n_completed"],
+                    "n_total": info["n_total"],
+                    "infra_errors": info["infra_errors"],
+                    "total_errors": info["total_errors"],
+                    "finished_at": info["finished_at"] or "",
+                    "resume_count": info["resume_count"],
+                    "n_fires": n_fires,
+                    "fire_jids": fire_jids,
+                    "db_job_id": info["db_job_id"] or "",
+                    "jobs_dir": str(jd),
+                }
+            )
 
     if n_skipped_rejected:
-        sys.stderr.write(f"(hidden: {n_skipped_rejected} rejected dir(s); pass --show-rejected to display)\n")
-    rows.sort(key=lambda r: (r["status"] not in NEEDS_RESUME, r["preset"], r["run_tag"]))
+        sys.stderr.write(
+            f"(hidden: {n_skipped_rejected} rejected dir(s); pass --show-rejected to display)\n"
+        )
+    rows.sort(
+        key=lambda r: (r["status"] not in NEEDS_RESUME, r["preset"], r["run_tag"])
+    )
     return rows
 
 
 # ---- Output formatters -------------------------------------------------------
 
+
 def print_csv(rows: List[Dict]) -> None:
     fieldnames = [
-        "preset", "status", "slurm_jid", "run_tag", "hf_model", "dataset",
-        "n_completed", "n_total", "infra_errors", "total_errors",
-        "finished_at", "resume_count", "n_fires", "fire_jids",
-        "db_job_id", "jobs_dir",
+        "preset",
+        "status",
+        "slurm_jid",
+        "run_tag",
+        "hf_model",
+        "dataset",
+        "n_completed",
+        "n_total",
+        "infra_errors",
+        "total_errors",
+        "finished_at",
+        "resume_count",
+        "n_fires",
+        "fire_jids",
+        "db_job_id",
+        "jobs_dir",
     ]
     w = csv.DictWriter(sys.stdout, fieldnames=fieldnames, lineterminator="\n")
     w.writeheader()
@@ -405,65 +441,94 @@ def print_table(rows: List[Dict]) -> None:
 
 # ---- CLI --------------------------------------------------------------------
 
+
 def main() -> int:
-    p = argparse.ArgumentParser(description="Inspect harbor eval job dirs and report resume status.")
+    p = argparse.ArgumentParser(
+        description="Inspect harbor eval job dirs and report resume status."
+    )
     p.add_argument(
-        "--jobs-dir", action="append", required=True,
+        "--jobs-dir",
+        action="append",
+        required=True,
         help="Path to harbor jobs dir (repeatable).",
     )
     p.add_argument(
-        "--preset", default=None,
+        "--preset",
+        default=None,
         help=f"Filter by preset. Choices: {', '.join(PRESETS.keys())}. Default: all.",
     )
     p.add_argument(
-        "--needs-resume-only", action="store_true",
+        "--needs-resume-only",
+        action="store_true",
         help="Drop rows that don't need resume (DONE / IN_FLIGHT / PARTIAL_OK / AT_RESUME_LIMIT).",
     )
     p.add_argument(
-        "--infra-error-threshold", type=int, default=DEFAULT_INFRA_ERROR_THRESHOLD,
+        "--infra-error-threshold",
+        type=int,
+        default=DEFAULT_INFRA_ERROR_THRESHOLD,
         help="Min infra errors to trigger PARTIAL/DONE_WITH_ERRORS resume. Default: 10 (matches listener).",
     )
     p.add_argument(
-        "--max-resume-count", type=int, default=DEFAULT_MAX_RESUME_COUNT,
+        "--max-resume-count",
+        type=int,
+        default=DEFAULT_MAX_RESUME_COUNT,
         help="Treat resume_count (from meta.env) >= this as AT_RESUME_LIMIT. Default: 5.",
     )
     p.add_argument(
-        "--max-total-fires", type=int, default=DEFAULT_MAX_TOTAL_FIRES,
-        help=("Treat n_fires (slurm-log count, robust to SIGTERM) >= this as AT_RESUME_LIMIT. "
-              "Default: 2 (1 original + 1 resume = 24h hard cap on a 12h-walltime cluster)."),
+        "--max-total-fires",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_FIRES,
+        help=(
+            "Treat n_fires (slurm-log count, robust to SIGTERM) >= this as AT_RESUME_LIMIT. "
+            "Default: 2 (1 original + 1 resume = 24h hard cap on a 12h-walltime cluster)."
+        ),
     )
     p.add_argument(
-        "--log-dir", default="eval/logs",
+        "--log-dir",
+        default="eval/logs",
         help="Slurm log dir (parsed for active model+dataset+run_tag). Default: eval/logs.",
     )
     p.add_argument(
-        "--csv", action="store_true",
+        "--csv",
+        action="store_true",
         help="Emit CSV instead of human-readable table.",
     )
     p.add_argument(
-        "--reject", action="append", default=[], metavar="RUN_TAG",
-        help=("Mark a run dir as rejected (writes .no-resume marker file). "
-              "Repeatable. Rejected dirs are hidden from inspector output by default. "
-              "Specify either bare run_tag (search every --jobs-dir) or "
-              "absolute path to the run dir."),
+        "--reject",
+        action="append",
+        default=[],
+        metavar="RUN_TAG",
+        help=(
+            "Mark a run dir as rejected (writes .no-resume marker file). "
+            "Repeatable. Rejected dirs are hidden from inspector output by default. "
+            "Specify either bare run_tag (search every --jobs-dir) or "
+            "absolute path to the run dir."
+        ),
     )
     p.add_argument(
-        "--reject-needs-resume", action="store_true",
-        help=("Reject ALL run dirs currently classified as needs-resume "
-              "(DONE_WITH_ERRORS / INCOMPLETE / PARTIAL / EARLY_KILL). "
-              "Useful for nuking legacy candidates in bulk."),
+        "--reject-needs-resume",
+        action="store_true",
+        help=(
+            "Reject ALL run dirs currently classified as needs-resume "
+            "(DONE_WITH_ERRORS / INCOMPLETE / PARTIAL / EARLY_KILL). "
+            "Useful for nuking legacy candidates in bulk."
+        ),
     )
     p.add_argument(
-        "--reject-reason", default="",
+        "--reject-reason",
+        default="",
         help="Free-form reason recorded in the marker file (used with --reject / --reject-needs-resume).",
     )
     p.add_argument(
-        "--show-rejected", action="store_true",
+        "--show-rejected",
+        action="store_true",
         help="Include rejected dirs in the output (status=REJECTED). "
-             "By default rejected dirs are hidden entirely.",
+        "By default rejected dirs are hidden entirely.",
     )
     p.add_argument(
-        "--yes", "-y", action="store_true",
+        "--yes",
+        "-y",
+        action="store_true",
         help="Skip confirmation prompt for bulk --reject-needs-resume.",
     )
     args = p.parse_args()
@@ -494,7 +559,9 @@ def main() -> int:
                         target = cand
                         break
             if target is None:
-                sys.stderr.write(f"WARN: run_tag not found in any --jobs-dir: {ident}\n")
+                sys.stderr.write(
+                    f"WARN: run_tag not found in any --jobs-dir: {ident}\n"
+                )
                 n_missing += 1
                 continue
             if mark_rejected(target, reason=args.reject_reason):
@@ -503,8 +570,10 @@ def main() -> int:
             else:
                 print(f"already-rejected  {target}")
                 n_already += 1
-        print(f"\nDone: {n_marked} newly rejected, {n_already} already rejected, {n_missing} missing.",
-              file=sys.stderr)
+        print(
+            f"\nDone: {n_marked} newly rejected, {n_already} already rejected, {n_missing} missing.",
+            file=sys.stderr,
+        )
         return 0 if n_missing == 0 else 1
 
     rows = scan(
@@ -524,7 +593,9 @@ def main() -> int:
             return 0
         print(f"About to reject {len(targets)} run dir(s):", file=sys.stderr)
         for r in targets:
-            print(f"  {r['status']:18s} {r['preset']:8s} {r['run_tag']}", file=sys.stderr)
+            print(
+                f"  {r['status']:18s} {r['preset']:8s} {r['run_tag']}", file=sys.stderr
+            )
         if not args.yes and not _confirm_destructive():
             print("Aborted.", file=sys.stderr)
             return 1
@@ -532,12 +603,17 @@ def main() -> int:
         n_already = 0
         for r in targets:
             target = Path(r["jobs_dir"]) / r["run_tag"]
-            if mark_rejected(target, reason=args.reject_reason or "bulk --reject-needs-resume"):
+            if mark_rejected(
+                target, reason=args.reject_reason or "bulk --reject-needs-resume"
+            ):
                 print(f"REJECTED  {target}")
                 n_marked += 1
             else:
                 n_already += 1
-        print(f"\nDone: {n_marked} newly rejected, {n_already} already rejected.", file=sys.stderr)
+        print(
+            f"\nDone: {n_marked} newly rejected, {n_already} already rejected.",
+            file=sys.stderr,
+        )
         return 0
 
     if args.needs_resume_only:

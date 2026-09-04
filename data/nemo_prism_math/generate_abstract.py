@@ -33,7 +33,9 @@ class NemoPrismMathGenerator(BaseDataGenerator):
     """BaseDataGenerator-compatible wrapper for Nemotron-PrismMath."""
 
     parser_description = "Generate Nemotron-PrismMath sandboxes dataset"
-    default_target_repo: Optional[str] = "mlfoundations-dev/Nemotron-PrismMath-sandboxes-1"
+    default_target_repo: Optional[str] = (
+        "mlfoundations-dev/Nemotron-PrismMath-sandboxes-1"
+    )
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -72,7 +74,9 @@ class NemoPrismMathGenerator(BaseDataGenerator):
             limit = getattr(args, "limit", 10_000)
 
         dataset_prefix = getattr(args, "dataset_prefix", "Nemotron-PrismMath")
-        temp_dir = Path(create_sandboxed_tasks(limit=limit, offset=getattr(args, "offset", 0)))
+        temp_dir = Path(
+            create_sandboxed_tasks(limit=limit, offset=getattr(args, "offset", 0))
+        )
 
         current_root = temp_dir
         temp_paths = {current_root}
@@ -92,7 +96,9 @@ class NemoPrismMathGenerator(BaseDataGenerator):
                 current_root = subsampled
                 task_count = _count_task_directories(current_root)
 
-        final_path = finalize_dataset_output(str(current_root), getattr(args, "output_dir", None))
+        final_path = finalize_dataset_output(
+            str(current_root), getattr(args, "output_dir", None)
+        )
 
         uploaded_repo: Optional[str] = None
         if not getattr(args, "no_upload", False):

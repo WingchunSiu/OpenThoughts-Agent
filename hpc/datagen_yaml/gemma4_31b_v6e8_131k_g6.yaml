@@ -1,10 +1,3 @@
-# G6: D4 stack (prefix + chunked + FP8 KV) v6e-8 + 131k, seqs=4.
-#
-# G1/G2 at seqs=1 used ~20% KV. seqs=4 should consume ~80% (linear
-# worst case, less with prefix cache hits). This is the **max viable
-# concurrency** at 131k on v6e-8 — seqs=5+ likely OOMs.
-#
-# Harbor n_concurrent must match engine cap = 4. Set via launcher: --n_concurrent 4.
 env_vars:
   MODEL_IMPL_TYPE: auto
 engine:

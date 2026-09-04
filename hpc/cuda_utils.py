@@ -58,9 +58,18 @@ def get_cuda_math_libs_path(cuda_home: str) -> Optional[str]:
     cuda_version = cuda_path.name  # e.g., "12.6"
     sdk_root = cuda_path.parent.parent  # e.g., /opt/nvidia/hpc_sdk/Linux_x86_64/24.9
 
-    math_lib_path = sdk_root / "math_libs" / cuda_version / "lib64"
-    if math_lib_path.is_dir():
-        return str(math_lib_path)
+    # Candidate math_libs lib dirs across SDK layouts:
+    #   * x86_64 HPC SDK (NERSC/Perlmutter): math_libs/<ver>/lib64
+    #   * aarch64/sbsa (TACC Vista GH200): math_libs/<ver>/targets/sbsa-linux/lib
+    #     — this is where libcurand.so lives on Vista; without it DeepSpeed's JIT
+    #     cpu_adam link (`-lcurand`) fails ("cannot find -lcurand"), blocking ZeRO
+    #     CPU-offload. cuda/lib64 does NOT carry curand on this install.
+    for math_lib_path in (
+        sdk_root / "math_libs" / cuda_version / "lib64",
+        sdk_root / "math_libs" / cuda_version / "targets" / "sbsa-linux" / "lib",
+    ):
+        if math_lib_path.is_dir():
+            return str(math_lib_path)
     return None
 
 
@@ -76,7 +85,9 @@ def get_conda_curand_path() -> Optional[str]:
 
     # Try common Python versions
     for py_ver in ["3.12", "3.11", "3.10", "3.9"]:
-        curand_path = Path(conda_prefix) / f"lib/python{py_ver}/site-packages/nvidia/curand/lib"
+        curand_path = (
+            Path(conda_prefix) / f"lib/python{py_ver}/site-packages/nvidia/curand/lib"
+        )
         if curand_path.is_dir():
             return str(curand_path)
     return None

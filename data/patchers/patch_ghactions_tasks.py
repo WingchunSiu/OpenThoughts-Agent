@@ -55,6 +55,7 @@ CLI
         --root /tmp/ghactions_src \
         [--limit N] [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -251,7 +252,7 @@ REFERENCE_YAML_CANDIDATES: tuple[str, ...] = (
 _PY_PREAMBLE_LINES: tuple[str, ...] = (
     "import sys",
     "sys.path.insert(0, '/app')",
-    "sys.path.insert(0, \"/app\")",
+    'sys.path.insert(0, "/app")',
 )
 
 
@@ -279,6 +280,7 @@ def _strip_py_preamble(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Per-task patching
 # ---------------------------------------------------------------------------
+
 
 def _find_reference_yaml(tests_dir: Path) -> Path | None:
     """Return the path to the YAML-disguised-as-source reference file."""
@@ -369,39 +371,41 @@ def patch_task(task_dir: Path, dry_run: bool) -> dict:
 
     # If we've already renamed (second run), validate the *target* exists.
     ref_path = _find_reference_yaml(tests_dir)
-    candidate = ref_path if ref_path is not None else (
-        target_yaml if target_yaml.is_file() else None
+    candidate = (
+        ref_path
+        if ref_path is not None
+        else (target_yaml if target_yaml.is_file() else None)
     )
     if candidate is None:
-        return {"status": "missing_reference",
-                "reason": "no reference YAML file found"}
+        return {"status": "missing_reference", "reason": "no reference YAML file found"}
 
     # Validate it really is YAML before doing anything destructive. For the
     # python variant we have to strip the 2-line import-sys preamble first.
     try:
         raw = candidate.read_text()
     except (OSError, UnicodeDecodeError) as exc:
-        return {"status": "error",
-                "reason": f"read error: {exc.__class__.__name__}"}
+        return {"status": "error", "reason": f"read error: {exc.__class__.__name__}"}
 
     cleaned = _strip_py_preamble(raw) if candidate.suffix == ".py" else raw
     try:
         loaded = yaml.safe_load(cleaned)
     except yaml.YAMLError as exc:
-        return {"status": "dropped_invalid_yaml",
-                "reason": f"yaml.safe_load failed: {exc.__class__.__name__}"}
+        return {
+            "status": "dropped_invalid_yaml",
+            "reason": f"yaml.safe_load failed: {exc.__class__.__name__}",
+        }
 
     # An empty / None YAML doc isn't useful as a structural reference.
     if loaded is None or not isinstance(loaded, dict):
-        return {"status": "dropped_invalid_yaml",
-                "reason": "YAML parsed to non-mapping / empty"}
+        return {
+            "status": "dropped_invalid_yaml",
+            "reason": "YAML parsed to non-mapping / empty",
+        }
 
     # All checks passed — apply the patches.
     dockerfile_status = _patch_dockerfile(env_dir / "Dockerfile", dry_run)
     if ref_path is not None:
-        rename_status = _rename_reference_yaml(
-            ref_path, target_yaml, cleaned, dry_run
-        )
+        rename_status = _rename_reference_yaml(ref_path, target_yaml, cleaned, dry_run)
     else:
         rename_status = "already_patched"
     test_sh_status = _patch_test_sh(tests_dir / "test.sh", dry_run)
@@ -422,18 +426,23 @@ def patch_task(task_dir: Path, dry_run: bool) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Patch DCAgent/exp_rpt_ghactions tasks (v2 verifier).",
     )
-    p.add_argument("--root", required=True,
-                   help="Tasks dir (extracted parquet)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Report actions only; write nothing")
-    p.add_argument("--limit", type=int, default=0,
-                   help="Patch at most N tasks (0 = all)")
-    p.add_argument("--dropped-out", default=None,
-                   help="Optional path to write dropped task names + reason")
+    p.add_argument("--root", required=True, help="Tasks dir (extracted parquet)")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Report actions only; write nothing"
+    )
+    p.add_argument(
+        "--limit", type=int, default=0, help="Patch at most N tasks (0 = all)"
+    )
+    p.add_argument(
+        "--dropped-out",
+        default=None,
+        help="Optional path to write dropped task names + reason",
+    )
     return p.parse_args()
 
 
@@ -466,12 +475,14 @@ def main() -> int:
             # Remove the directory entirely so it doesn't ship in the dataset.
             if not args.dry_run:
                 import shutil
+
                 shutil.rmtree(td)
         elif status == "missing_reference":
             n_missing += 1
             dropped.append(f"{td.name}\tmissing_reference\t{result['reason']}")
             if not args.dry_run:
                 import shutil
+
                 shutil.rmtree(td)
         else:
             n_error += 1

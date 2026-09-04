@@ -44,11 +44,30 @@ def looks_like_file_path(value: str) -> bool:
 
     # Has a file extension (common config/template/data files)
     path_extensions = {
-        ".yaml", ".yml", ".json", ".jsonl", ".txt", ".md",
-        ".py", ".sh", ".jinja", ".jinja2", ".j2",
-        ".parquet", ".csv", ".tsv", ".arrow",
-        ".safetensors", ".bin", ".pt", ".pth", ".ckpt",
-        ".toml", ".ini", ".cfg", ".conf",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".jsonl",
+        ".txt",
+        ".md",
+        ".py",
+        ".sh",
+        ".jinja",
+        ".jinja2",
+        ".j2",
+        ".parquet",
+        ".csv",
+        ".tsv",
+        ".arrow",
+        ".safetensors",
+        ".bin",
+        ".pt",
+        ".pth",
+        ".ckpt",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
     }
     lower = value.lower()
     if any(lower.endswith(ext) for ext in path_extensions):
@@ -104,19 +123,29 @@ def resolve_paths_in_dict(
             for item in value:
                 if isinstance(item, str) and looks_like_file_path(item):
                     if base_dir:
-                        resolved = (base_dir / item).resolve() if not Path(item).is_absolute() else Path(item).resolve()
+                        resolved = (
+                            (base_dir / item).resolve()
+                            if not Path(item).is_absolute()
+                            else Path(item).resolve()
+                        )
                         resolved_list.append(str(resolved))
                     else:
                         resolved_list.append(str(resolve_repo_path(item)))
                 elif isinstance(item, dict):
-                    resolved_list.append(resolve_paths_in_dict(item, base_dir, skip_keys, full_key))
+                    resolved_list.append(
+                        resolve_paths_in_dict(item, base_dir, skip_keys, full_key)
+                    )
                 else:
                     resolved_list.append(item)
             result[key] = resolved_list
         elif isinstance(value, str) and looks_like_file_path(value):
             # Resolve path-like strings
             if base_dir:
-                resolved = (base_dir / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+                resolved = (
+                    (base_dir / value).resolve()
+                    if not Path(value).is_absolute()
+                    else Path(value).resolve()
+                )
                 result[key] = str(resolved)
             else:
                 result[key] = str(resolve_repo_path(value))
@@ -187,7 +216,18 @@ def coerce_str_bool_none(
         if not isinstance(value, str):
             continue
         lowered = value.strip().lower()
-        if key in bool_keys and lowered in {"true", "false", "1", "0", "yes", "no", "y", "n", "on", "off"}:
+        if key in bool_keys and lowered in {
+            "true",
+            "false",
+            "1",
+            "0",
+            "yes",
+            "no",
+            "y",
+            "n",
+            "on",
+            "off",
+        }:
             args_dict[key] = parse_bool_flag(lowered)
         elif lowered == "none":
             args_dict[key] = lowered if key in literal_none_keys else None
@@ -217,7 +257,9 @@ def coerce_numeric_cli_values(args_dict: dict[str, Any]) -> dict[str, Any]:
         try:
             args_dict[key] = caster(value)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"Expected {key} to be {caster.__name__}-like, got {value!r}") from exc
+            raise ValueError(
+                f"Expected {key} to be {caster.__name__}-like, got {value!r}"
+            ) from exc
     return args_dict
 
 

@@ -38,11 +38,15 @@ except ImportError:
 
 # Import parquet converter
 import sys
+
 # Get to ot-agent root (two levels up from hpc/launch.py)
-ot_agent_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ot_agent_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 sys.path.insert(0, ot_agent_root)
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader  # noqa: E402
+
 
 def launch_sbatch(sbatch_script_path, dependency=None, has_internet=False) -> str:
     if not has_internet:
@@ -60,7 +64,7 @@ def launch_sbatch(sbatch_script_path, dependency=None, has_internet=False) -> st
 def render_jinja2_template(template_path, template_vars, output_path):
     """
     Render a Jinja2 template with the provided variables.
-    
+
     Args:
         template_path: Path to the Jinja2 template file
         template_vars: Dictionary of variables to pass to the template
@@ -68,17 +72,17 @@ def render_jinja2_template(template_path, template_vars, output_path):
     """
     # Create Jinja2 environment
     env = Environment(loader=FileSystemLoader(os.path.dirname(template_path)))
-    
+
     # Load the template
     template = env.get_template(os.path.basename(template_path))
-    
+
     # Render the template with the provided variables
     rendered_content = template.render(**template_vars)
-    
+
     # Write the rendered content to the output file
     with open(output_path, "w") as f:
         f.write(rendered_content)
-        
+
     print(f"Rendered Jinja2 template to {output_path}")
 
 
@@ -89,11 +93,13 @@ def construct_sbatch_script(exp_args):
     TODO(Charlie): Check JSC support for Jinja2 templating.
     """
     jinja_template_path = exp_args["train_sbatch_jinja_path"]
-    assert os.path.exists(jinja_template_path), f"Jinja2 template {jinja_template_path} does not exist."
+    assert os.path.exists(jinja_template_path), (
+        f"Jinja2 template {jinja_template_path} does not exist."
+    )
 
     # Prepare template variables
     template_vars = defaultdict(str, **exp_args)
-    
+
     # Add TACC-specific template variables
     tacc_vars = {
         "vllm_cache_root": os.environ.get("VLLM_CACHE_ROOT", ""),
@@ -105,26 +111,32 @@ def construct_sbatch_script(exp_args):
         "uv_cache_dir": os.environ.get("UV_CACHE_DIR", ""),
         "secret_env_path": os.environ.get("SECRET_ENV_PATH", ""),
         "conda_activate_path": os.environ.get("CONDA_ACTIVATE_PATH", ""),
-        "extra_pythonpath": os.environ.get("EXTRA_PYTHONPATH", ""),  # TODO(Charlie): handle when it is not provided. This is optional.
+        "extra_pythonpath": os.environ.get(
+            "EXTRA_PYTHONPATH", ""
+        ),  # TODO(Charlie): handle when it is not provided. This is optional.
         "conda_env_path": os.environ.get("CONDA_ENV_PATH", ""),
         "skyrl_home": os.environ.get("SKYRL_HOME", ""),
-        "ot_agent_path": os.environ.get("OT_AGENT", "/scratch/08134/negin/dc-agent-shared/dc-agent"),
+        "ot_agent_path": os.environ.get(
+            "OT_AGENT", "/scratch/08134/negin/dc-agent-shared/dc-agent"
+        ),
     }
     # assert that all the directories exists to prevent erroring out on compute node after queuing
     for key, value in tacc_vars.items():
-        assert os.path.exists(value), f"{key} path {value} does not exist. Please check your `tacc.env` file."
+        assert os.path.exists(value), (
+            f"{key} path {value} does not exist. Please check your `tacc.env` file."
+        )
 
     template_vars.update(tacc_vars)
-    
+
     # Set default time limit if not provided
     if template_vars.get("time_limit") is None:
         template_vars["time_limit"] = "01:00:00"
-    
+
     # Create output directory
     sbatch_dir = os.path.join(template_vars["experiments_dir"], "sbatch_scripts")
     os.makedirs(sbatch_dir, exist_ok=True)
     sbatch_script_path = os.path.join(sbatch_dir, f"{template_vars['job_name']}.sbatch")
-    
+
     # Render the Jinja2 template
     render_jinja2_template(jinja_template_path, template_vars, sbatch_script_path)
 
@@ -177,7 +189,9 @@ def inplace_update_skyrl_args(skyrl_args, exp_args):
     }
 
     for exp_key, skyrl_key in exp_args_to_skyrl_keys.items():
-        assert exp_key in exp_args, f"Experiment argument {exp_key} not found in exp_args"
+        assert exp_key in exp_args, (
+            f"Experiment argument {exp_key} not found in exp_args"
+        )
         if skyrl_key in skyrl_args:
             raise ValueError(
                 f"SkyRL configuration {skyrl_key} already exists in skyrl_args. You should not "
@@ -189,7 +203,9 @@ def inplace_update_skyrl_args(skyrl_args, exp_args):
     # Auto-populate export_path and ckpt_path if not explicitly set
     # These are derived from experiments_dir and job_name
     job_name = exp_args.get("job_name", "default")
-    experiments_dir = exp_args.get("experiments_dir", os.path.expanduser("~/experiments"))
+    experiments_dir = exp_args.get(
+        "experiments_dir", os.path.expanduser("~/experiments")
+    )
 
     # export_path: where HF-format models are saved (for inference/upload)
     if "trainer.export_path" not in skyrl_args:
@@ -217,16 +233,16 @@ def submit_job(exp_args=None, dependency=None, has_internet=False):
         if max_restarts > 0:
             for _ in range(max_restarts):
                 job_id = launch_sbatch(
-                    exp_args["train_sbatch_path_out"], dependency=dependency, has_internet=has_internet
+                    exp_args["train_sbatch_path_out"],
+                    dependency=dependency,
+                    has_internet=has_internet,
                 )
                 job_id = job_id.split()[-1]
                 job_ids.append(job_id)
                 dependency = f"afternotok:{job_id}"
 
     # Submit final job in chain
-    job_id = launch_sbatch(
-        exp_args["train_sbatch_path_out"], dependency, has_internet
-    )
+    job_id = launch_sbatch(exp_args["train_sbatch_path_out"], dependency, has_internet)
     job_id = job_id.split()[-1]
     job_ids.append(job_id)
 
@@ -263,14 +279,13 @@ def pre_validation(exp_args, cli_args):
         template_keys = _extract_template_keys(exp_args["train_sbatch_jinja_path"])
         missing_keys = []
         for key in template_keys:
-            if (
-                key not in exp_args
-                and key not in cli_args
-            ):
+            if key not in exp_args and key not in cli_args:
                 missing_keys.append(key)
-        
+
         if missing_keys:
-            print(f"Warning: Template keys {missing_keys} not found in experiment arguments or cli arguments.")
+            print(
+                f"Warning: Template keys {missing_keys} not found in experiment arguments or cli arguments."
+            )
             print("These will be replaced with empty strings in the sbatch script.")
     elif "train_sbatch_jinja_path" in exp_args:
         raise FileNotFoundError(
@@ -281,7 +296,7 @@ def pre_validation(exp_args, cli_args):
 def main():
     """
     Main function that launches training jobs with optional Hugging Face upload watchdog.
-    
+
     New Features:
     - Login watchdog: Monitors job completion and automatically uploads model to Hugging Face
     - To enable: Set --enable_hf_upload flag
@@ -294,7 +309,7 @@ def main():
     # Parse command line arguments
     cli_args = parse_args()
     for key, value in cli_args.items():
-        if type(value) == str:
+        if type(value) == str:  # noqa: E721
             value = value.lower()
             if value == "false":
                 cli_args[key] = False
@@ -334,7 +349,7 @@ def main():
     # Clean dataset names by removing square brackets
     exp_args["original_model_name"] = exp_args.get("model_path")
     exp_args["original_train_data"] = exp_args.get("train_data", []).copy()
-    
+
     if "train_data" in exp_args:
         exp_args["train_data"] = [d.strip("[]") for d in exp_args["train_data"]]
     if "val_data" in exp_args:
@@ -346,7 +361,9 @@ def main():
     skyrl_args = exp_args["skyrl_args"]  # those passed in with -S key=value
     del exp_args["skyrl_args"]
     skyrl_args = inplace_update_skyrl_args(skyrl_args, exp_args)
-    exp_args["skyrl_command_string"] = build_skyrl_command_string(exp_args["skyrl_entrypoint"], skyrl_args)
+    exp_args["skyrl_command_string"] = build_skyrl_command_string(
+        exp_args["skyrl_entrypoint"], skyrl_args
+    )
     print(f"Running SkyRL command in sbatch: {exp_args['skyrl_command_string']}")
 
     # Construct the sbatch script
@@ -357,17 +374,21 @@ def main():
     )
 
     # Display train arguments
-    print("=" * 20 + f" Train Args " + "=" * 20)
+    print("=" * 20 + " Train Args " + "=" * 20)
     for key, value in exp_args.items():
         print(f"{key}: {value}")
     print("=" * 50)
-    
+
     # Set upload sbatch template path if not already set
     if "train_sbatch_jinja_path" in exp_args:
         train_template = exp_args["train_sbatch_jinja_path"]
         if "tacc_train.j2" in train_template:
-            exp_args["upload_sbatch_jinja_path"] = train_template.replace("tacc_train.j2", "tacc_upload.j2")
-            print(f"\nAuto-configured upload template: {exp_args['upload_sbatch_jinja_path']}")
+            exp_args["upload_sbatch_jinja_path"] = train_template.replace(
+                "tacc_train.j2", "tacc_upload.j2"
+            )
+            print(
+                f"\nAuto-configured upload template: {exp_args['upload_sbatch_jinja_path']}"
+            )
 
     # Dry run with no job submission
     if exp_args.get("dry_run", False):
@@ -376,7 +397,9 @@ def main():
         )
         return
 
-    train_job_ids = submit_job(exp_args=exp_args, dependency=None, has_internet=hpc.internet_node)
+    train_job_ids = submit_job(
+        exp_args=exp_args, dependency=None, has_internet=hpc.internet_node
+    )
 
     # For backwards compatibility and logging, use the last job ID
     train_job_id = train_job_ids[-1] if train_job_ids else None
@@ -387,9 +410,11 @@ def main():
         hf_repo_name = exp_args.get("hf_repo_name")
         if not hf_repo_name:
             # Use DCAgent/ prefix with final_model_name
-            final_model_name = exp_args.get('final_model_name', exp_args.get('job_name', 'model'))
+            final_model_name = exp_args.get(
+                "final_model_name", exp_args.get("job_name", "model")
+            )
             hf_repo_name = f"DCAgent/{final_model_name}"
-        
+
         # Get HF token from environment or arguments
         hf_token = exp_args.get("hf_token") or os.environ.get("HF_TOKEN")
 
@@ -398,19 +423,35 @@ def main():
         model_upload_path = skyrl_args.get("trainer.export_path")
 
         if model_upload_path:
-            check_interval = exp_args.get("watchdog_check_interval", 300)  # Default 5 minutes
+            check_interval = exp_args.get(
+                "watchdog_check_interval", 300
+            )  # Default 5 minutes
 
             # Determine target function and args based on job count
             if len(train_job_ids) > 1:
                 # Multiple jobs in restart chain - use smart chain watchdog
                 target_func = login_watchdog_chain
-                target_args = (train_job_ids, model_upload_path, hf_repo_name, hf_token, check_interval, exp_args)
+                target_args = (
+                    train_job_ids,
+                    model_upload_path,
+                    hf_repo_name,
+                    hf_token,
+                    check_interval,
+                    exp_args,
+                )
                 print(f"\nStarting login watchdog chain for {len(train_job_ids)} jobs")
                 print(f"Job chain: {train_job_ids}")
             else:
                 # Single job - use original watchdog
                 target_func = login_watchdog
-                target_args = (train_job_id, model_upload_path, hf_repo_name, hf_token, check_interval, exp_args)
+                target_args = (
+                    train_job_id,
+                    model_upload_path,
+                    hf_repo_name,
+                    hf_token,
+                    check_interval,
+                    exp_args,
+                )
                 print(f"\nStarting login watchdog for job {train_job_id}")
 
             # Common logging and thread setup
@@ -418,14 +459,14 @@ def main():
             print(f"Model path: {model_upload_path}")
 
             watchdog_thread = threading.Thread(
-                target=target_func,
-                args=target_args,
-                daemon=True
+                target=target_func, args=target_args, daemon=True
             )
             watchdog_thread.start()
             print("Login watchdog thread started for job(s)")
 
-            print("Login watchdog started. The script will continue running to monitor the job.")
+            print(
+                "Login watchdog started. The script will continue running to monitor the job."
+            )
             print("Press Ctrl+C to stop monitoring (the job will continue running).")
 
             try:
@@ -433,10 +474,14 @@ def main():
                 while watchdog_thread.is_alive():
                     time.sleep(60)  # Check every minute
             except KeyboardInterrupt:
-                print("\nStopping login watchdog monitoring. The job will continue running.")
+                print(
+                    "\nStopping login watchdog monitoring. The job will continue running."
+                )
                 print("The watchdog thread will continue in the background.")
     elif exp_args.get("enable_hf_upload", False) and not is_hf_available:
-        print("Warning: HF upload enabled but huggingface_hub not available. Skipping watchdog setup.")
+        print(
+            "Warning: HF upload enabled but huggingface_hub not available. Skipping watchdog setup."
+        )
 
 
 if __name__ == "__main__":

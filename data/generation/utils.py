@@ -6,7 +6,7 @@ import argparse
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, List, Union
+from typing import Any, Dict, Optional, Union
 
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
@@ -113,6 +113,39 @@ class VLLMServerConfig:
     # In-process periodic Python stack dump for ALL threads — replacement
     # for py-spy on clusters where ptrace_scope=2 blocks external attach.
     pynccl_faulthandler_interval_sec: Optional[int] = None
+    # NCCL diagnostic / workaround env vars. All three propagate to the
+    # cross-node Ray DP actors via vLLM's NCCL_ copy-prefix
+    # (vllm/ray/ray_env.py DEFAULT_ENV_VAR_PREFIXES), so they reach the
+    # worker process where NCCL initializes its comms — not just the driver.
+    #   nccl_cumem_enable=false → NCCL_CUMEM_ENABLE=0. Disables NCCL's
+    #     cuMem-based buffer registration; candidate workaround for the
+    #     cudagraph-capture "illegal memory access" on the cross-node MoE
+    #     all-to-all (cuMem×graph-capture regression on the current Jupiter
+    #     wheel). See 2026-05-27_minimax_dp2_compiled_capture_crash.md.
+    #   nccl_debug="INFO" / nccl_debug_subsys="INIT,COLL,GRAPH" →
+    #     NCCL_DEBUG / NCCL_DEBUG_SUBSYS. Surfaces connection/channel setup
+    #     so we can tell whether it happens DURING the profile_cudagraph_memory
+    #     capture window (the lazy-connection-during-capture hypothesis).
+    nccl_cumem_enable: Optional[bool] = None
+    nccl_debug: Optional[str] = None
+    nccl_debug_subsys: Optional[str] = None
+    # cuda_launch_blocking=true → CUDA_LAUNCH_BLOCKING=1. Serializes every
+    #   CUDA op so an async illegal-memory-access aborts SYNCHRONOUSLY at the
+    #   offending kernel, making the Python traceback name the exact failing
+    #   line inside profile_cudagraph_memory (H1 vs H3 discriminator for the
+    #   MiniMax DP=2 capture crash). NOTE: CUDA_ is NOT a default vLLM
+    #   copy-prefix, so this var does NOT reach the cross-node Ray DP actor on
+    #   its own — you MUST also set vllm_ray_extra_env_vars_to_copy below
+    #   (= 'CUDA_LAUNCH_BLOCKING') so vLLM copies it to the worker. Big
+    #   slowdown; debug-only.
+    cuda_launch_blocking: Optional[bool] = None
+    # vllm_ray_extra_env_vars_to_copy → VLLM_RAY_EXTRA_ENV_VARS_TO_COPY.
+    #   Comma-separated list of EXACT env var names vLLM should copy to the
+    #   cross-node Ray DP actors in addition to the DEFAULT_ENV_VAR_PREFIXES
+    #   (VLLM_, NCCL_, ...). This var is itself read by get_env_vars_to_copy
+    #   and is VLLM_-prefixed, so it self-copies. Use it to ferry non-prefixed
+    #   vars (e.g. CUDA_LAUNCH_BLOCKING) to the worker.
+    vllm_ray_extra_env_vars_to_copy: Optional[str] = None
     extra_args: Any = None
 
 
@@ -153,7 +186,9 @@ def add_generation_args(
     default_target_repo: Optional[str] = None,
     default_input_dir: Optional[str] = None,
     include_no_upload: bool = True,
-    default_engine: Optional[str] = None,  # legacy; ignored but kept for backward compat signature
+    default_engine: Optional[
+        str
+    ] = None,  # legacy; ignored but kept for backward compat signature
 ) -> argparse.ArgumentParser:
     """Augment ``parser`` with standard generation CLI flags."""
 
@@ -338,7 +373,14 @@ def resolve_engine_runtime(config: DataGenerationConfig) -> RuntimeEngineSetting
     engine_cfg = config.engine
     engine_type = engine_cfg.type.lower()
 
-    if engine_type not in {"openai", "anthropic", "vllm_local", "gemini_openai", "google_gemini", "none"}:
+    if engine_type not in {
+        "openai",
+        "anthropic",
+        "vllm_local",
+        "gemini_openai",
+        "google_gemini",
+        "none",
+    }:
         raise ValueError(f"Unsupported engine type: {engine_cfg.type}")
 
     if engine_type == "none":
@@ -380,7 +422,9 @@ def resolve_engine_runtime(config: DataGenerationConfig) -> RuntimeEngineSetting
         if api_key:
             engine_kwargs["api_key"] = api_key
 
-        effective_interval = provider.healthcheck_interval or engine_cfg.healthcheck_interval
+        effective_interval = (
+            provider.healthcheck_interval or engine_cfg.healthcheck_interval
+        )
         if effective_interval is not None:
             engine_kwargs["healthcheck_interval"] = int(effective_interval)
     else:  # pragma: no cover - defensive programming for future types
@@ -419,7 +463,9 @@ def load_datagen_config(config_path: str | os.PathLike[str]) -> LoadedDatagenCon
         raise ValueError(f"Failed to load datagen config at {path}: {exc}") from exc
 
     if not isinstance(raw_cfg, DictConfig):
-        raise TypeError(f"Datagen config at {path} is not a mapping (got {type(raw_cfg).__name__})")
+        raise TypeError(
+            f"Datagen config at {path} is not a mapping (got {type(raw_cfg).__name__})"
+        )
 
     template = OmegaConf.structured(DataGenerationConfig)
     try:
@@ -430,7 +476,9 @@ def load_datagen_config(config_path: str | os.PathLike[str]) -> LoadedDatagenCon
 
     config_obj = OmegaConf.to_object(merged)
     if not isinstance(config_obj, DataGenerationConfig):
-        raise TypeError("OmegaConf returned unexpected object when materializing datagen config.")
+        raise TypeError(
+            "OmegaConf returned unexpected object when materializing datagen config."
+        )
 
     return LoadedDatagenConfig(path=path, config=config_obj, raw=merged)
 
@@ -440,7 +488,9 @@ def create_engine_from_args(args: argparse.Namespace) -> Optional[InferenceEngin
 
     runtime: Optional[RuntimeEngineSettings] = getattr(args, "_engine_runtime", None)
     if runtime is None:
-        config_path = getattr(args, "engine_config", None) or os.environ.get("DATAGEN_CONFIG_PATH")
+        config_path = getattr(args, "engine_config", None) or os.environ.get(
+            "DATAGEN_CONFIG_PATH"
+        )
         if not config_path:
             return None
         loaded = load_datagen_config(config_path)

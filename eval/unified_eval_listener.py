@@ -11,7 +11,7 @@ Key v6 features over v5:
   - Persistent sliding-window batch_size across iterations
   - hf_overrides support in baseline model configs
   - Supabase queries wrapped in try/except for resilience
-Uses unified_eval_harbor.sbatch as the SLURM job template.
+Uses eval/jupiter/eval_harbor.sbatch as the SLURM job template.
 
 
 ===============================================================================
@@ -47,7 +47,7 @@ FLAG REFERENCE
     Example: --datasets "DCAgent/dev_set_v2,DCAgent2/terminal_bench_2"
 
 --sbatch-script, -s <path>
-    Path to the sbatch template. Default: unified_eval_harbor_v4.sbatch (or
+    Path to the sbatch template. Default: eval/jupiter/eval_harbor.sbatch (or
     whatever the preset specifies). Only change this if you have a custom sbatch.
 
 
@@ -212,10 +212,27 @@ FLAG REFERENCE
     Agent name written to DB entries and used by Harbor for evaluation config.
     This determines which agent implementation Harbor uses to run the eval tasks.
 
---enable-thinking
-    Enable thinking/reasoning blocks in vLLM model inference. Most presets
-    enable this by default. Only disable if the model doesn't support thinking
-    or you want to test non-thinking mode.
+--agent-kwarg KEY=VALUE                          [repeatable]
+    Extra harbor agent kwarg, forwarded to every eval's harbor command as
+    `--agent-kwarg KEY=VALUE`. Merged with the chosen preset's `agent_kwargs`
+    list; a CLI key overrides the same key from the preset.
+
+    Thinking is normally resolved PER-MODEL from the baseline model config (each
+    thinking-capable model carries the kwarg there) — there is no dedicated
+    `--enable-thinking` flag anymore, and presets do NOT carry thinking. Use this
+    only to OVERRIDE a model's resolved kwargs. The live nested chat-template form
+    (same mechanism the RL-rollout path uses; vLLM reads
+    `request.chat_template_kwargs` and forwards it to `apply_chat_template`, and
+    terminus-2's `extra_body` param folds it into every LLM call's request body):
+
+        --agent-kwarg 'extra_body={"chat_template_kwargs":{"enable_thinking":true}}'
+
+    Precedence: CLI --agent-kwarg > per-model baseline agent_kwargs > preset
+    agent_kwargs (dedup by the key before `=`). (The historical bare
+    `--agent-kwarg enable_thinking=true` was DEAD: terminus-2 has no
+    `enable_thinking` param, so it was silently discarded and never reached the
+    request — it only "worked" for models like Qwen3 whose template defaults
+    thinking ON.)
 
 --upload-username <str>                          [default: current OS user]
     Username recorded in DB entries and result uploads. Auto-detected from
@@ -401,7 +418,7 @@ import re
 import subprocess
 import sys
 import time
-from collections import Counter
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -422,7 +439,8 @@ if _PROJECT_ROOT not in sys.path:
 _DCFT_DEFAULT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
 os.environ.setdefault("DCFT", _DCFT_DEFAULT)
 
-from database.unified_db.utils import get_supabase_client, load_supabase_keys
+from database.unified_db.utils import get_supabase_client, load_supabase_keys  # noqa: E402
+from eval.presets import load_presets  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +487,7 @@ def parse_harbor_eval_config(path: Optional[str]) -> Dict:
         return {}
     try:
         import yaml
+
         with open(path) as f:
             cfg = yaml.safe_load(f) or {}
     except Exception as e:
@@ -508,6 +527,7 @@ def load_baseline_model_configs(path: Optional[str]) -> Dict[str, Dict]:
 
     try:
         import yaml
+
         with open(path) as f:
             data = yaml.safe_load(f) or {}
 
@@ -533,11 +553,176 @@ def load_baseline_model_configs(path: Optional[str]) -> Dict[str, Dict]:
         _BASELINE_MODEL_CONFIGS = expanded
         _BASELINE_MODEL_PATTERNS = data.get("patterns", [])
         n_groups = len(data.get("groups", []))
-        log(f"Loaded {len(_BASELINE_MODEL_CONFIGS)} baseline model config(s) "
+        log(
+            f"Loaded {len(_BASELINE_MODEL_CONFIGS)} baseline model config(s) "
             f"({n_groups} group(s), {len(per_model)} override(s)) and "
-            f"{len(_BASELINE_MODEL_PATTERNS)} pattern(s) from {path}")
+            f"{len(_BASELINE_MODEL_PATTERNS)} pattern(s) from {path}"
+        )
     except Exception as e:
         log(f"WARNING: failed to load baseline model configs from {path}: {e}")
+        _BASELINE_MODEL_CONFIGS = {}
+        _BASELINE_MODEL_PATTERNS = []
+
+    return _BASELINE_MODEL_CONFIGS
+
+
+def load_model_registry(
+    path: Optional[str], hardware_profile: Optional[str] = None
+) -> Dict[str, Dict]:
+    """Load the SHARED model-config registry (eval/configs/model_configs.yaml).
+
+    This is the decoupled replacement for ``load_baseline_model_configs`` (gated behind
+    ``--use-model-registry``; OFF by default through the Stage-4 cutover). It produces the
+    IDENTICAL in-memory structure the legacy loader does — it populates the same module
+    globals ``_BASELINE_MODEL_CONFIGS`` (exact/group dict) + ``_BASELINE_MODEL_PATTERNS``
+    (regex list) — so the four downstream resolvers
+    (``get_vllm_env_overrides`` / ``get_conda_env_override`` / ``get_baseline_agent_kwargs`` /
+    ``get_baseline_timeout_multiplier``) consume it UNCHANGED. That structural identity is
+    what guarantees byte-identical resolved serve env: there is exactly one EVAL_VLLM_*
+    translation + TP/DP derivation implementation, and both load paths feed it the same dict.
+
+    Two hardware-profile mechanisms, resolved at LOAD time (so the downstream resolvers never
+    see profile metadata), with precedence:
+
+        name@<profile> standalone (NO merge)  >  exact name + variants[<profile>]  >
+        exact name  >  group  >  pattern  ->  size-default
+
+    1. ``variants:`` (ADDITIVE) — for models whose ONLY per-cluster difference is a hardware
+       delta. A model entry carries ``variants: {<profile>: {<field>: <value>, ...}}``; when the
+       active profile matches, those fields SHALLOW-MERGE over the base entry (variant replaces
+       the whole value of each top-level key it names; no deep-merge; cannot UNSET a base key).
+       No matching variant -> base entry unchanged (G3 strict-superset).
+
+    2. ``name@<profile>`` (STANDALONE, no inheritance) — for models that genuinely diverge on
+       INTRINSIC fields per cluster (different scaffold / serve env), where the base+variant
+       additive merge cannot reproduce the recipe (a variant can add/replace but never REMOVE a
+       base key). A top-level ``models:`` key of the form ``"<name>@<profile>"`` is a fully
+       self-specified entry: when the active profile matches, it REPLACES the resolution of
+       ``<name>`` wholesale (no base/group/variant merge), and the suffixed key itself is not
+       exposed. Rationale (kept deliberately mechanical): the eval-launch stack will eventually
+       fold into ``hpc/`` as one source of truth — fully-resolved flat entries port over
+       mechanically, whereas merge cleverness (unset/replace) would have to be reverse-
+       engineered. Use ``variants:`` for HW-only deltas; use ``name@<profile>`` ONLY for the
+       scaffold/env-divergent models.
+
+    Patterns may carry an optional ``profiles: [<name>, ...]`` filter: a pattern with no
+    ``profiles`` key applies to ALL profiles; with ``profiles`` it applies only to the listed
+    ones (so a cluster's HW-specific pattern fallbacks live in the shared registry without
+    leaking onto other clusters). The ``profiles`` key is stripped before storing. ``variants:``
+    on a pattern is also supported.
+    """
+    global _BASELINE_MODEL_CONFIGS, _BASELINE_MODEL_PATTERNS
+    if _BASELINE_MODEL_CONFIGS is not None:
+        return _BASELINE_MODEL_CONFIGS
+
+    if not path or not os.path.isfile(path):
+        _BASELINE_MODEL_CONFIGS = {}
+        _BASELINE_MODEL_PATTERNS = []
+        return _BASELINE_MODEL_CONFIGS
+
+    # The active profile name used for variant/standalone/pattern matching. A cluster with no
+    # hardware_profile (Leonardo/Jupiter) matches "default".
+    active_profile = hardware_profile or "default"
+    _SUFFIX = "@"
+
+    def _apply_variant(entry: Dict) -> Dict:
+        """Pop the ``variants:`` block and shallow-merge the active profile's fields on top."""
+        variants = entry.pop("variants", None)
+        if isinstance(variants, dict) and active_profile in variants:
+            override = variants.get(active_profile) or {}
+            entry.update(override)  # shallow: variant replaces each named top-level key
+        return entry
+
+    try:
+        import yaml
+
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+
+        per_model = data.get("models", {}) or {}
+
+        # Split standalone "name@profile" keys out of the regular model entries.
+        base_models: Dict[str, Dict] = {}
+        standalone: Dict[
+            str, Dict
+        ] = {}  # bare-name -> the active-profile standalone entry
+        for key, cfg in per_model.items():
+            if _SUFFIX in key:
+                bare, _, prof = key.rpartition(_SUFFIX)
+                if prof == active_profile and bare:
+                    standalone[bare] = cfg  # wins wholesale, no merge
+                # standalone entries for OTHER profiles are simply ignored on this cluster
+            else:
+                base_models[key] = cfg
+
+        # Expand groups first (group config is the base; per-model entries merge on top).
+        expanded: Dict[str, Dict] = {}
+        for group in data.get("groups", []) or []:
+            model_names = group.get("models", [])
+            shared_cfg = {k: v for k, v in group.items() if k != "models"}
+            for name in model_names:
+                expanded[name] = dict(shared_cfg)
+
+        for name, overrides in base_models.items():
+            if name in expanded:
+                expanded[name].update(overrides)
+            else:
+                expanded[name] = dict(overrides)
+
+        # Profile inheritance rule for BASE (bare) model entries:
+        #   - the "default" profile (Leonardo/Jupiter) sees ALL base entries (the shared base);
+        #   - a NON-default profile (e.g. gh200) inherits a base entry ONLY if that entry opts in
+        #     via a matching `variants:` block — i.e. the model is a HW-only delta of the base.
+        #     A base entry with no variant for the active profile is NOT exposed on that profile;
+        #     the model then resolves from its `name@<profile>` standalone (below) if present, else
+        #     the profile's pattern fallbacks / size-default.
+        # This reproduces the legacy per-cluster forks exactly: a cluster's model set = its
+        # opted-in (variant) base entries + its `@profile` standalones + its scoped patterns, with
+        # nothing from another cluster's recipe leaking in. (Decoupling refactor Stage 3.)
+        import copy as _copy
+
+        def _included_on_profile(entry: Dict) -> bool:
+            if active_profile == "default":
+                return True
+            variants = entry.get("variants")
+            return isinstance(variants, dict) and active_profile in variants
+
+        resolved: Dict[str, Dict] = {
+            name: _apply_variant(_copy.deepcopy(entry))
+            for name, entry in expanded.items()
+            if _included_on_profile(entry)
+        }
+
+        # name@profile standalone entries REPLACE the bare name wholesale (no base/variant merge).
+        # `variants:` stripped if present (a standalone is already fully resolved).
+        for bare, cfg in standalone.items():
+            entry = _copy.deepcopy(cfg)
+            entry.pop("variants", None)
+            resolved[bare] = entry
+
+        # Patterns: keep those that apply to the active profile (no `profiles` key = all),
+        # strip the `profiles` filter, then resolve any per-pattern variant.
+        patterns = data.get("patterns", []) or []
+        resolved_patterns: List[Dict] = []
+        for p in patterns:
+            profs = p.get("profiles")
+            if profs is not None and active_profile not in profs:
+                continue
+            pcopy = _copy.deepcopy(p)
+            pcopy.pop("profiles", None)
+            resolved_patterns.append(_apply_variant(pcopy))
+
+        _BASELINE_MODEL_CONFIGS = resolved
+        _BASELINE_MODEL_PATTERNS = resolved_patterns
+        n_groups = len(data.get("groups", []) or [])
+        log(
+            f"Loaded model registry: {len(_BASELINE_MODEL_CONFIGS)} model config(s) "
+            f"({n_groups} group(s), {len(base_models)} override(s), {len(standalone)} "
+            f"standalone@{active_profile}) and {len(_BASELINE_MODEL_PATTERNS)} pattern(s) "
+            f"from {path} (hardware_profile={active_profile})"
+        )
+    except Exception as e:
+        log(f"WARNING: failed to load model registry from {path}: {e}")
         _BASELINE_MODEL_CONFIGS = {}
         _BASELINE_MODEL_PATTERNS = []
 
@@ -575,16 +760,52 @@ def get_vllm_env_overrides(hf_model: str, configs: Dict[str, Dict]) -> Dict[str,
         cfg = _match_pattern_config(hf_model)
         if cfg:
             match_source = "pattern"
-    if not cfg:
-        return {}
-
-    log(f"  Baseline config [{match_source}] for {hf_model}: {cfg}")
+    cfg = cfg or {}
+    if match_source:
+        log(f"  Baseline config [{match_source}] for {hf_model}: {cfg}")
 
     env: Dict[str, str] = {}
+    # --- TP / DP: size-aware, NODE-FILLING default (explicit baseline cfg wins per-field) ---
+    # Use ALL of a node's GPUs instead of idling them. <=14B -> TP=1; >14B -> TP=2; DP then
+    # fills the node (dp = gpus_per_node // tp). On Leonardo's 4-GPU node: TP1/DP4 (<=14B),
+    # TP2/DP2 (>14B) — fixing the old TP1/DP1 that left 3 of 4 GPUs idle (~25% throughput). A
+    # whole-node 1-GPU cluster (TACC GH200, gpus_per_node=1) stays TP1/DP1. An explicit
+    # baseline-config tensor_parallel_size / data_parallel_size still wins per-field (e.g. a
+    # 32B cfg TP=4 -> dp fills the remainder, gpus_per_node//4).
+    gpus_per_node = int(
+        (_CLUSTER_CONFIG or {}).get("hardware", {}).get("gpus_per_node", 8) or 8
+    )
+    size_b = _resolve_model_size_b(hf_model)
+    default_tp, _ = infer_size_tp_dp(hf_model, gpus_per_node)
     if cfg.get("tensor_parallel_size") is not None:
-        env["EVAL_VLLM_TENSOR_PARALLEL_SIZE"] = str(cfg["tensor_parallel_size"])
+        tp = int(cfg["tensor_parallel_size"])
+    else:
+        tp = default_tp
+    if cfg.get("data_parallel_size") is not None:
+        dp = int(cfg["data_parallel_size"])
+    else:
+        dp = max(1, gpus_per_node // max(1, tp))
+    env["EVAL_VLLM_TENSOR_PARALLEL_SIZE"] = str(tp)
+    if dp > 1:
+        # Native vLLM data-parallel replicas (total GPUs = TP × DP). Read back into
+        # effective_dp at submit time so the --gres GPU count is correct, and flows to
+        # build_vllm_cmd.sh as --data-parallel-size.
+        env["EVAL_VLLM_DATA_PARALLEL_SIZE"] = str(dp)
+    log(
+        f"  vLLM parallelism for {hf_model}: TP={tp} DP={dp} (gpus_per_node={gpus_per_node}, "
+        f"size={('%gB' % size_b) if size_b is not None else 'unknown→≤14B'}, "
+        f"TP from {'cfg' if cfg.get('tensor_parallel_size') is not None else 'size-default'})"
+    )
     if cfg.get("max_model_len") is not None:
         env["EVAL_VLLM_MAX_MODEL_LEN"] = str(cfg["max_model_len"])
+    # OPTIONAL per-model serve-output-token budget. Mirrors max_model_len exactly: when the
+    # registry pins `max_output_tokens` on a model/variant, forward it as EVAL_MAX_OUTPUT_TOKENS;
+    # ABSENT -> do NOT set the env var, so the sbatch :-16384 default applies unchanged. This is
+    # the single registry home for a model's serve-token budget (fixes the implicit-16k-default
+    # gap for thinking models). Not EVAL_VLLM_* — it is forwarded as its own EVAL_MAX_OUTPUT_TOKENS
+    # (the same env the --max-output-tokens CLI sets), consumed by eval/*/eval_harbor.sbatch.
+    if cfg.get("max_output_tokens") is not None:
+        env["EVAL_MAX_OUTPUT_TOKENS"] = str(cfg["max_output_tokens"])
     if cfg.get("swap_space") is not None:
         env["EVAL_VLLM_SWAP_SPACE"] = str(cfg["swap_space"])
     if cfg.get("trust_remote_code"):
@@ -599,6 +820,16 @@ def get_vllm_env_overrides(hf_model: str, configs: Dict[str, Dict]) -> Dict[str,
         env["EVAL_VLLM_EXTRA_ARGS"] = os.path.expandvars(cfg["extra_args"])
     if cfg.get("hf_overrides"):
         env["EVAL_VLLM_HF_OVERRIDES"] = cfg["hf_overrides"]
+    if cfg.get("limit_mm_per_prompt"):
+        # Forwarded as its own env var (NOT folded into extra_args) so the JSON
+        # object string reaches vLLM intact — see eval/build_vllm_cmd.sh.
+        env["EVAL_VLLM_LIMIT_MM_PER_PROMPT"] = cfg["limit_mm_per_prompt"]
+    # max_num_seqs: explicit baseline cfg wins; else DEFAULT 256 for the Qwen3.5/3.6 family
+    # (these MoE/hybrid arches under-serve at vLLM's unset default); else leave unset.
+    if cfg.get("max_num_seqs") is not None:
+        env["EVAL_VLLM_MAX_NUM_SEQS"] = str(cfg["max_num_seqs"])
+    elif _is_qwen35_family(hf_model):
+        env["EVAL_VLLM_MAX_NUM_SEQS"] = "256"
 
     return env
 
@@ -615,6 +846,198 @@ def get_conda_env_override(hf_model: str, configs: Dict[str, Dict]) -> Optional[
     if cfg and cfg.get("conda_env"):
         return cfg["conda_env"]
     return None
+
+
+def get_baseline_agent_kwargs(hf_model: str, configs: Dict[str, Dict]) -> List[str]:
+    """Get the per-model `agent_kwargs` list for a model from the baseline config.
+
+    Tries exact/group match first, then pattern match. Returns the list of
+    `key=value` harbor agent-kwarg strings declared on the model's entry (e.g.
+    the live nested thinking form), or [] if none. Thinking-capable models carry
+    this; NON-thinking models (e.g. Qwen2.5-Coder finetunes) carry none.
+    """
+    cfg = configs.get(hf_model)
+    if not cfg:
+        cfg = _match_pattern_config(hf_model)
+    if cfg and cfg.get("agent_kwargs"):
+        return list(cfg["agent_kwargs"])
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Per-model timeout-multiplier inference
+# ---------------------------------------------------------------------------
+# Restored from the retired eval/jupiter listener (commit 9040cb29) and generalized:
+# the size signal is taken from the eval model's own name when it carries a size
+# token, ELSE from the Supabase base model (models.base_model_id). Finetunes such as
+# DCAgent/a1-* carry no size token in their own name, but their base (Qwen/Qwen3-8B)
+# does — so an 8B finetune resolves to 2.0 automatically without a per-model entry.
+_SIZE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9.])(\d+(?:\.\d+)?)\s*[bB](?![A-Za-z0-9])")
+# MoE ACTIVE-parameter token, e.g. the "A3B" in "Qwen3-30B-A3B" / "A22B" in "…-235B-A22B".
+# _SIZE_TOKEN_RE (TOTAL size) deliberately EXCLUDES this — its negative lookbehind rejects the
+# leading "A" — so the two regexes never collide. Active params drive DECODE SPEED (a 30B-A3B
+# generates at ~3B-dense speed), which is what a generation TIMEOUT should track.
+_ACTIVE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9.])[Aa](\d+(?:\.\d+)?)\s*[bB](?![A-Za-z0-9])"
+)
+_BASE_MODEL_NAME_CACHE: Dict[str, Optional[str]] = {}
+
+
+def _resolve_active_size_b(name: str) -> Optional[float]:
+    """ACTIVE (compute) parameter count in BILLIONS from a model name.
+
+    For an MoE named like "30b-a3b" this is the "a3b" ACTIVE token (the decode-speed
+    proxy); for a dense model (no active token) it falls back to the largest TOTAL size
+    token. Returns None when neither is present. Used ONLY for the speed-bound generation
+    TIMEOUT — memory-bound TP/DP sizing stays on TOTAL params (see _resolve_model_size_b).
+    """
+    active = [float(m) for m in _ACTIVE_TOKEN_RE.findall(name or "")]
+    if active:
+        return max(active)
+    total = [float(m) for m in _SIZE_TOKEN_RE.findall(name or "")]
+    return max(total) if total else None
+
+
+def infer_size_timeout_multiplier(name: str) -> Optional[float]:
+    """Infer a harbor timeout multiplier from a model name, keyed on ACTIVE params.
+
+    Generation latency scales with ACTIVE parameters, so for an MoE the active token
+    governs: "Qwen3-30B-A3B" -> 3B active -> 2.0 (fast), NOT the 16.0 its 30B TOTAL would
+    imply. Dense models carry no active token -> their total size is used (unchanged).
+    Returns 2.0 for <=~14B active, 16.0 for ~30-40B active, or None when no size token is
+    present / the active size is out-of-band (caller then tries the base model, else the
+    1.0 default + logs). NOTE: memory-bound TP/DP sizing intentionally stays on TOTAL
+    params (_resolve_model_size_b) — only the speed-bound TIMEOUT keys on active.
+    """
+    b = _resolve_active_size_b(name)
+    if b is None:
+        return None
+    if b <= 14.0:
+        return 2.0
+    if 28.0 <= b <= 42.0:
+        return 16.0
+    return None
+
+
+def resolve_base_model_name(hf_model: str) -> Optional[str]:
+    """Resolve the *base* model name for an eval model via Supabase.
+
+    Looks up the eval model's `models` row, follows ``base_model_id`` (a
+    self-FK), and returns the base model's ``name`` (which carries the size
+    token finetune names lack). Cached per process. Returns None on any miss
+    (no row / null base / Supabase unavailable) so callers degrade to the eval
+    model's own name then the 1.0 default.
+    """
+    if hf_model in _BASE_MODEL_NAME_CACHE:
+        return _BASE_MODEL_NAME_CACHE[hf_model]
+    base_name: Optional[str] = None
+    try:
+        client = get_supabase_client()
+        rows = (
+            client.table("models")
+            .select("id,name,base_model_id")
+            .eq("name", hf_model)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if rows and rows[0].get("base_model_id"):
+            base = (
+                client.table("models")
+                .select("name")
+                .eq("id", rows[0]["base_model_id"])
+                .limit(1)
+                .execute()
+                .data
+            )
+            if base:
+                base_name = base[0].get("name")
+    except Exception as e:
+        log(f"WARNING: base-model lookup failed for {hf_model}: {e}")
+    _BASE_MODEL_NAME_CACHE[hf_model] = base_name
+    return base_name
+
+
+def _resolve_model_size_b(hf_model: str) -> Optional[float]:
+    """Resolve a model's parameter count in BILLIONS for parallelism sizing.
+
+    Largest size token in the eval model's OWN name (handles MoE "30b-a3b"), else
+    the Supabase base model's name (finetune names like ``a1-ghactions`` carry no
+    size token; their base ``Qwen/Qwen3-8B`` does). Returns None when neither yields
+    a token (callers treat None as the small / <=14B default).
+    """
+    sizes = [float(m) for m in _SIZE_TOKEN_RE.findall(hf_model or "")]
+    if sizes:
+        return max(sizes)
+    base = resolve_base_model_name(hf_model)
+    if base:
+        bsizes = [float(m) for m in _SIZE_TOKEN_RE.findall(base)]
+        if bsizes:
+            return max(bsizes)
+    return None
+
+
+# Qwen3.5 / Qwen3.6 architecture family (model_type qwen3_5 / qwen3_5_moe). Matches the dotted
+# repo names (Qwen3.5-…, Qwen3.6-…) and the underscored model_type token (qwen3_5 / qwen3_6).
+# Requires the . / _ separator so plain Qwen3 (e.g. Qwen3-30B-A3B) does NOT match.
+_QWEN35_FAMILY_RE = re.compile(r"qwen[\s\-_]?3[._][56]", re.IGNORECASE)
+
+
+def _is_qwen35_family(hf_model: str) -> bool:
+    """True for the Qwen3.5 / Qwen3.6 family — from the eval model's OWN name, else its
+    Supabase base model's name (so finetunes ON Qwen3.5/3.6, e.g. allenai/tmax-9b, are caught,
+    mirroring _resolve_model_size_b's base fallback)."""
+    if _QWEN35_FAMILY_RE.search(hf_model or ""):
+        return True
+    base = resolve_base_model_name(hf_model)
+    return bool(base and _QWEN35_FAMILY_RE.search(base))
+
+
+def infer_size_tp_dp(hf_model: str, gpus_per_node: int) -> Tuple[int, int]:
+    """Default (TP, DP) that FILLS a node, chosen by model size.
+
+    <=14B (or unknown) -> TP=1; >14B -> TP=2. DP then fills the node:
+    ``dp = gpus_per_node // tp``. On a 4-GPU node this yields TP1/DP4 (<=14B) and
+    TP2/DP2 (>14B); on a whole-node 1-GPU cluster it stays TP1/DP1. This is the
+    DEFAULT only — an explicit baseline-config TP/DP overrides it per-field.
+    """
+    size_b = _resolve_model_size_b(hf_model)
+    tp = 2 if (size_b is not None and size_b > 14.0) else 1
+    dp = max(1, int(gpus_per_node) // max(1, tp))
+    return tp, dp
+
+
+def get_baseline_timeout_multiplier(
+    hf_model: str, configs: Dict[str, Dict]
+) -> Optional[float]:
+    """Per-model ``timeout_multiplier`` from the baseline config (exact/group,
+    then pattern). Returns the float, or None if the model declares none."""
+    cfg = configs.get(hf_model)
+    if not cfg:
+        cfg = _match_pattern_config(hf_model)
+    if cfg and cfg.get("timeout_multiplier") is not None:
+        return float(cfg["timeout_multiplier"])
+    return None
+
+
+def merge_agent_kwargs(*kwarg_lists: List[str]) -> List[str]:
+    """Merge agent-kwarg `key=value` lists with first-wins precedence by key.
+
+    Earlier lists are more specific and win: pass them most-specific-first
+    (e.g. CLI/global config, then per-model). Dedups by the substring before the
+    first `=`, so the same key never appears twice. Mirrors the merge semantics
+    used in build_config() (CLI key overrides preset key) so behavior stays
+    consistent across the two merge points.
+    """
+    merged: List[str] = []
+    seen: set = set()
+    for kwargs in kwarg_lists:
+        for kw in kwargs or []:
+            key = kw.split("=", 1)[0]
+            if key not in seen:
+                merged.append(kw)
+                seen.add(key)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +1070,7 @@ def load_api_model_configs(path: Optional[str]) -> Dict[str, Any]:
 
     try:
         import yaml
+
         with open(path) as f:
             data = yaml.safe_load(f) or {}
         _API_MODEL_CONFIGS = {
@@ -654,15 +1078,19 @@ def load_api_model_configs(path: Optional[str]) -> Dict[str, Any]:
             "patterns": data.get("patterns", []) or [],
             "preset_n_concurrent_caps": data.get("preset_n_concurrent_caps", {}) or {},
         }
-        log(f"Loaded {len(_API_MODEL_CONFIGS['api_models'])} API model entries "
-            f"and {len(_API_MODEL_CONFIGS['patterns'])} pattern(s) from {path}")
+        log(
+            f"Loaded {len(_API_MODEL_CONFIGS['api_models'])} API model entries "
+            f"and {len(_API_MODEL_CONFIGS['patterns'])} pattern(s) from {path}"
+        )
     except Exception as e:
         log(f"WARNING: failed to load API model configs from {path}: {e}")
         _API_MODEL_CONFIGS = {}
     return _API_MODEL_CONFIGS
 
 
-def get_api_config(hf_model: str, configs: Optional[Dict[str, Any]] = None) -> Optional[Dict]:
+def get_api_config(
+    hf_model: str, configs: Optional[Dict[str, Any]] = None
+) -> Optional[Dict]:
     """Resolve the API serving config for a model name, or None if it should
     use the regular vLLM path.
 
@@ -713,18 +1141,21 @@ def _build_api_agent_kwargs_string(agent_kwargs: Dict[str, Any]) -> str:
 
 # ---------- v6: Disk-Based Resume Scanner ----------
 
-# Infrastructure errors that harbor's resume filters will retry
-INFRA_ERROR_TYPES = {
-    "DaytonaError",
-    "DaytonaAuthenticationError",
-    "DaytonaAuthorizationError",
-    "DaytonaNotFoundError",
-    "EnvironmentStartTimeoutError",
-    "DaytonaRateLimitError",
-    "CancelledError",
-    "SandboxBuildFailedError",
-    "AgentEnvironmentTimeoutError",
-}
+# Infrastructure errors that harbor's resume filters will retry.
+# MUST stay in sync with the sbatch resume branch's --filter-error-type list
+# (eval/tacc/eval_harbor.sbatch). Since the harbor `feuer/trial-not-scored-error`
+# change, an unscored single-step trial is bucketed under its TRUE cause: an
+# upstream infra failure (e.g. EnvironmentStartTimeoutError) is preserved, VNC
+# means strictly "verifier reached, no result", and a silent early fall-through
+# gets the TrialNotScoredError base. All three are infra and counted here — so a
+# VNC-heavy run (and the env-start-timeout-heavy runs that USED to mis-bucket as
+# VNC) still yield non-zero infra_errors and select resume candidates, rather
+# than computing infra_errors=0 and no-op'ing --resume-only.
+#
+# Single source of truth: the set lives in database/unified_db/infra_errors.py
+# (also used by the DB write-point that persists n_infra_errors onto
+# sandbox_jobs.stats). Imported here, not duplicated.
+from database.unified_db.infra_errors import INFRA_ERROR_TYPES  # noqa: E402
 
 
 def _parse_job_dir(job_dir: Path) -> Optional[Dict]:
@@ -756,13 +1187,14 @@ def _parse_job_dir(job_dir: Path) -> Optional[Dict]:
     # Parse config.json for model and dataset
     try:
         import json as _json
+
         config = _json.loads(config_path.read_text())
         agents = config.get("agents", [])
         if agents and isinstance(agents, list):
             model_name = agents[0].get("model_name", "")
             # Strip "hosted_vllm/" prefix
             if model_name.startswith("hosted_vllm/"):
-                model_name = model_name[len("hosted_vllm/"):]
+                model_name = model_name[len("hosted_vllm/") :]
             info["hf_model"] = model_name or None
         datasets = config.get("datasets", [])
         if datasets and isinstance(datasets, list):
@@ -803,6 +1235,7 @@ def _parse_job_dir(job_dir: Path) -> Optional[Dict]:
     if result_path.exists():
         try:
             import json as _json
+
             result = _json.loads(result_path.read_text())
             info["n_total"] = result.get("n_total_trials", 0)
             stats = result.get("stats", {})
@@ -899,18 +1332,18 @@ def scan_jobs_dir_for_resume(
 
         if n_total == 0 and not (jobs_path / entry.name / "result.json").exists():
             # EARLY_KILL: killed before any trial completed
-            reason = f"early_kill (no result.json, resume #{info['resume_count']+1})"
+            reason = f"early_kill (no result.json, resume #{info['resume_count'] + 1})"
         elif n_completed < n_total and finished_at is None:
             # INCOMPLETE: SLURM killed mid-run
-            reason = f"incomplete ({n_completed}/{n_total} trials, resume #{info['resume_count']+1})"
+            reason = f"incomplete ({n_completed}/{n_total} trials, resume #{info['resume_count'] + 1})"
         elif n_completed < n_total and finished_at is not None:
             # PARTIAL: harbor finished but some trials failed
             if infra_errors > infra_error_threshold:
-                reason = f"partial ({n_completed}/{n_total}, {infra_errors} infra errors, resume #{info['resume_count']+1})"
+                reason = f"partial ({n_completed}/{n_total}, {infra_errors} infra errors, resume #{info['resume_count'] + 1})"
         elif n_completed == n_total:
             # DONE: all trials completed
             if infra_errors > infra_error_threshold:
-                reason = f"done_with_errors ({n_completed}/{n_total}, {infra_errors} infra errors, resume #{info['resume_count']+1})"
+                reason = f"done_with_errors ({n_completed}/{n_total}, {infra_errors} infra errors, resume #{info['resume_count'] + 1})"
             else:
                 skipped_done += 1
                 continue
@@ -918,27 +1351,33 @@ def scan_jobs_dir_for_resume(
             continue
 
         if reason and info["hf_model"]:
-            candidates.append({
-                "hf_model": info["hf_model"],
-                "dataset": info["dataset"],
-                "run_tag": info["run_tag"],
-                "reason": f"v6_resume: {reason}",
-                "db_job_id": info["db_job_id"],
-            })
+            candidates.append(
+                {
+                    "hf_model": info["hf_model"],
+                    "dataset": info["dataset"],
+                    "run_tag": info["run_tag"],
+                    "reason": f"v6_resume: {reason}",
+                    "db_job_id": info["db_job_id"],
+                }
+            )
 
-    log(f"[v6-resume] Scanned {scanned} job dirs: "
+    log(
+        f"[v6-resume] Scanned {scanned} job dirs: "
         f"{len(candidates)} resume candidates, "
         f"{skipped_active} still running, "
         f"{skipped_done} completed, "
-        f"{skipped_resume_limit} at resume limit")
+        f"{skipped_resume_limit} at resume limit"
+    )
 
     return candidates
 
 
 # ---------- Preset Definitions ----------
-# Each preset can configure:
+# Presets are defined as one YAML per preset in eval/presets/ and loaded here
+# via the shared eval.presets catalog (the same catalog the Iris launcher
+# consumes). Each preset is a flat mapping that can configure:
 #   - datasets: list of HF dataset repos
-#   - sbatch_script: sbatch script to use (default: unified_eval_harbor_v4.sbatch)
+#   - sbatch_script: sbatch script to use (default: eval/jupiter/eval_harbor.sbatch)
 #   - log_suffix: suffix for log file
 #   - check_hf_exists: validate model exists on HuggingFace
 #   - n_concurrent: Harbor --n-concurrent (default: 64)
@@ -948,111 +1387,8 @@ def scan_jobs_dir_for_resume(
 #   - vllm_max_retries: VLLM startup retries (default: 5)
 #   - agent_parser: Agent parser type (default: "", use "xml" for swebench)
 #   - slurm_time: SLURM time limit (default: "24:00:00")
-PRESETS: Dict[str, Dict] = {
-    "aider": {
-        "datasets": ["DCAgent2/aider_polyglot"],
-        "log_suffix": "aider",
-        "n_concurrent": 32,
-        "error_threshold": 20,
-        "vllm_max_retries": 10,
-        "enable_thinking": True,
-        "auto_snapshot": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-    },
-    "bfcl": {
-        "datasets": ["DCAgent2/bfcl-parity"],
-        "log_suffix": "bfcl",
-        "n_concurrent": 32,
-        "error_threshold": 20,
-        "vllm_max_retries": 20,
-        "enable_thinking": True,
-        "auto_snapshot": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-    },
-    "medagentbench": {
-        "datasets": ["DCAgent/medagentbench"],
-        "log_suffix": "medagent",
-        "n_concurrent": 32,
-        "error_threshold": 10,
-        "vllm_max_retries": 20,
-        "enable_thinking": True,
-        "auto_snapshot": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-    },
-    "gaia": {
-        "datasets": ["DCAgent/gaia_127"],
-        "log_suffix": "gaia",
-        "n_concurrent": 32,
-        "error_threshold": 10,
-        "vllm_max_retries": 20,
-        "enable_thinking": True,
-        "auto_snapshot": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-    },
-    "financeagent": {
-        "datasets": ["DCAgent/financeagent_terminal"],
-        "log_suffix": "finance",
-        "n_concurrent": 16,
-        "error_threshold": 10,
-        "vllm_max_retries": 20,
-        "enable_thinking": True,
-        "auto_snapshot": True,
-        "agent_envs": "SERPAPI_API_KEY,SEC_EDGAR_API_KEY,MODEL_FOR_TOOLS=openai/gpt-5.2,MODEL_API_KEY=OPENAI_API_KEY",
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-    },
-    # NOTE: all OOD presets + swebench/tb2 use dcagent_eval_config_no_override.yaml
-    "swebench": {
-        "datasets": ["DCAgent2/swebench-verified-random-100-folders"],
-        "log_suffix": "swebench",
-        "n_concurrent": 32,
-        "error_threshold": 20,
-        "agent_parser": "xml",
-        "vllm_max_retries": 10,
-        "enable_thinking": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-        "auto_snapshot": True,
-    },
-    "swebench_full": {
-        "datasets": ["DCAgent/swebench-verified"],
-        "log_suffix": "swebench_full",
-        "n_concurrent": 32,
-        "error_threshold": 20,
-        "agent_parser": "xml",
-        "vllm_max_retries": 10,
-        "enable_thinking": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-        "slurm_time": "48:00:00",
-        "auto_snapshot": True,
-    },
-    "v2": {
-        "datasets": ["DCAgent/dev_set_v2"],
-        "log_suffix": "v2",
-        "n_concurrent": 32,
-        "error_threshold": 10,
-        "vllm_max_retries": 10,
-        "enable_thinking": True,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-        "auto_snapshot": True,
-    },
-    "tb2": {
-        "datasets": ["DCAgent2/terminal_bench_2"],
-        "log_suffix": "tb2",
-        "n_concurrent": 32,
-        "error_threshold": 10,
-        "enable_thinking": True,
-        "vllm_max_retries": 10,
-        "config_yaml": "dcagent_eval_config_no_override.yaml",
-        "auto_snapshot": True,
-    },
-    "v1": {
-        "datasets": ["DCAgent/dev_set_71_tasks"],
-        "log_suffix": "v1",
-        "n_concurrent": 32,
-        "error_threshold": 10,
-        "vllm_max_retries": 10,
-        "enable_thinking": True,
-    },
-}
+# To add/edit a preset, change the YAML in eval/presets/ — no code change here.
+PRESETS: Dict[str, Dict] = load_presets()
 
 # ---------- Cluster Config ----------
 _CLUSTER_CONFIG_REQUIRED_KEYS = ["cluster_name", "slurm_partition", "paths"]
@@ -1062,11 +1398,51 @@ _CLUSTER_CONFIG_REQUIRED_PATHS = ["eval_jobs_dir", "sbatch_script"]
 _CLUSTER_CONFIG: Optional[Dict[str, Any]] = None
 
 
+def _resolve_cluster_view_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """Resolve an eval cluster-config dict from the HPC cluster object (Stage 4).
+
+    If `name` matches a cluster in `hpc.hpc.clusters` and that cluster has an
+    `eval_cluster_view` populated, return `cluster.to_eval_cluster_view()`.
+    Returns None if hpc.hpc isn't importable, the name is unknown, or the cluster
+    has no eval view (so the caller falls back to the YAML-path resolution).
+
+    The name is matched against EITHER the HPC object's `.name` (the machine name,
+    e.g. "vista") OR the eval view's own `cluster_name` (the operator-facing eval
+    alias, e.g. "tacc"). This lets `--cluster-config tacc` resolve the vista object
+    even though the HPC object is keyed on the machine name — no separate alias
+    field needed, since the view already declares its cluster_name (from tacc.yaml).
+    """
+    try:
+        from hpc.hpc import clusters as _hpc_clusters
+    except Exception:
+        return None
+    lname = name.lower()
+    for c in _hpc_clusters:
+        if not c.eval_cluster_view:
+            continue
+        view_name = (c.eval_cluster_view.get("cluster_name") or "").lower()
+        if lname == c.name.lower() or lname == view_name:
+            return c.to_eval_cluster_view()
+    return None
+
+
 def load_cluster_config(path: str) -> Dict[str, Any]:
     """Load and validate a cluster config YAML.
 
     Returns the parsed config dict.  Raises SystemExit on validation failure.
+
+    As of Stage 4, `path` may also be a bare cluster NAME (e.g. "leonardo") —
+    when it carries no `.yaml` suffix, the config is resolved from the matching
+    `hpc.hpc` cluster object's `eval_cluster_view` (the single source of truth).
+    Falls back to the YAML-file path otherwise (back-compat).
     """
+    # Stage 4: cluster-name resolution from the HPC object (no .yaml suffix).
+    if not path.endswith((".yaml", ".yml")):
+        view = _resolve_cluster_view_by_name(path.strip())
+        if view is not None:
+            return view
+        # Fall through to the file-path error below if no HPC match.
+
     path = os.path.expanduser(path)
     if not os.path.isfile(path):
         print(f"ERROR: Cluster config not found: {path}")
@@ -1088,6 +1464,7 @@ def load_cluster_config(path: str) -> Dict[str, Any]:
         elif isinstance(obj, list):
             return [_expand(v) for v in obj]
         return obj
+
     cfg = _expand(cfg)
 
     for key in _CLUSTER_CONFIG_REQUIRED_KEYS:
@@ -1126,7 +1503,7 @@ def _cc_path(key: str, default: Any = None) -> Any:
 
 
 # ---------- Constants ----------
-HF_URL_RE = re.compile(r'https?://(?:www\.)?huggingface\.co/([^/\s]+)/([^/\s#?]+)')
+HF_URL_RE = re.compile(r"https?://(?:www\.)?huggingface\.co/([^/\s]+)/([^/\s#?]+)")
 JOB_STATUS_PENDING = "Pending"
 JOB_STATUS_STARTED = "Started"
 JOB_STATUS_FINISHED = "Finished"
@@ -1148,9 +1525,8 @@ DEFAULT_SLURM_TIME = "12:00:00"
 DEFAULT_AGENT_NAME = "terminus-2"
 DEFAULT_SLURM_PARTITION = "booster"
 DEFAULT_SLURM_ACCOUNT = ""  # empty = use sbatch header default
-DEFAULT_ENABLE_THINKING = False
 DEFAULT_TP_SIZE = 1
-DEFAULT_SBATCH_SCRIPT = "eval/unified_eval_harbor.sbatch"
+DEFAULT_SBATCH_SCRIPT = "eval/jupiter/eval_harbor.sbatch"
 
 # Fallback defaults (used when no --cluster-config is provided).
 # Empty strings force explicit cluster config — no implicit Jupiter defaults.
@@ -1218,6 +1594,7 @@ class ListenerConfig:
         daytona_warning_buffer   Fraction of limit to trigger warning (e.g. 0.95).
         timeout_aware            Enable config-sensitive job dedup (Enhancement 5).
     """
+
     datasets: List[str]
     sbatch_script: str
     log_file: Optional[Path]
@@ -1242,12 +1619,20 @@ class ListenerConfig:
     vllm_max_retries: int = DEFAULT_VLLM_MAX_RETRIES
     agent_parser: str = DEFAULT_AGENT_PARSER
     slurm_time: str = DEFAULT_SLURM_TIME
-    enable_thinking: bool = DEFAULT_ENABLE_THINKING
+    # Global (model-agnostic) agent kwargs = merge(cli_agent_kwargs, preset_agent_kwargs).
+    # cli_/preset_ are kept separately so the per-model submit point can splice the
+    # per-model baseline agent_kwargs into the MIDDLE of the precedence chain
+    # (CLI > per-model baseline > preset). See merge_agent_kwargs() + _resolve_agent_kwargs().
+    agent_kwargs: List[str] = field(default_factory=list)
+    cli_agent_kwargs: List[str] = field(default_factory=list)
+    preset_agent_kwargs: List[str] = field(default_factory=list)
     agent_name: str = DEFAULT_AGENT_NAME
     slurm_partition: str = DEFAULT_SLURM_PARTITION
     slurm_account: str = DEFAULT_SLURM_ACCOUNT
     tp_size: int = DEFAULT_TP_SIZE
-    dp_size: int = 1  # vLLM native data-parallel replicas (total GPUs = tp_size * dp_size)
+    dp_size: int = (
+        1  # vLLM native data-parallel replicas (total GPUs = tp_size * dp_size)
+    )
     upload_username: str = ""
     log_prefix: str = "[unified-eval-listener-v6]"
     # v3 Enhancement 2: Per-listener SLURM throttle
@@ -1257,7 +1642,13 @@ class ListenerConfig:
     daytona_sandbox_limit: int = DEFAULT_DAYTONA_SANDBOX_LIMIT
     daytona_warning_buffer: float = DEFAULT_DAYTONA_WARNING_BUFFER
     # v3 Enhancement 5: Timeout-config-sensitive dedup
+    # timeout_multiplier = the effective GLOBAL multiplier (CLI value if passed, else
+    # 1.0), used for sbatch_params + the pending DB stub. cli_timeout_multiplier holds
+    # ONLY the explicit CLI value (None when unset) so the per-model submit point can
+    # apply the hybrid precedence CLI > per-model baseline > size-inferred > 1.0 without
+    # mistaking the 1.0 default for an explicit override. See _resolve_timeout_multiplier().
     timeout_multiplier: float = DEFAULT_TIMEOUT_MULTIPLIER
+    cli_timeout_multiplier: Optional[float] = None
     timeout_aware: bool = False
     # Config YAML for harbor (overrides vs no-overrides)
     config_yaml: str = "dcagent_eval_config.yaml"
@@ -1273,8 +1664,17 @@ class ListenerConfig:
     # Pinggy tunnel config (for installed agents that run in Daytona sandbox)
     pinggy_url: Optional[str] = None
     pinggy_token: Optional[str] = None
+    # Ingress mode: "pinggy" (default, legacy) or "controller" (auth-gated ingress)
+    ingress_mode: str = "pinggy"
+    ingress_host: Optional[str] = None
     # Per-model vLLM overrides (baseline model configs)
     baseline_model_configs: Optional[str] = None
+    # Shared model-config registry (decoupling refactor; OFF by default through Stage 4).
+    # When use_model_registry is True the listener loads `model_registry` via
+    # load_model_registry(..., hardware_profile) INSTEAD of the legacy baseline path.
+    use_model_registry: bool = False
+    model_registry: Optional[str] = None
+    hardware_profile: Optional[str] = None
     # Per-model API serving config (Together AI / OpenAI / Anthropic)
     api_model_config: Optional[str] = None
     # API sbatch script (used when get_api_config() matches a model)
@@ -1290,19 +1690,27 @@ class ListenerConfig:
     # Conda env selector (otagent / otagent2)
     conda_env: str = "otagent"
     # v6: Disk-based resume
-    jobs_dirs: List[str] = field(default_factory=list)  # Set from CLI or EVAL_JOBS_DIR env var
+    jobs_dirs: List[str] = field(
+        default_factory=list
+    )  # Set from CLI or EVAL_JOBS_DIR env var
     enable_disk_resume: bool = True
     resume_infra_error_threshold: int = 10
     max_resume_count: int = 5
-    force_reeval: bool = False  # Bypass DB status check (submit even if Finished/Started)
+    force_reeval: bool = (
+        False  # Bypass DB status check (submit even if Finished/Started)
+    )
     resume_only: bool = False  # Only submit resume jobs, skip fresh submissions
     submission_delay: float = 1.0  # Seconds to sleep between sbatch submissions
-    stagger_delay: int = 0  # Minutes between job starts via SLURM after: dependency chain (0 = disabled)
-    chain_batch_size: int = 1  # Jobs per stagger batch (1 = every job waits, 10 = fire 10 then wait)
+    stagger_delay: int = (
+        0  # Minutes between job starts via SLURM after: dependency chain (0 = disabled)
+    )
+    chain_batch_size: int = (
+        1  # Jobs per stagger batch (1 = every job waits, 10 = fire 10 then wait)
+    )
     pack_jobs: bool = False  # Pack multiple jobs onto same node via --nodelist
     # DP: data-parallel multi-node eval
     dp_nodes: int = 0  # 0 = single-node (default), >0 = use DP sbatch with N nodes
-    dp_sbatch_script: str = "eval/unified_eval_harbor_dp.sbatch"
+    dp_sbatch_script: str = "eval/jupiter/eval_harbor.sbatch"
     # Inherit: seed _submitted_jobs from previous listener logs
     inherit_log: Optional[List[str]] = None
     # Cluster config (loaded from --cluster-config YAML)
@@ -1323,7 +1731,9 @@ def set_log_file(path: Optional[Path]) -> None:
     _LOG_FILE = path
 
 
-def log(msg: str, prefix: str = "[unified-eval-listener-v6]", verbose_only: bool = False) -> None:
+def log(
+    msg: str, prefix: str = "[unified-eval-listener-v6]", verbose_only: bool = False
+) -> None:
     """Log a message to stdout and optionally to file.
 
     If verbose_only=True, the message is only emitted when _VERBOSE is set.
@@ -1408,6 +1818,7 @@ def check_hf_model_exists(model_name: str) -> bool:
 
     try:
         from huggingface_hub import model_info
+
         model_info(model_name)
         return True
     except Exception as e:
@@ -1437,7 +1848,7 @@ def resolve_hf_model_name(model_row: Dict) -> Optional[str]:
         return v
 
     # Check other URL fields
-    for field in ("weights_location", "training_parameters", "url", "hf_url"):
+    for field in ("weights_location", "training_parameters", "url", "hf_url"):  # noqa: F402
         vv = model_row.get(field)
         if isinstance(vv, str):
             name = _parse_hf_from_str(vv)
@@ -1514,9 +1925,9 @@ def _iso(dt: datetime) -> str:
 def _time_filters(q, since_iso: str):
     """Apply time filter to Supabase query (handles both column names)."""
     try:
-        return q.gte('creation_time', since_iso)
+        return q.gte("creation_time", since_iso)
     except Exception:
-        return q.gte('created_at', since_iso)
+        return q.gte("created_at", since_iso)
 
 
 def fetch_recent_models(days: int) -> List[Dict]:
@@ -1530,7 +1941,7 @@ def fetch_recent_models(days: int) -> List[Dict]:
     client = get_supabase_client()
     since = _iso(datetime.now(timezone.utc) - timedelta(days=days))
     try:
-        resp = _time_filters(client.table('models').select('*'), since).execute()
+        resp = _time_filters(client.table("models").select("*"), since).execute()
         rows = list(resp.data or [])
     except Exception as e:
         log(f"ERROR: failed querying models by time: {e}")
@@ -1566,12 +1977,7 @@ def fetch_priority_models(priority_names: List[str]) -> List[Dict]:
 
     client = get_supabase_client()
     try:
-        resp = (
-            client.table('models')
-            .select('*')
-            .in_('name', priority_names)
-            .execute()
-        )
+        resp = client.table("models").select("*").in_("name", priority_names).execute()
         rows = list(resp.data or [])
     except Exception as e:
         log(f"ERROR: failed querying priority models by name: {e}")
@@ -1600,17 +2006,19 @@ def resolve_benchmark_id(dataset_hf: str) -> Optional[str]:
     try:
         client = get_supabase_client()
         resp = (
-            client.table('benchmarks')
-            .select('id,name')
-            .eq('name', repo_name)
+            client.table("benchmarks")
+            .select("id,name")
+            .eq("name", repo_name)
             .limit(1)
             .execute()
         )
         rows = resp.data or []
-        bench_id = rows[0]['id'] if rows else None
+        bench_id = rows[0]["id"] if rows else None
         _BENCH_CACHE[repo_name] = bench_id
         if not bench_id:
-            log(f"No benchmark row found for dataset '{dataset_hf}' (wanted name='{repo_name}').")
+            log(
+                f"No benchmark row found for dataset '{dataset_hf}' (wanted name='{repo_name}')."
+            )
         return bench_id
     except Exception as e:
         log(f"ERROR resolving benchmark id for dataset '{dataset_hf}': {e}")
@@ -1652,17 +2060,25 @@ def get_duplicate_group_ids(table: str, entity_id: str) -> List[str]:
         client = get_supabase_client()
 
         # Step 1: Find the canonical ID
-        resp = client.table(table).select('id,duplicate_of').eq('id', entity_id).limit(1).execute()
+        resp = (
+            client.table(table)
+            .select("id,duplicate_of")
+            .eq("id", entity_id)
+            .limit(1)
+            .execute()
+        )
         rows = resp.data or []
         if not rows:
             _DUP_GROUP_CACHE[cache_key] = [entity_id]
             return [entity_id]
 
-        canonical_id = rows[0].get('duplicate_of') or entity_id
+        canonical_id = rows[0].get("duplicate_of") or entity_id
 
         # Step 2: Find all duplicates of the canonical
-        resp2 = client.table(table).select('id').eq('duplicate_of', canonical_id).execute()
-        dup_ids = [r['id'] for r in (resp2.data or [])]
+        resp2 = (
+            client.table(table).select("id").eq("duplicate_of", canonical_id).execute()
+        )
+        dup_ids = [r["id"] for r in (resp2.data or [])]
 
         group = list(set([canonical_id] + dup_ids))
         # Cache for all members of the group
@@ -1707,22 +2123,22 @@ def check_job_status_v3(
 
     try:
         client = get_supabase_client()
-        q = client.table('sandbox_jobs').select(
-            'id,job_status,started_at,submitted_at,slurm_job_id,config'
+        q = client.table("sandbox_jobs").select(
+            "id,job_status,started_at,submitted_at,slurm_job_id,config"
         )
 
         # Use .in_() for duplicate groups, .eq() for singles
         if len(model_ids) == 1:
-            q = q.eq('model_id', model_ids[0])
+            q = q.eq("model_id", model_ids[0])
         else:
-            q = q.in_('model_id', model_ids)
+            q = q.in_("model_id", model_ids)
 
         if len(bench_ids) == 1:
-            q = q.eq('benchmark_id', bench_ids[0])
+            q = q.eq("benchmark_id", bench_ids[0])
         else:
-            q = q.in_('benchmark_id', bench_ids)
+            q = q.in_("benchmark_id", bench_ids)
 
-        q = q.order('created_at', desc=True).limit(50)
+        q = q.order("created_at", desc=True).limit(50)
         data = (q.execute().data) or []
 
         if not data:
@@ -1731,7 +2147,7 @@ def check_job_status_v3(
         # Filter to matching config if timeout_aware
         for job in data:
             if timeout_aware:
-                config = job.get('config')
+                config = job.get("config")
                 if isinstance(config, str):
                     try:
                         config = json.loads(config)
@@ -1740,29 +2156,35 @@ def check_job_status_v3(
                 if not isinstance(config, dict):
                     config = {}
 
-                job_agent = config.get('agent', DEFAULT_AGENT_NAME)
-                job_tm = config.get('timeout_multiplier', DEFAULT_TIMEOUT_MULTIPLIER)
+                job_agent = config.get("agent", DEFAULT_AGENT_NAME)
+                job_tm = config.get("timeout_multiplier", DEFAULT_TIMEOUT_MULTIPLIER)
 
                 # Skip if agent_name or timeout_multiplier don't match
-                if job_agent != agent_name or float(job_tm) != float(timeout_multiplier):
+                if job_agent != agent_name or float(job_tm) != float(
+                    timeout_multiplier
+                ):
                     continue
 
-            job_status = job.get('job_status')
-            started_at_str = job.get('started_at')
-            submitted_at_str = job.get('submitted_at')
-            slurm_job_id = job.get('slurm_job_id')
+            job_status = job.get("job_status")
+            started_at_str = job.get("started_at")
+            submitted_at_str = job.get("submitted_at")
+            slurm_job_id = job.get("slurm_job_id")
 
             started_at = None
             if started_at_str:
                 try:
-                    started_at = datetime.fromisoformat(started_at_str.replace('Z', '+00:00'))
+                    started_at = datetime.fromisoformat(
+                        started_at_str.replace("Z", "+00:00")
+                    )
                 except Exception:
                     pass
 
             submitted_at = None
             if submitted_at_str:
                 try:
-                    submitted_at = datetime.fromisoformat(submitted_at_str.replace('Z', '+00:00'))
+                    submitted_at = datetime.fromisoformat(
+                        submitted_at_str.replace("Z", "+00:00")
+                    )
                 except Exception:
                     pass
 
@@ -1772,11 +2194,15 @@ def check_job_status_v3(
         return (False, None, None, None, None)
 
     except Exception as e:
-        log(f"WARNING: sandbox_jobs v3 check failed for model_id={model_id}, benchmark_id={benchmark_id}: {e}")
+        log(
+            f"WARNING: sandbox_jobs v3 check failed for model_id={model_id}, benchmark_id={benchmark_id}: {e}"
+        )
         return (False, None, None, None, None)  # fail-open
 
 
-def is_job_stale(started_at: Optional[datetime], hours: int = DEFAULT_STALE_JOB_HOURS) -> bool:
+def is_job_stale(
+    started_at: Optional[datetime], hours: int = DEFAULT_STALE_JOB_HOURS
+) -> bool:
     """Check if a job started more than the specified hours ago."""
     if not started_at:
         # If started_at is null but job exists with status='Started', treat as stale
@@ -1853,13 +2279,16 @@ def should_start_job(
         (should_start, reason, slurm_job_id)
         slurm_job_id is provided so the caller can scancel stale jobs.
     """
-    job_exists, job_status, started_at, submitted_at, slurm_job_id = check_job_status_v3(
-        model_id, benchmark_id,
-        timeout_aware=timeout_aware,
-        agent_name=agent_name,
-        timeout_multiplier=timeout_multiplier,
-        duplicate_model_ids=duplicate_model_ids,
-        duplicate_benchmark_ids=duplicate_benchmark_ids,
+    job_exists, job_status, started_at, submitted_at, slurm_job_id = (
+        check_job_status_v3(
+            model_id,
+            benchmark_id,
+            timeout_aware=timeout_aware,
+            agent_name=agent_name,
+            timeout_multiplier=timeout_multiplier,
+            duplicate_model_ids=duplicate_model_ids,
+            duplicate_benchmark_ids=duplicate_benchmark_ids,
+        )
     )
 
     if not job_exists:
@@ -1882,11 +2311,17 @@ def should_start_job(
                     .limit(10)
                 )
                 rows = (q.execute().data) or []
-                matching = [r for r in rows if _config_matches_eval(r.get("config"), ec)]
+                matching = [
+                    r for r in rows if _config_matches_eval(r.get("config"), ec)
+                ]
                 if not matching:
                     return (True, "no finished job with matching config", slurm_job_id)
                 if matching[0] and not matching[0].get("metrics"):
-                    return (True, "finished with matching config but metrics cleared", slurm_job_id)
+                    return (
+                        True,
+                        "finished with matching config but metrics cleared",
+                        slurm_job_id,
+                    )
             except Exception as e:
                 log(f"WARNING: config-aware check failed: {e}")
         # v6: DaytonaError resume is now handled by disk-based scanning in
@@ -1909,7 +2344,9 @@ def should_start_job(
                     .limit(5)
                 )
                 rows = (q.execute().data) or []
-                matching = [r for r in rows if _config_matches_eval(r.get("config"), ec)]
+                matching = [
+                    r for r in rows if _config_matches_eval(r.get("config"), ec)
+                ]
                 if not matching:
                     return (True, "no pending job with matching config", slurm_job_id)
             except Exception as e:
@@ -1917,10 +2354,18 @@ def should_start_job(
         # Job submitted but not yet running - check if stale using separate pending threshold
         if is_job_stale(submitted_at, stale_pending_hours):
             submitted_str = submitted_at.isoformat() if submitted_at else "null"
-            return (True, f"stale pending job (submitted_at={submitted_str})", slurm_job_id)
+            return (
+                True,
+                f"stale pending job (submitted_at={submitted_str})",
+                slurm_job_id,
+            )
         else:
             submitted_str = submitted_at.isoformat() if submitted_at else "null"
-            return (False, f"job pending in SLURM queue (submitted_at={submitted_str})", slurm_job_id)
+            return (
+                False,
+                f"job pending in SLURM queue (submitted_at={submitted_str})",
+                slurm_job_id,
+            )
 
     if job_status == JOB_STATUS_STARTED:
         if ec:
@@ -1936,9 +2381,15 @@ def should_start_job(
                     .limit(5)
                 )
                 rows = (q.execute().data) or []
-                matching = [r for r in rows if _config_matches_eval(r.get("config"), ec)]
+                matching = [
+                    r for r in rows if _config_matches_eval(r.get("config"), ec)
+                ]
                 if not matching:
-                    return (True, "no in-progress job with matching config", slurm_job_id)
+                    return (
+                        True,
+                        "no in-progress job with matching config",
+                        slurm_job_id,
+                    )
             except Exception as e:
                 log(f"WARNING: config-aware check failed: {e}")
         if is_job_stale(started_at, stale_hours):
@@ -1966,7 +2417,7 @@ def get_active_slurm_job_ids() -> Set[str]:
         if code != 0:
             log(f"WARNING: squeue failed (exit {code}), returning empty set")
             return set()
-        return {line.strip() for line in out.strip().split('\n') if line.strip()}
+        return {line.strip() for line in out.strip().split("\n") if line.strip()}
     except Exception as e:
         log(f"WARNING: Failed to query squeue: {e}")
         return set()
@@ -2092,8 +2543,10 @@ def parse_submitted_jobs_from_logs(log_paths: List[str]) -> Set[str]:
 
     active_ids = get_active_slurm_job_ids()
     still_active = all_job_ids & active_ids
-    log(f"[inherit-log] Total: {len(all_job_ids)} job(s) across {len(log_paths)} log(s), "
-        f"{len(still_active)} still active in squeue")
+    log(
+        f"[inherit-log] Total: {len(all_job_ids)} job(s) across {len(log_paths)} log(s), "
+        f"{len(still_active)} still active in squeue"
+    )
     return still_active
 
 
@@ -2108,39 +2561,62 @@ def check_daytona_resources(sandbox_limit: int, warning_buffer: float) -> bool:
     Returns True if OK to proceed, False if active sandboxes >= sandbox_limit.
     Logs a warning when active sandboxes >= sandbox_limit * warning_buffer.
     """
+    # Daytona migrated /api/sandbox/paginated (page-based) -> /api/sandbox
+    # (cursor-based) on 2026-06-25; daytona SDK >= 0.180.0 exposes the new
+    # endpoint via `daytona.list()`, which returns an iterator that handles
+    # cursor pagination internally. The iterator does not expose a `.total`
+    # attribute (unlike the deprecated `list_sandboxes_paginated`), so to
+    # check whether we're at the sandbox cap we walk the iterator and
+    # short-circuit once we hit `sandbox_limit + 1` (no need to enumerate
+    # every active sandbox in the org).
     try:
-        from daytona_api_client import ApiClient, Configuration, SandboxApi
+        from daytona import Daytona, DaytonaConfig, ListSandboxesQuery, SandboxState
     except ImportError:
-        log("WARNING: daytona_api_client not installed, skipping resource check")
+        log(
+            "WARNING: daytona SDK not installed (>=0.180.0 required), skipping resource check"
+        )
         return True
 
     api_key = os.environ.get("DAYTONA_API_KEY")
-    api_url = os.environ.get("DAYTONA_API_URL", "https://app.daytona.io/api")
+    api_url = os.environ.get("DAYTONA_API_URL")
     if not api_key:
         log("WARNING: DAYTONA_API_KEY not set, skipping resource check")
         return True
 
     try:
-        config = Configuration(host=api_url)
-        client = ApiClient(config)
-        client.default_headers["Authorization"] = f"Bearer {api_key}"
-        api = SandboxApi(client)
+        cfg_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if api_url:
+            cfg_kwargs["api_url"] = api_url
+        client = Daytona(DaytonaConfig(**cfg_kwargs))
 
-        result = api.list_sandboxes_paginated(states=["started"], limit=1, page=1)
-        active_count = result.total
+        # Walk the iterator, counting up to sandbox_limit + 1 (we only need
+        # to know whether we're at the cap). The SDK transparently fetches
+        # subsequent cursor pages as we iterate.
+        query = ListSandboxesQuery(states=[SandboxState.STARTED], limit=100)
+        active_count = 0
+        for _ in client.list(query):
+            active_count += 1
+            if active_count > sandbox_limit:
+                break
 
         threshold = int(sandbox_limit * warning_buffer)
         if active_count >= sandbox_limit:
-            log(f"ERROR: Daytona resources at limit: {active_count}/{sandbox_limit} active sandboxes "
-                f"({active_count/sandbox_limit:.1%})")
+            log(
+                f"ERROR: Daytona resources at limit: {active_count}/{sandbox_limit} active sandboxes "
+                f"({active_count / sandbox_limit:.1%})"
+            )
             return False
         elif active_count >= threshold:
-            log(f"WARNING: Daytona resources at {active_count}/{sandbox_limit} active sandboxes "
-                f"({active_count/sandbox_limit:.1%}) - approaching limit!")
+            log(
+                f"WARNING: Daytona resources at {active_count}/{sandbox_limit} active sandboxes "
+                f"({active_count / sandbox_limit:.1%}) - approaching limit!"
+            )
             return True
         else:
-            log(f"Daytona resources OK: {active_count}/{sandbox_limit} active sandboxes "
-                f"({active_count/sandbox_limit:.1%})")
+            log(
+                f"Daytona resources OK: {active_count}/{sandbox_limit} active sandboxes "
+                f"({active_count / sandbox_limit:.1%})"
+            )
             return True
     except Exception as e:
         log(f"WARNING: Daytona resource check failed: {e}")
@@ -2151,8 +2627,9 @@ def check_daytona_resources(sandbox_limit: int, warning_buffer: float) -> bool:
 def _resolve_agent_name_from_config_yaml(config_yaml: str) -> Optional[str]:
     """Return agents[0].name from a harbor eval config YAML, or None if not resolvable.
 
-    Mirrors the sbatch's own yaml resolution (eval/configs/, eval/<cluster>/, eval/MBZ/)
-    so the listener and sbatch always agree on the runtime agent name.
+    Mirrors the sbatch's own yaml resolution (hpc/harbor_yaml/eval/configs/,
+    eval/<cluster>/, eval/MBZ/) so the listener and sbatch always agree on the
+    runtime agent name.
     """
     if not config_yaml:
         return None
@@ -2161,7 +2638,11 @@ def _resolve_agent_name_from_config_yaml(config_yaml: str) -> Optional[str]:
         candidates.append(config_yaml)
     else:
         cluster_name = (_CLUSTER_CONFIG or {}).get("cluster_name")
-        for base in ("eval/configs", f"eval/{cluster_name}" if cluster_name else None, "eval/MBZ"):
+        for base in (
+            "hpc/harbor_yaml/eval/configs",
+            f"eval/{cluster_name}" if cluster_name else None,
+            "eval/MBZ",
+        ):
             if base:
                 candidates.append(os.path.join(base, config_yaml))
     for path in candidates:
@@ -2200,6 +2681,7 @@ class SbatchParams:
         EVAL_PROXYCHAINS_BIN, EVAL_CUDA_HOME, EVAL_ARCH, EVAL_GPUS_PER_NODE,
         and EVAL_LOGS_DIR so sbatch scripts can be cluster-agnostic.
     """
+
     n_concurrent: int = DEFAULT_N_CONCURRENT
     n_attempts: int = DEFAULT_N_ATTEMPTS
     gpu_memory_util: float = DEFAULT_GPU_MEMORY_UTIL
@@ -2207,12 +2689,14 @@ class SbatchParams:
     vllm_max_retries: int = DEFAULT_VLLM_MAX_RETRIES
     agent_parser: str = DEFAULT_AGENT_PARSER
     slurm_time: str = DEFAULT_SLURM_TIME
-    enable_thinking: bool = DEFAULT_ENABLE_THINKING
+    agent_kwargs: List[str] = field(default_factory=list)
     agent_name: str = DEFAULT_AGENT_NAME
     slurm_partition: str = DEFAULT_SLURM_PARTITION
     slurm_account: str = DEFAULT_SLURM_ACCOUNT
     tp_size: int = DEFAULT_TP_SIZE
-    dp_size: int = 1  # vLLM native data-parallel replicas (total GPUs = tp_size * dp_size)
+    dp_size: int = (
+        1  # vLLM native data-parallel replicas (total GPUs = tp_size * dp_size)
+    )
     upload_username: str = ""
     timeout_multiplier: float = DEFAULT_TIMEOUT_MULTIPLIER  # v3 Enhancement 5
     config_yaml: str = "dcagent_eval_config.yaml"
@@ -2221,6 +2705,12 @@ class SbatchParams:
     agent_envs: Optional[str] = None  # Comma-separated KEY=VALUE pairs for --ae
     pinggy_url: Optional[str] = None  # Pinggy persistent URL (e.g., xxx.a.pinggy.link)
     pinggy_token: Optional[str] = None  # Pinggy auth token
+    ingress_mode: str = (
+        "pinggy"  # "pinggy" (legacy) or "controller" (auth-gated ingress)
+    )
+    ingress_host: Optional[str] = (
+        None  # Public controller-ingress host (controller mode)
+    )
 
     def get_effective_agent_name(self) -> str:
         """Resolve the runtime agent name, preferring the config_yaml's agents[0].name.
@@ -2245,7 +2735,10 @@ class SbatchParams:
             "EVAL_VLLM_MAX_RETRIES": str(self.vllm_max_retries),
             "EVAL_AGENT_PARSER": self.agent_parser,
             "EVAL_SLURM_TIME": self.slurm_time,
-            "EVAL_ENABLE_THINKING": "true" if self.enable_thinking else "false",
+            # Generic agent-kwarg passthrough (newline-separated; the sbatch
+            # splits on newlines and adds each as one --agent-kwarg). Thinking is
+            # delivered here as the live nested extra_body form, NOT a flag.
+            "EVAL_AGENT_KWARGS": "\n".join(self.agent_kwargs),
             "EVAL_AGENT_NAME": self.get_effective_agent_name(),
         }
         # Always send tp_size so build_vllm_cmd.sh doesn't fall back to its own default
@@ -2274,6 +2767,13 @@ class SbatchParams:
             env["EVAL_PINGGY_URL"] = self.pinggy_url
         if self.pinggy_token:
             env["EVAL_PINGGY_TOKEN"] = self.pinggy_token
+        # Controller-ingress config. Additive: only emitted in controller mode, so
+        # the default (pinggy) env is byte-identical. The IRIS_INGRESS_API_KEY
+        # secret is sourced on the cluster (secrets.env), referenced by name only.
+        if self.ingress_mode == "controller":
+            env["EVAL_INGRESS_MODE"] = self.ingress_mode
+            if self.ingress_host:
+                env["EVAL_INGRESS_HOST"] = self.ingress_host
         # Forward EVAL_JOBS_DIR to sbatch (default to user-writable location)
         fallback_jobs_dir = _cc_path("eval_jobs_dir", _FALLBACK_EVAL_JOBS_DIR)
         env["EVAL_JOBS_DIR"] = os.environ.get("EVAL_JOBS_DIR", fallback_jobs_dir)
@@ -2332,8 +2832,8 @@ class SbatchParams:
             parts.append(f"tp_size={self.tp_size}")
         if self.dp_size > 1:
             parts.append(f"dp_size={self.dp_size}")
-        if self.enable_thinking:
-            parts.append("enable_thinking=True")
+        if self.agent_kwargs:
+            parts.append(f"agent_kwargs={self.agent_kwargs}")
         if self.agent_name != DEFAULT_AGENT_NAME:
             parts.append(f"agent_name={self.agent_name}")
         if self.slurm_partition != DEFAULT_SLURM_PARTITION:
@@ -2407,10 +2907,13 @@ def update_pending_job_slurm_id(db_job_id: str, slurm_job_id: str) -> None:
     """Update the Pending job entry with the SLURM job ID after successful sbatch."""
     try:
         client = get_supabase_client()
-        client.table("sandbox_jobs").update(
-            {"slurm_job_id": slurm_job_id}
-        ).eq("id", db_job_id).execute()
-        log(f"Updated job {db_job_id} with slurm_job_id={slurm_job_id}", verbose_only=True)
+        client.table("sandbox_jobs").update({"slurm_job_id": slurm_job_id}).eq(
+            "id", db_job_id
+        ).execute()
+        log(
+            f"Updated job {db_job_id} with slurm_job_id={slurm_job_id}",
+            verbose_only=True,
+        )
     except Exception as e:
         log(f"WARNING: failed to update job {db_job_id} with slurm_job_id: {e}")
 
@@ -2447,7 +2950,7 @@ def submit_eval(
     Environment variables (from SbatchParams.to_env()):
       EVAL_N_CONCURRENT, EVAL_N_ATTEMPTS, EVAL_GPU_MEMORY_UTIL,
       EVAL_DAYTONA_THRESHOLD, EVAL_VLLM_MAX_RETRIES, EVAL_AGENT_PARSER,
-      EVAL_SLURM_TIME, EVAL_ENABLE_THINKING, EVAL_AGENT_NAME,
+      EVAL_SLURM_TIME, EVAL_AGENT_KWARGS, EVAL_AGENT_NAME,
       EVAL_STARTS_LOG (v3), EVAL_TIMEOUT_MULTIPLIER (v3)
 
     The Pending DB entry includes timeout_multiplier in its config dict
@@ -2472,19 +2975,33 @@ def submit_eval(
 
     # Early return for dry-run — no DB writes, no sbatch
     if dry_run:
-        log(f"[DRY RUN] Would submit: model={hf_model_name} dataset={dataset_hf} job={job_name}")
+        log(
+            f"[DRY RUN] Would submit: model={hf_model_name} dataset={dataset_hf} job={job_name}"
+        )
         if sbatch_params:
             log(f"[DRY RUN] With params: {sbatch_params}")
         if vllm_overrides:
-            log(f"[DRY RUN] vLLM overrides: {list(vllm_overrides.keys())}", verbose_only=True)
+            log(
+                f"[DRY RUN] vLLM overrides: {list(vllm_overrides.keys())}",
+                verbose_only=True,
+            )
         return ("DRY_RUN", job_name)
 
     # Step 1: Create or reuse DB entry BEFORE sbatch submission.
     # Use the effective agent name (derived from config_yaml when available) so
     # installed-agent runs don't get terminus-2's agent_id stamped on their row.
-    agent = sbatch_params.get_effective_agent_name() if sbatch_params else DEFAULT_AGENT_NAME
+    agent = (
+        sbatch_params.get_effective_agent_name()
+        if sbatch_params
+        else DEFAULT_AGENT_NAME
+    )
     tm = sbatch_params.timeout_multiplier if sbatch_params else timeout_multiplier
-    config: Dict = {"agent": agent, "env": "daytona", "timeout_multiplier": tm, "run_tag": job_name}
+    config: Dict = {
+        "agent": agent,
+        "env": "daytona",
+        "timeout_multiplier": tm,
+        "run_tag": job_name,
+    }
     # Include harbor eval config fields in DB entry for config-aware dedup
     if eval_config:
         if "timeout_multiplier" in eval_config:
@@ -2499,9 +3016,11 @@ def submit_eval(
     db_job_id: Optional[str] = None
     try:
         from database.unified_db.utils import (
-            create_job_entry_pending, get_supabase_client,
-            get_model_by_name, get_benchmark_by_name,
-            get_job_by_model_benchmark, update_sandbox_job,
+            create_job_entry_pending,
+            get_model_by_name,
+            get_benchmark_by_name,
+            get_job_by_model_benchmark,
+            update_sandbox_job,
         )
 
         if run_tag_override:
@@ -2512,22 +3031,46 @@ def submit_eval(
             bench_name = dataset_hf.split("/")[-1] if "/" in dataset_hf else dataset_hf
             bench_row = get_benchmark_by_name(bench_name)
             if model_row and bench_row:
-                existing = get_job_by_model_benchmark(model_row['id'], bench_row['id'])
+                existing = get_job_by_model_benchmark(model_row["id"], bench_row["id"])
                 if existing:
-                    old_name = existing.get('job_name', '?')
-                    old_status = existing.get('job_status', '?')
-                    db_job_id = str(existing['id'])
-                    # Update the existing entry: reset to Pending with new job_name
-                    update_sandbox_job(db_job_id, {
-                        "job_name": job_name,
-                        "job_status": "Pending",
-                        "slurm_job_id": "pending",
-                        "config": config,
-                        "submitted_at": datetime.now().isoformat(),
-                        "started_at": None,
-                    })
-                    log(f"  [v6] Reused DB entry {db_job_id}: {old_status} '{old_name}' → Pending '{job_name}'",
-                        verbose_only=True)
+                    # CROSS-USER SAFETY: a --force-reeval resume keys the existing
+                    # row by (model, benchmark) — NOT by submitter. If that row is
+                    # owned by a DIFFERENT user, overwriting it in place silently
+                    # corrupts their baseline (their slurm_job_id/score/traces get
+                    # replaced while username stays theirs). NEVER do that: leave the
+                    # other user's row untouched and fall through to the normal
+                    # create path (which creates a fresh row for the submitter, or —
+                    # if the cross-user row is Finished — refuses with a loud log).
+                    existing_owner = existing.get("username")
+                    submitter = upload_username or "listener"
+                    if existing_owner and existing_owner != submitter:
+                        log(
+                            f"  [v6] CROSS-USER SAFETY: existing DB entry {existing['id']} "
+                            f"for ({hf_model_name} × {bench_name}) is owned by "
+                            f"'{existing_owner}' != submitter '{submitter}' — NOT "
+                            f"overwriting it; creating/refusing a new row for the "
+                            f"submitter instead."
+                        )
+                    else:
+                        old_name = existing.get("job_name", "?")
+                        old_status = existing.get("job_status", "?")
+                        db_job_id = str(existing["id"])
+                        # Update the existing entry: reset to Pending with new job_name
+                        update_sandbox_job(
+                            db_job_id,
+                            {
+                                "job_name": job_name,
+                                "job_status": "Pending",
+                                "slurm_job_id": "pending",
+                                "config": config,
+                                "submitted_at": datetime.now().isoformat(),
+                                "started_at": None,
+                            },
+                        )
+                        log(
+                            f"  [v6] Reused DB entry {db_job_id}: {old_status} '{old_name}' → Pending '{job_name}'",
+                            verbose_only=True,
+                        )
 
         if not db_job_id:
             # Normal path: create new Pending entry
@@ -2544,7 +3087,9 @@ def submit_eval(
                 db_job_id = str(result["job"].get("id"))
                 log(f"Created Pending DB entry: {db_job_id}", verbose_only=True)
             else:
-                log(f"WARNING: Failed to create Pending DB entry: {result.get('error')}")
+                log(
+                    f"WARNING: Failed to create Pending DB entry: {result.get('error')}"
+                )
     except Exception as e:
         log(f"WARNING: Exception creating Pending DB entry: {e}")
 
@@ -2566,19 +3111,41 @@ def submit_eval(
             if vllm_overrides and "EVAL_VLLM_TENSOR_PARALLEL_SIZE" in vllm_overrides:
                 effective_tp = int(vllm_overrides["EVAL_VLLM_TENSOR_PARALLEL_SIZE"])
             effective_dp = sbatch_params.dp_size
+            if vllm_overrides and "EVAL_VLLM_DATA_PARALLEL_SIZE" in vllm_overrides:
+                effective_dp = int(vllm_overrides["EVAL_VLLM_DATA_PARALLEL_SIZE"])
             total_gpus = effective_tp * effective_dp
-            cmd.extend(["--gres", f"gpu:{total_gpus}"])
             cc = _CLUSTER_CONFIG or {}
             hw = cc.get("hardware", {})
             gpus_per_node = int(hw.get("gpus_per_node", 8))
-            cpus_per_node = int(hw.get("cpus_per_node", 96))
-            mem_per_node_mb = int(hw.get("mem_per_node_mb", 1860000))
-            cpus_needed = (cpus_per_node * total_gpus) // gpus_per_node
-            mem_needed = (mem_per_node_mb * total_gpus) // gpus_per_node
-            cmd.extend(["--cpus-per-task", str(cpus_needed)])
-            cmd.extend(["--mem", f"{mem_needed}M"])
+            # Some clusters (e.g. TACC Vista GH200) do NOT track GPUs as a SLURM
+            # gres — `scontrol show node` reports Gres=(null), each node has 1
+            # whole-node-allocated GPU, and RealMemory is misreported (1M) so
+            # --mem/--cpus-per-task would fail. For those, set hardware.gpu_gres:
+            # false: request whole nodes (ceil(total_gpus/gpus_per_node)) with no
+            # --gres/--mem/--cpus-per-task — the node is allocated exclusively.
+            gpu_gres = hw.get("gpu_gres", True)
+            if not gpu_gres:
+                import math
+
+                nodes_needed = max(1, math.ceil(total_gpus / max(1, gpus_per_node)))
+                # Only set --nodes here if the caller didn't already (DP path below
+                # passes dp_nodes via the explicit --nodes append).
+                if dp_nodes <= 0:
+                    cmd.extend(["--nodes", str(nodes_needed)])
+            else:
+                cmd.extend(["--gres", f"gpu:{total_gpus}"])
+                cpus_per_node = int(hw.get("cpus_per_node", 96))
+                mem_per_node_mb = int(hw.get("mem_per_node_mb", 1860000))
+                cpus_needed = (cpus_per_node * total_gpus) // gpus_per_node
+                mem_needed = (mem_per_node_mb * total_gpus) // gpus_per_node
+                cmd.extend(["--cpus-per-task", str(cpus_needed)])
+                cmd.extend(["--mem", f"{mem_needed}M"])
     # Override sbatch --output to use cluster-configured log dir
-    cc_logs = (_CLUSTER_CONFIG or {}).get("paths", {}).get("eval_logs_dir", _FALLBACK_EVAL_LOGS_DIR)
+    cc_logs = (
+        (_CLUSTER_CONFIG or {})
+        .get("paths", {})
+        .get("eval_logs_dir", _FALLBACK_EVAL_LOGS_DIR)
+    )
     cmd.extend(["--output", f"{cc_logs}/%x_%j.out"])
     if nodelist:
         cmd.extend(["--nodelist", nodelist])
@@ -2594,7 +3161,16 @@ def submit_eval(
         job_prefix = "res_dp_" if dp_nodes > 0 else "res_"
     else:
         job_prefix = "eval_dp_" if dp_nodes > 0 else "eval_"
-    slurm_job_name = os.environ.get("EVAL_SLURM_JOB_NAME", "data")
+    # Self-describing default so PENDING jobs are readable in squeue (the sbatch
+    # otherwise only renames "data" → eval_<model> at RUN time, so a queued backlog
+    # all reads "data" and looks broken). EVAL_SLURM_JOB_NAME still overrides. This is
+    # the job NAME only — the `--output data_<jobid>.out` log convention the monitoring
+    # relies on (monitor-job-tables) is a SEPARATE sbatch directive, untouched here.
+    _short_model = hf_model_name.split("/")[-1][:28]
+    slurm_job_name = (
+        os.environ.get("EVAL_SLURM_JOB_NAME")
+        or f"{job_prefix}{_short_model}_{bench_tag}"
+    )
     cmd.extend(["--job-name", slurm_job_name])
     cmd.append(sbatch_script)
     # For API mode the sbatch arg is the LiteLLM-prefixed name (e.g.
@@ -2629,6 +3205,13 @@ def submit_eval(
     otagent_dir = CONDA_ENV_PATHS.get(conda_env)
     if otagent_dir:
         env_vars["OTAGENT_DIR"] = otagent_dir
+    # Always forward the conda env NAME too. Clusters whose sbatch activates by
+    # env name under a known miniforge prefix (Leonardo) — rather than by the
+    # CONDA_ENV_PATHS->OTAGENT_DIR prefix path (Jupiter) — read EVAL_CONDA_ENV.
+    # This is what lets a per-model `conda_env:` override (e.g. eval-qwen35 for
+    # qwen3_5 tmax models) reach the Leonardo serve without a --cluster-config.
+    if conda_env:
+        env_vars["EVAL_CONDA_ENV"] = conda_env
     # Merge extra env vars (e.g. EVAL_VLLM_PORT from pack-jobs port planner)
     if extra_env:
         env_vars.update(extra_env)
@@ -2676,9 +3259,15 @@ class EvalListener:
 
     def __init__(self, config: ListenerConfig):
         self.config = config
-        self._submitted_jobs: Set[str] = set()  # SLURM job IDs submitted by THIS listener
-        self._dep_chain: List[str] = []  # Persistent sliding-window dependency chain across iterations
-        self._resume_run_tags: Dict[str, str] = {}  # v6: hf_model → run_tag for disk resume
+        self._submitted_jobs: Set[str] = (
+            set()
+        )  # SLURM job IDs submitted by THIS listener
+        self._dep_chain: List[
+            str
+        ] = []  # Persistent sliding-window dependency chain across iterations
+        self._resume_run_tags: Dict[
+            str, str
+        ] = {}  # v6: hf_model → run_tag for disk resume
         set_log_file(config.log_file)
         # Seed _submitted_jobs from previous listener logs (--inherit-log)
         if config.inherit_log:
@@ -2688,6 +3277,63 @@ class EvalListener:
                 # Log the inherited IDs so future --inherit-log on THIS log picks them up
                 log(f"[inherit-log] Inherited {len(inherited)} active job(s)")
                 log(f"[inherit-log] Inherited jobs: {','.join(sorted(inherited))}")
+
+    def _resolve_agent_kwargs(
+        self, hf_model: str, baseline_configs: Dict[str, Dict]
+    ) -> List[str]:
+        """Resolve the final agent-kwarg list for ONE model.
+
+        Precedence (most specific first, dedup by the key before the first `=`):
+            CLI --agent-kwarg  >  per-model baseline agent_kwargs  >  preset agent_kwargs
+
+        The CLI and preset layers come pre-split off the config; the per-model
+        baseline layer is looked up here and spliced into the middle. When a model
+        has no per-model agent_kwargs this returns exactly self.config.agent_kwargs
+        (= merge(cli, preset)), so non-thinking models and the no-baseline-config
+        path are byte-identical to the global behavior.
+        """
+        per_model = get_baseline_agent_kwargs(hf_model, baseline_configs)
+        if not per_model:
+            return list(self.config.agent_kwargs)
+        return merge_agent_kwargs(
+            self.config.cli_agent_kwargs,
+            per_model,
+            self.config.preset_agent_kwargs,
+        )
+
+    def _resolve_timeout_multiplier(
+        self, hf_model: str, baseline_configs: Dict[str, Dict]
+    ) -> float:
+        """Resolve the harbor timeout multiplier for ONE model.
+
+        Precedence (most specific first):
+            CLI --timeout-multiplier
+            > per-model baseline `timeout_multiplier`
+            > size-inferred (eval model's own size token, else the Supabase base model's)
+            > DEFAULT_TIMEOUT_MULTIPLIER (1.0)
+
+        Finetunes whose own name lacks a size token (e.g. DCAgent/a1-*) take their
+        size from the base model via Supabase, so an 8B finetune resolves to 2.0
+        automatically. Returns the global default (1.0) only when every layer is
+        silent — and logs a WARN in that case so a never-inferred model is visible.
+        """
+        if self.config.cli_timeout_multiplier is not None:
+            return self.config.cli_timeout_multiplier
+        per_model = get_baseline_timeout_multiplier(hf_model, baseline_configs)
+        if per_model is not None:
+            return per_model
+        size_tm = infer_size_timeout_multiplier(hf_model)
+        if size_tm is None:
+            base = resolve_base_model_name(hf_model)
+            if base:
+                size_tm = infer_size_timeout_multiplier(base)
+        if size_tm is not None:
+            return size_tm
+        log(
+            f"  WARNING: no timeout_multiplier inferred for {hf_model} "
+            f"(no CLI/baseline/size signal) — using default {DEFAULT_TIMEOUT_MULTIPLIER}"
+        )
+        return DEFAULT_TIMEOUT_MULTIPLIER
 
     def run_iteration(self) -> int:
         """
@@ -2718,10 +3364,11 @@ class EvalListener:
         # Optimization: in filter_only mode with a priority file, skip the
         # expensive fetch_recent_models() (which returns ALL models in the
         # lookback window) and only fetch priority models by name.
-        if (self.config.priority_mode == "filter_only"
-                and self.config.priority_models):
+        if self.config.priority_mode == "filter_only" and self.config.priority_models:
             models = fetch_priority_models(self.config.priority_models)
-            log(f"Fetched {len(models)} priority model(s) directly (filter_only mode, skipped full scan).")
+            log(
+                f"Fetched {len(models)} priority model(s) directly (filter_only mode, skipped full scan)."
+            )
         else:
             models = fetch_recent_models(self.config.lookback_days)
             log(f"Found {len(models)} model(s) in lookback window.")
@@ -2729,7 +3376,9 @@ class EvalListener:
             # Priority models bypass lookback window.
             # Fetch priority models by name regardless of creation_time, then merge.
             if self.config.priority_models:
-                priority_models_from_db = fetch_priority_models(self.config.priority_models)
+                priority_models_from_db = fetch_priority_models(
+                    self.config.priority_models
+                )
                 seen_ids = {str(m.get("id")) for m in models}
                 added = 0
                 for pm in priority_models_from_db:
@@ -2744,12 +3393,16 @@ class EvalListener:
 
         # Check if we should skip all models due to require_priority_list
         if not self.config.priority_models and self.config.require_priority_list:
-            log("No priority list configured and --require-priority-list is set. Skipping all models.")
+            log(
+                "No priority list configured and --require-priority-list is set. Skipping all models."
+            )
             return 0
 
         submissions: List[Tuple[str, str, str, Optional[str], str, Optional[str]]] = []
         # (model_id, hf_model_name, dataset_hf, benchmark_id, reason, slurm_job_id)
-        finished_in_db: Set[str] = set()  # v6: models DB considers done (skip for resume)
+        finished_in_db: Set[str] = (
+            set()
+        )  # v6: models DB considers done (skip for resume)
 
         # v6: Build set of (model, dataset) pairs currently running in squeue (by parsing eval logs).
         # Used to prevent both resume and fresh submissions for already-running models.
@@ -2757,7 +3410,9 @@ class EvalListener:
             log_dir=_cc_path("eval_logs_dir", _FALLBACK_EVAL_LOGS_DIR),
         )
         if active_pairs:
-            log(f"[v6-active] Found {len(active_pairs)} (model, dataset) pair(s) currently active in squeue")
+            log(
+                f"[v6-active] Found {len(active_pairs)} (model, dataset) pair(s) currently active in squeue"
+            )
             if self.config.verbose:
                 for m, d in sorted(active_pairs):
                     log(f"  [v6-active] {m} on {d}")
@@ -2775,7 +3430,9 @@ class EvalListener:
         bench_dup_groups: Dict[str, List[str]] = {}
         for ds, bench_id in dataset_to_bench.items():
             if bench_id:
-                bench_dup_groups[bench_id] = get_duplicate_group_ids('benchmarks', bench_id)
+                bench_dup_groups[bench_id] = get_duplicate_group_ids(
+                    "benchmarks", bench_id
+                )
 
         for m in models:
             model_id = str(m.get("id"))
@@ -2785,7 +3442,9 @@ class EvalListener:
             hf_model = resolve_hf_model_name(m)
             if not hf_model:
                 if self.config.verbose:
-                    log(f"Skip: cannot resolve HF model for id={model_id}, name={m.get('name')}")
+                    log(
+                        f"Skip: cannot resolve HF model for id={model_id}, name={m.get('name')}"
+                    )
                 continue
 
             # Blacklist check (overrides priority)
@@ -2795,7 +3454,9 @@ class EvalListener:
                 continue
 
             # Priority handling depends on mode
-            is_priority = bool(self.config.priority_models and hf_model in self.config.priority_models)
+            is_priority = bool(
+                self.config.priority_models and hf_model in self.config.priority_models
+            )
 
             if self.config.priority_mode == "filter_only":
                 # Only evaluate models in the priority list
@@ -2807,12 +3468,14 @@ class EvalListener:
             # HuggingFace existence check
             if self.config.check_hf_exists:
                 if not check_hf_model_exists(hf_model):
-                    log(f"Skip: model not found on HuggingFace: {hf_model} (model_id={model_id})")
+                    log(
+                        f"Skip: model not found on HuggingFace: {hf_model} (model_id={model_id})"
+                    )
                     skipped_hf_not_exists += 1
                     continue
 
             # Compute model duplicate group for cross-duplicate aggregation
-            model_dup_ids = get_duplicate_group_ids('models', model_id)
+            model_dup_ids = get_duplicate_group_ids("models", model_id)
 
             for dataset_hf in self.config.datasets:
                 bench_id = dataset_to_bench.get(dataset_hf)
@@ -2826,34 +3489,58 @@ class EvalListener:
                     should_start, reason, old_slurm_job_id = True, "force-reeval", None
                 else:
                     should_start, reason, old_slurm_job_id = should_start_job(
-                        model_id, bench_id, self.config.stale_job_hours,
+                        model_id,
+                        bench_id,
+                        self.config.stale_job_hours,
                         stale_pending_hours=self.config.stale_pending_hours,
                         timeout_aware=self.config.timeout_aware,
                         agent_name=self.config.agent_name,
                         timeout_multiplier=self.config.timeout_multiplier,
                         duplicate_model_ids=model_dup_ids,
                         duplicate_benchmark_ids=bench_dup_ids,
-                        eval_config=self.config.eval_config if self.config.eval_config else None,
+                        eval_config=self.config.eval_config
+                        if self.config.eval_config
+                        else None,
                     )
 
                 if should_start:
                     # v6: Skip if (model, dataset) already running in squeue (even if DB says "no existing job",
                     # e.g. when DB entry was deleted but SLURM job is still active)
                     # Bypass this check in force-reeval mode.
-                    if not self.config.force_reeval and (hf_model, dataset_hf) in active_pairs:
+                    if (
+                        not self.config.force_reeval
+                        and (hf_model, dataset_hf) in active_pairs
+                    ):
                         if self.config.verbose:
-                            log(f"Skip: model={hf_model}, dataset={dataset_hf}, reason=currently running in squeue")
+                            log(
+                                f"Skip: model={hf_model}, dataset={dataset_hf}, reason=currently running in squeue"
+                            )
                         continue
-                    submissions.append((model_id, hf_model, dataset_hf, bench_id, reason, old_slurm_job_id))
+                    submissions.append(
+                        (
+                            model_id,
+                            hf_model,
+                            dataset_hf,
+                            bench_id,
+                            reason,
+                            old_slurm_job_id,
+                        )
+                    )
                 else:
                     # Track models the DB considers done (for v6 resume filtering)
                     if "finished" in reason:
                         finished_in_db.add(hf_model)
                     if self.config.verbose:
-                        log(f"Skip: model={hf_model}, dataset={dataset_hf}, reason={reason}")
+                        log(
+                            f"Skip: model={hf_model}, dataset={dataset_hf}, reason={reason}"
+                        )
 
         # Log filtering stats
-        if self.config.priority_mode == "filter_only" and self.config.priority_models and skipped_not_in_priority > 0:
+        if (
+            self.config.priority_mode == "filter_only"
+            and self.config.priority_models
+            and skipped_not_in_priority > 0
+        ):
             log(f"Skipped {skipped_not_in_priority} model(s) not in priority list")
         if self.config.check_hf_exists and skipped_hf_not_exists > 0:
             log(f"Skipped {skipped_hf_not_exists} model(s) not found on HuggingFace")
@@ -2871,48 +3558,76 @@ class EvalListener:
             # Scan all configured jobs directories
             resume_candidates = []
             for jdir in self.config.jobs_dirs:
-                resume_candidates.extend(scan_jobs_dir_for_resume(
-                    jobs_dir=jdir,
-                    dataset_prefixes=ds_prefixes,
-                    active_slurm_ids=active_slurm,
-                    infra_error_threshold=self.config.resume_infra_error_threshold,
-                    max_resume_count=self.config.max_resume_count,
-                ))
+                resume_candidates.extend(
+                    scan_jobs_dir_for_resume(
+                        jobs_dir=jdir,
+                        dataset_prefixes=ds_prefixes,
+                        active_slurm_ids=active_slurm,
+                        infra_error_threshold=self.config.resume_infra_error_threshold,
+                        max_resume_count=self.config.max_resume_count,
+                    )
+                )
             # Filter resume candidates through blacklist and priority (same as normal models)
             if self.config.blacklisted_models:
                 before = len(resume_candidates)
-                resume_candidates = [rc for rc in resume_candidates
-                                     if rc["hf_model"] not in self.config.blacklisted_models]
+                resume_candidates = [
+                    rc
+                    for rc in resume_candidates
+                    if rc["hf_model"] not in self.config.blacklisted_models
+                ]
                 skipped_bl = before - len(resume_candidates)
                 if skipped_bl:
-                    log(f"[v6-resume] Filtered out {skipped_bl} blacklisted resume candidate(s)")
-            if self.config.priority_mode == "filter_only" and self.config.priority_models:
+                    log(
+                        f"[v6-resume] Filtered out {skipped_bl} blacklisted resume candidate(s)"
+                    )
+            if (
+                self.config.priority_mode == "filter_only"
+                and self.config.priority_models
+            ):
                 before = len(resume_candidates)
-                resume_candidates = [rc for rc in resume_candidates
-                                     if rc["hf_model"] in self.config.priority_models]
+                resume_candidates = [
+                    rc
+                    for rc in resume_candidates
+                    if rc["hf_model"] in self.config.priority_models
+                ]
                 skipped_prio = before - len(resume_candidates)
                 if skipped_prio:
-                    log(f"[v6-resume] Filtered out {skipped_prio} non-priority resume candidate(s)")
+                    log(
+                        f"[v6-resume] Filtered out {skipped_prio} non-priority resume candidate(s)"
+                    )
 
             # v6: Filter out (model, dataset) pairs currently running in squeue.
             # This prevents resuming old dirs when a job for the same model+dataset is active.
-            if active_pairs:
+            # Bypassed by --force-reeval (mirrors the fresh-fire path behavior at the active_pairs
+            # check earlier — needed e.g. when an active job uses a different scaffold than the
+            # resume target, so the (model, dataset) collision is a false positive).
+            if active_pairs and not self.config.force_reeval:
                 before = len(resume_candidates)
-                resume_candidates = [rc for rc in resume_candidates
-                                     if (rc["hf_model"], rc.get("dataset", "")) not in active_pairs]
+                resume_candidates = [
+                    rc
+                    for rc in resume_candidates
+                    if (rc["hf_model"], rc.get("dataset", "")) not in active_pairs
+                ]
                 skipped_active = before - len(resume_candidates)
                 if skipped_active:
-                    log(f"[v6-resume] Filtered out {skipped_active} currently-running resume candidate(s)")
+                    log(
+                        f"[v6-resume] Filtered out {skipped_active} currently-running resume candidate(s)"
+                    )
 
             # Filter out models that DB already considers finished (stale disk dirs
             # from older runs that have been superseded by a successful resubmission)
             if finished_in_db:
                 before = len(resume_candidates)
-                resume_candidates = [rc for rc in resume_candidates
-                                     if rc["hf_model"] not in finished_in_db]
+                resume_candidates = [
+                    rc
+                    for rc in resume_candidates
+                    if rc["hf_model"] not in finished_in_db
+                ]
                 skipped_fin = before - len(resume_candidates)
                 if skipped_fin:
-                    log(f"[v6-resume] Filtered out {skipped_fin} already-finished-in-DB resume candidate(s)")
+                    log(
+                        f"[v6-resume] Filtered out {skipped_fin} already-finished-in-DB resume candidate(s)"
+                    )
 
             # Dedup: pick the most recent dir per model (reverse so latest timestamp wins).
             seen_resume_models: Set[str] = set()
@@ -2921,13 +3636,21 @@ class EvalListener:
                     seen_resume_models.add(rc["hf_model"])
                     # Use a sentinel model_id since we don't have it from DB
                     resume_submissions.append(
-                        ("__resume__", rc["hf_model"], rc["dataset"] or "",
-                         None, rc["reason"], None)
+                        (
+                            "__resume__",
+                            rc["hf_model"],
+                            rc["dataset"] or "",
+                            None,
+                            rc["reason"],
+                            None,
+                        )
                     )
                     # Store run_tag mapping for submit_eval
                     self._resume_run_tags[rc["hf_model"]] = rc["run_tag"]
             if resume_submissions:
-                log(f"[v6-resume] Adding {len(resume_submissions)} resume job(s) (priority over new models)")
+                log(
+                    f"[v6-resume] Adding {len(resume_submissions)} resume job(s) (priority over new models)"
+                )
 
         # v6: Resume takes priority — remove normal submissions for models
         # that already have a resume candidate (avoid duplicate fresh + resume).
@@ -2937,12 +3660,16 @@ class EvalListener:
             submissions = [s for s in submissions if s[1] not in resume_model_set]
             skipped_dup = before - len(submissions)
             if skipped_dup:
-                log(f"[v6-resume] Suppressed {skipped_dup} fresh submission(s) in favor of resume")
+                log(
+                    f"[v6-resume] Suppressed {skipped_dup} fresh submission(s) in favor of resume"
+                )
 
         # --resume-only: drop all fresh submissions, keep only resume jobs
         if self.config.resume_only:
             if submissions:
-                log(f"[v6-resume] --resume-only: dropping {len(submissions)} fresh submission(s)")
+                log(
+                    f"[v6-resume] --resume-only: dropping {len(submissions)} fresh submission(s)"
+                )
                 submissions = []
 
         if not submissions and not resume_submissions:
@@ -2961,7 +3688,9 @@ class EvalListener:
             if self.config.priority_mode == "priority_first":
                 n_priority = sum(1 for s in submissions if s[1] in priority_rank)
                 n_non_priority = len(submissions) - n_priority
-                log(f"Priority-first ordering: {n_priority} priority + {n_non_priority} non-priority submissions")
+                log(
+                    f"Priority-first ordering: {n_priority} priority + {n_non_priority} non-priority submissions"
+                )
 
         prefix = "[DRY RUN] Would submit" if self.config.dry_run else "Submitting"
         log(f"{prefix} {len(submissions)} eval(s)...")
@@ -2977,17 +3706,23 @@ class EvalListener:
             self._submitted_jobs = still_active
             active_count = len(self._submitted_jobs)
             remaining_slots = self.config.max_jobs_submitted - active_count
-            log(f"Listener SLURM jobs: {active_count} active "
+            log(
+                f"Listener SLURM jobs: {active_count} active "
                 f"({finished} finished since last check), "
-                f"{remaining_slots} slots available (max {self.config.max_jobs_submitted})")
+                f"{remaining_slots} slots available (max {self.config.max_jobs_submitted})"
+            )
             if remaining_slots <= 0:
-                log(f"WARNING: At per-listener job limit "
+                log(
+                    f"WARNING: At per-listener job limit "
                     f"({active_count}/{self.config.max_jobs_submitted}), "
-                    f"skipping all submissions this iteration")
+                    f"skipping all submissions this iteration"
+                )
                 return 0
             if len(submissions) > remaining_slots:
-                log(f"Capping submissions from {len(submissions)} to {remaining_slots} "
-                    f"(per-listener limit: {self.config.max_jobs_submitted})")
+                log(
+                    f"Capping submissions from {len(submissions)} to {remaining_slots} "
+                    f"(per-listener limit: {self.config.max_jobs_submitted})"
+                )
                 submissions = submissions[:remaining_slots]
 
         # Create sbatch params from config
@@ -2999,7 +3734,7 @@ class EvalListener:
             vllm_max_retries=self.config.vllm_max_retries,
             agent_parser=self.config.agent_parser,
             slurm_time=self.config.slurm_time,
-            enable_thinking=self.config.enable_thinking,
+            agent_kwargs=self.config.agent_kwargs,
             agent_name=self.config.agent_name,
             slurm_partition=self.config.slurm_partition,
             slurm_account=self.config.slurm_account,
@@ -3013,10 +3748,22 @@ class EvalListener:
             agent_envs=self.config.agent_envs,
             pinggy_url=self.config.pinggy_url,
             pinggy_token=self.config.pinggy_token,
+            ingress_mode=self.config.ingress_mode,
+            ingress_host=self.config.ingress_host,
         )
 
-        # Load baseline model configs for per-model vLLM overrides
-        baseline_configs = load_baseline_model_configs(self.config.baseline_model_configs)
+        # Load per-model vLLM overrides. Default: the legacy baseline-model-configs path
+        # (untouched, authoritative). Opt-in (--use-model-registry / cluster use_model_registry):
+        # the shared model-config registry, which produces the IDENTICAL dict shape so the
+        # downstream resolvers are unchanged (decoupling refactor; see load_model_registry).
+        if self.config.use_model_registry:
+            baseline_configs = load_model_registry(
+                self.config.model_registry, self.config.hardware_profile
+            )
+        else:
+            baseline_configs = load_baseline_model_configs(
+                self.config.baseline_model_configs
+            )
 
         # Load per-model API serving configs (no-op if file missing — get_api_config returns None)
         api_configs = load_api_model_configs(self.config.api_model_config)
@@ -3029,6 +3776,7 @@ class EvalListener:
         # Pre-download setup (for no-internet compute nodes)
         if self.config.pre_download:
             from huggingface_hub import snapshot_download
+
             downloaded_models: set = set()
 
         # Sliding-window dependency tracking (persistent across iterations)
@@ -3041,14 +3789,18 @@ class EvalListener:
             else:
                 active_ids = set()
             active_in_chain = sum(1 for jid in self._dep_chain if jid in active_ids)
-            log(f"Sliding-window batch-size={batch_size}: "
-                f"{active_in_chain} active jobs in dependency chain from previous iterations")
+            log(
+                f"Sliding-window batch-size={batch_size}: "
+                f"{active_in_chain} active jobs in dependency chain from previous iterations"
+            )
 
         # Node packing: query idle nodes and track GPU + port slots per node
         pack_node_list: List[str] = []
         pack_gpus_per_node = 8
         pack_node_gpu_used: Dict[int, int] = {}  # node_idx -> GPUs used so far
-        pack_node_port_next: Dict[int, int] = {}  # node_idx -> next available port offset
+        pack_node_port_next: Dict[
+            int, int
+        ] = {}  # node_idx -> next available port offset
         pack_node_idx = 0
         if self.config.pack_jobs:
             cc = self.config.cluster_config or {}
@@ -3056,41 +3808,80 @@ class EvalListener:
             pack_gpus_per_node = int(hw.get("gpus_per_node", 8))
             pack_node_list = get_idle_nodes(self.config.slurm_partition)
             if pack_node_list:
-                log(f"Pack mode: {len(pack_node_list)} idle nodes, {pack_gpus_per_node} GPUs/node")
+                log(
+                    f"Pack mode: {len(pack_node_list)} idle nodes, {pack_gpus_per_node} GPUs/node"
+                )
             else:
-                log("Pack mode: no idle nodes found, falling back to default scheduling")
+                log(
+                    "Pack mode: no idle nodes found, falling back to default scheduling"
+                )
 
         submitted = 0
-        for idx, (mid, hf_model, dataset_hf, bench_id, reason, old_slurm_job_id) in enumerate(submissions):
-
+        for idx, (
+            mid,
+            hf_model,
+            dataset_hf,
+            bench_id,
+            reason,
+            old_slurm_job_id,
+        ) in enumerate(submissions):
             # Pre-download this model before submitting (download-then-submit per model)
             # Uses the shared HF cache so compute nodes (no internet) find it via HF_HUB_OFFLINE=1
             if self.config.pre_download and hf_model not in downloaded_models:
-                hf_cache = os.environ.get("HF_HUB_CACHE", _cc_path("hf_cache", _FALLBACK_HF_CACHE))
+                hf_cache = os.environ.get(
+                    "HF_HUB_CACHE", _cc_path("hf_cache", _FALLBACK_HF_CACHE)
+                )
                 log(f"  Pre-downloading model {hf_model} to {hf_cache}...")
                 try:
-                    # Run snapshot_download in a subprocess thread with timeout
-                    # to avoid indefinite hangs on network issues
+                    # Run snapshot_download in a worker thread with a hard wall
+                    # timeout. etag_timeout=120 + max_workers=8 keep slow HF
+                    # metadata/file fetches from stalling (the default 10s etag
+                    # retries serially and wedged an entire fire for hours on a
+                    # slow link — 2026-06 ablation batch). Critically, we drive
+                    # the executor manually and shutdown(wait=False) in finally:
+                    # the old `with ThreadPoolExecutor()` block's implicit
+                    # shutdown(wait=True) re-blocked on the still-running (un-
+                    # killable) download thread AFTER the 300s timeout fired,
+                    # which was the actual indefinite hang.
                     import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
                         future = executor.submit(
-                            snapshot_download, repo_id=hf_model, repo_type="model", cache_dir=hf_cache
+                            snapshot_download,
+                            repo_id=hf_model,
+                            repo_type="model",
+                            cache_dir=hf_cache,
+                            etag_timeout=120,
+                            max_workers=8,
                         )
-                        path = future.result(timeout=300)  # 5 minute timeout
-                    log(f"  Cached at {path}")
+                        path = future.result(timeout=600)  # 10 minute hard cap
+                        log(f"  Cached at {path}")
+                    finally:
+                        executor.shutdown(wait=False)
                 except concurrent.futures.TimeoutError:
-                    log(f"  WARNING: Pre-download of {hf_model} timed out after 300s, skipping (will retry next iteration)")
+                    log(
+                        f"  WARNING: Pre-download of {hf_model} timed out after 600s, skipping (will retry next iteration)"
+                    )
                 except Exception as e:
                     log(f"  WARNING: Failed to download {hf_model}: {e}")
                 downloaded_models.add(hf_model)
 
             dry_prefix = "[DRY RUN] " if self.config.dry_run else ""
-            prio_tag = " [PRIORITY]" if (self.config.priority_mode == "priority_first"
-                                         and self.config.priority_models
-                                         and hf_model in self.config.priority_models) else ""
+            prio_tag = (
+                " [PRIORITY]"
+                if (
+                    self.config.priority_mode == "priority_first"
+                    and self.config.priority_models
+                    and hf_model in self.config.priority_models
+                )
+                else ""
+            )
             # v6: Pretty-print resume reason
             display_reason = reason
-            log(f"{dry_prefix}Submitting [{idx+1}/{len(submissions)}]: model={hf_model}, dataset={dataset_hf}, reason={display_reason}{prio_tag}")
+            log(
+                f"{dry_prefix}Submitting [{idx + 1}/{len(submissions)}]: model={hf_model}, dataset={dataset_hf}, reason={display_reason}{prio_tag}"
+            )
 
             # Cancel stale Pending SLURM job before resubmission
             if reason.startswith("stale pending") and old_slurm_job_id:
@@ -3099,12 +3890,31 @@ class EvalListener:
             # Per-model vLLM overrides from baseline config mapping
             vllm_overrides = get_vllm_env_overrides(hf_model, baseline_configs)
             if vllm_overrides:
-                log(f"  Applying baseline model vLLM overrides: {list(vllm_overrides.keys())}", verbose_only=True)
+                log(
+                    f"  Applying baseline model vLLM overrides: {list(vllm_overrides.keys())}",
+                    verbose_only=True,
+                )
 
             # Per-model conda env override (e.g. otagent2 for Qwen3.5)
-            model_conda_env = get_conda_env_override(hf_model, baseline_configs) or self.config.conda_env
+            model_conda_env = (
+                get_conda_env_override(hf_model, baseline_configs)
+                or self.config.conda_env
+            )
             if model_conda_env != self.config.conda_env:
                 log(f"  Using conda env '{model_conda_env}' for {hf_model}")
+
+            # Per-model agent kwargs: splice the model's baseline `agent_kwargs`
+            # (e.g. the live nested thinking form for thinking-capable models)
+            # into the precedence chain CLI > per-model > preset. Differs from the
+            # shared sbatch_params.agent_kwargs ONLY when the model declares its
+            # own agent_kwargs; otherwise this equals self.config.agent_kwargs and
+            # the model rides the shared list (no override emitted below).
+            model_agent_kwargs = self._resolve_agent_kwargs(hf_model, baseline_configs)
+            if model_agent_kwargs != list(self.config.agent_kwargs):
+                log(
+                    f"  Per-model agent_kwargs for {hf_model}: {model_agent_kwargs}",
+                    verbose_only=True,
+                )
 
             # Build sliding-window dependency using persistent chain.
             # Look back batch_size positions in self._dep_chain. If that job is
@@ -3117,7 +3927,10 @@ class EvalListener:
                     dep_candidate = self._dep_chain[chain_pos - batch_size]
                     if not self.config.dry_run and dep_candidate in active_ids:
                         job_dependency = f"afterany:{dep_candidate}"
-                        log(f"  Depends on job {dep_candidate} (chain pos {chain_pos - batch_size})", verbose_only=True)
+                        log(
+                            f"  Depends on job {dep_candidate} (chain pos {chain_pos - batch_size})",
+                            verbose_only=True,
+                        )
 
             # Stagger chain: jobs wait N minutes after the previous batch STARTS.
             # Uses SLURM "after:jobid+minutes" so jobs start sequentially even when
@@ -3140,15 +3953,24 @@ class EvalListener:
                         else:
                             job_dependency = stagger_dep
                         if chain_len % cbs == 0:
-                            log(f"  Stagger: batch {current_batch} boundary, wait {self.config.stagger_delay}m after job {prev_job} starts")
+                            log(
+                                f"  Stagger: batch {current_batch} boundary, wait {self.config.stagger_delay}m after job {prev_job} starts"
+                            )
                         else:
-                            log(f"  Stagger: batch {current_batch} (pos {chain_len % cbs}/{cbs}), wait {self.config.stagger_delay}m after job {prev_job} starts", verbose_only=True)
+                            log(
+                                f"  Stagger: batch {current_batch} (pos {chain_len % cbs}/{cbs}), wait {self.config.stagger_delay}m after job {prev_job} starts",
+                                verbose_only=True,
+                            )
 
             # v6: Extract run_tag_override for disk-based resume
             resume_run_tag = self._resume_run_tags.get(hf_model)
 
             # DP: use DP sbatch when dp_nodes > 0
-            actual_sbatch = self.config.dp_sbatch_script if self.config.dp_nodes > 0 else self.config.sbatch_script
+            actual_sbatch = (
+                self.config.dp_sbatch_script
+                if self.config.dp_nodes > 0
+                else self.config.sbatch_script
+            )
 
             # API mode: dispatch hosted-endpoint models to the API sbatch
             # (no GPU, no vLLM). Vllm-served models hit the else branch
@@ -3158,36 +3980,77 @@ class EvalListener:
             target_node = None
             pack_port = None
             extra_env: Dict[str, str] = {}
+            # Per-model timeout multiplier (harbor-level, applies to both vLLM and
+            # API paths). Hybrid precedence CLI > per-model baseline > size-inferred
+            # (own name, else Supabase base model) > 1.0. When the resolved value
+            # differs from the shared sbatch_params global (e.g. an 8B finetune
+            # inferring 2.0 while the global default stays 1.0), override
+            # EVAL_TIMEOUT_MULTIPLIER in extra_env (merged last, after to_env()),
+            # which the sbatch forwards as harbor --timeout-multiplier (CLI wins over
+            # the harbor config YAML's value). See _resolve_timeout_multiplier().
+            model_tm = self._resolve_timeout_multiplier(hf_model, baseline_configs)
+            if model_tm != self.config.timeout_multiplier:
+                extra_env["EVAL_TIMEOUT_MULTIPLIER"] = str(model_tm)
+                log(
+                    f"  Per-model timeout_multiplier for {hf_model}: {model_tm} "
+                    f"(global {self.config.timeout_multiplier})",
+                    verbose_only=True,
+                )
+            # Per-model agent kwargs override (vLLM path only). The shared
+            # sbatch_params carries the global merge(CLI, preset); when THIS model
+            # declares its own baseline agent_kwargs, override EVAL_AGENT_KWARGS in
+            # extra_env (which submit_eval merges last, after to_env()) with the
+            # per-model resolution. Same newline-join contract as SbatchParams.to_env().
+            # API mode uses its own EVAL_API_AGENT_KWARGS channel — left untouched.
+            if not is_api_mode and model_agent_kwargs != list(self.config.agent_kwargs):
+                extra_env["EVAL_AGENT_KWARGS"] = "\n".join(model_agent_kwargs)
             sbatch_model_override: Optional[str] = None
             if is_api_mode:
                 actual_sbatch = self.config.api_sbatch_script
                 sbatch_model_override = api_cfg["litellm_model"]
                 # Resolve preset → cap (honor n_concurrent_cap from yaml + per-preset cap)
                 preset_for_dataset = next(
-                    (name for name, p in PRESETS.items()
-                     if dataset_hf in p.get("datasets", [])),
+                    (
+                        name
+                        for name, p in PRESETS.items()
+                        if dataset_hf in p.get("datasets", [])
+                    ),
                     None,
                 )
-                preset_caps = (api_configs or {}).get("preset_n_concurrent_caps", {}) or {}
+                preset_caps = (api_configs or {}).get(
+                    "preset_n_concurrent_caps", {}
+                ) or {}
                 model_cap = api_cfg.get("n_concurrent_cap", self.config.n_concurrent)
                 preset_cap = preset_caps.get(preset_for_dataset, model_cap)
                 n_eff = min(self.config.n_concurrent, model_cap, preset_cap)
-                ak_string = _build_api_agent_kwargs_string(api_cfg.get("agent_kwargs", {}))
-                extra_env.update({
-                    "EVAL_API_BASE": api_cfg["api_base"] or "",
-                    "EVAL_API_KEY_ENV": api_cfg["api_key_env"] or "",
-                    "EVAL_API_AGENT_KWARGS": ak_string,
-                    "EVAL_N_CONCURRENT": str(n_eff),
-                })
-                log(f"  [API] {hf_model} → {sbatch_model_override} "
+                ak_string = _build_api_agent_kwargs_string(
+                    api_cfg.get("agent_kwargs", {})
+                )
+                extra_env.update(
+                    {
+                        "EVAL_API_BASE": api_cfg["api_base"] or "",
+                        "EVAL_API_KEY_ENV": api_cfg["api_key_env"] or "",
+                        "EVAL_API_AGENT_KWARGS": ak_string,
+                        "EVAL_N_CONCURRENT": str(n_eff),
+                        "EVAL_DB_MODEL_NAME": hf_model,
+                    }
+                )
+                log(
+                    f"  [API] {hf_model} → {sbatch_model_override} "
                     f"(api_base={api_cfg['api_base']}, key_env={api_cfg['api_key_env']}, "
-                    f"n_concurrent={n_eff}; caps: model={model_cap}, preset={preset_cap}/{preset_for_dataset})")
+                    f"n_concurrent={n_eff}; caps: model={model_cap}, preset={preset_cap}/{preset_for_dataset})"
+                )
             elif pack_node_list:
                 # Node packing: assign a target node and port based on GPU slots
                 effective_tp = self.config.tp_size
-                if vllm_overrides and "EVAL_VLLM_TENSOR_PARALLEL_SIZE" in vllm_overrides:
+                if (
+                    vllm_overrides
+                    and "EVAL_VLLM_TENSOR_PARALLEL_SIZE" in vllm_overrides
+                ):
                     effective_tp = int(vllm_overrides["EVAL_VLLM_TENSOR_PARALLEL_SIZE"])
                 effective_dp = self.config.dp_size
+                if vllm_overrides and "EVAL_VLLM_DATA_PARALLEL_SIZE" in vllm_overrides:
+                    effective_dp = int(vllm_overrides["EVAL_VLLM_DATA_PARALLEL_SIZE"])
                 total_gpus = effective_tp * effective_dp
                 # Find a node with enough free GPU slots
                 while pack_node_idx < len(pack_node_list):
@@ -3198,11 +4061,16 @@ class EvalListener:
                         # Assign a non-overlapping port for this job
                         port_offset = pack_node_port_next.get(pack_node_idx, 0)
                         pack_port = 10000 + port_offset
-                        pack_node_port_next[pack_node_idx] = port_offset + max(effective_dp, 1)
+                        pack_node_port_next[pack_node_idx] = port_offset + max(
+                            effective_dp, 1
+                        )
                         break
                     pack_node_idx += 1
                 if target_node:
-                    log(f"  Pack: {target_node} (GPUs {pack_node_gpu_used[pack_node_idx]}/{pack_gpus_per_node}, port {pack_port})", verbose_only=True)
+                    log(
+                        f"  Pack: {target_node} (GPUs {pack_node_gpu_used[pack_node_idx]}/{pack_gpus_per_node}, port {pack_port})",
+                        verbose_only=True,
+                    )
 
             # Pass listener-assigned port to sbatch when packing (vLLM mode only)
             if pack_port is not None:
@@ -3217,9 +4085,13 @@ class EvalListener:
                 dry_run=self.config.dry_run,
                 upload_username=self.config.upload_username,
                 timeout_multiplier=self.config.timeout_multiplier,
-                vllm_overrides=vllm_overrides if (vllm_overrides and not is_api_mode) else None,
+                vllm_overrides=vllm_overrides
+                if (vllm_overrides and not is_api_mode)
+                else None,
                 dependency=job_dependency,
-                eval_config=self.config.eval_config if self.config.eval_config else None,
+                eval_config=self.config.eval_config
+                if self.config.eval_config
+                else None,
                 conda_env=model_conda_env,
                 run_tag_override=resume_run_tag,
                 dp_nodes=0 if is_api_mode else self.config.dp_nodes,
@@ -3232,15 +4104,26 @@ class EvalListener:
             if slurm_job_id:
                 if self.config.dry_run:
                     node_str = f" on {target_node}" if target_node else ""
-                    log(f"  -> Would submit as SLURM job (job_name={job_name}){node_str}")
+                    log(
+                        f"  -> Would submit as SLURM job (job_name={job_name}){node_str}"
+                    )
                     self._dep_chain.append(f"DRY_{idx}")
                 else:
-                    log(f"  -> Submitted as SLURM job {slurm_job_id} (job_name={job_name})")
+                    log(
+                        f"  -> Submitted as SLURM job {slurm_job_id} (job_name={job_name})"
+                    )
                     self._submitted_jobs.add(slurm_job_id)
                     self._dep_chain.append(slurm_job_id)
+                    # Fold freshly-submitted JID into active_ids so later jobs in
+                    # the same iteration see it when computing sliding-window deps.
+                    # Without this, --batch-size silently has no effect in --once
+                    # mode with many models per priority file (active_ids was
+                    # snapshotted before this loop began).
+                    if batch_size and batch_size > 0:
+                        active_ids.add(slurm_job_id)
                 submitted += 1
             else:
-                log(f"  -> Submission failed")
+                log("  -> Submission failed")
                 self._dep_chain.append(f"FAILED_{idx}")
 
             if not self.config.dry_run and self.config.submission_delay > 0:
@@ -3265,15 +4148,25 @@ class EvalListener:
         log(f"Dry run mode: {self.config.dry_run}")
         log(f"Run once mode: {self.config.run_once}")
         if self.config.force_reeval:
-            log("WARNING: --force-reeval is ON — bypassing DB status checks, will re-submit even if Finished")
+            log(
+                "WARNING: --force-reeval is ON — bypassing DB status checks, will re-submit even if Finished"
+            )
         log(f"Check HF exists: {self.config.check_hf_exists}")
         log(f"Require priority list: {self.config.require_priority_list}")
 
         if self.config.priority_models:
-            mode_desc = "filter_only (skip non-priority)" if self.config.priority_mode == "filter_only" else "priority_first (all models, priority first)"
-            log(f"Priority mode: {mode_desc}, {len(self.config.priority_models)} model(s) in list")
+            mode_desc = (
+                "filter_only (skip non-priority)"
+                if self.config.priority_mode == "filter_only"
+                else "priority_first (all models, priority first)"
+            )
+            log(
+                f"Priority mode: {mode_desc}, {len(self.config.priority_models)} model(s) in list"
+            )
             if self.config.priority_file:
-                log(f"Priority file: {self.config.priority_file} (hot-reloaded each iteration)")
+                log(
+                    f"Priority file: {self.config.priority_file} (hot-reloaded each iteration)"
+                )
             if self.config.verbose:
                 for m in sorted(self.config.priority_models):
                     log(f"  - {m}")
@@ -3281,7 +4174,9 @@ class EvalListener:
             log("Priority: disabled (no priority file or empty)")
 
         if self.config.blacklisted_models:
-            log(f"Blacklist: {len(self.config.blacklisted_models)} model(s) from {self.config.blacklist_file}")
+            log(
+                f"Blacklist: {len(self.config.blacklisted_models)} model(s) from {self.config.blacklist_file}"
+            )
             if self.config.verbose:
                 for m in sorted(self.config.blacklisted_models):
                     log(f"  - {m}")
@@ -3297,7 +4192,7 @@ class EvalListener:
             vllm_max_retries=self.config.vllm_max_retries,
             agent_parser=self.config.agent_parser,
             slurm_time=self.config.slurm_time,
-            enable_thinking=self.config.enable_thinking,
+            agent_kwargs=self.config.agent_kwargs,
             agent_name=self.config.agent_name,
             slurm_partition=self.config.slurm_partition,
             slurm_account=self.config.slurm_account,
@@ -3310,17 +4205,25 @@ class EvalListener:
             agent_envs=self.config.agent_envs,
             pinggy_url=self.config.pinggy_url,
             pinggy_token=self.config.pinggy_token,
+            ingress_mode=self.config.ingress_mode,
+            ingress_host=self.config.ingress_host,
         )
         log(f"Sbatch params: {sbatch_params}")
 
         # Log v3 enhancement status
         log(f"[v3] Max SLURM jobs per listener: {self.config.max_jobs_submitted}")
-        log(f"[v3] Daytona resource check: {'enabled' if self.config.check_daytona_resources else 'disabled'}")
-        log(f"[v3] Timeout-aware dedup: {'enabled' if self.config.timeout_aware else 'disabled'}")
+        log(
+            f"[v3] Daytona resource check: {'enabled' if self.config.check_daytona_resources else 'disabled'}"
+        )
+        log(
+            f"[v3] Timeout-aware dedup: {'enabled' if self.config.timeout_aware else 'disabled'}"
+        )
         if self.config.timeout_multiplier != DEFAULT_TIMEOUT_MULTIPLIER:
             log(f"[v3] Timeout multiplier: {self.config.timeout_multiplier}")
         if self.config.stagger_delay > 0:
-            log(f"[v6] Stagger delay: {self.config.stagger_delay}m between batches of {self.config.chain_batch_size} jobs (SLURM after: chain)")
+            log(
+                f"[v6] Stagger delay: {self.config.stagger_delay}m between batches of {self.config.chain_batch_size} jobs (SLURM after: chain)"
+            )
 
         # Enhancement 3: Daytona resource pre-flight check at startup
         if self.config.check_daytona_resources:
@@ -3341,7 +4244,9 @@ class EvalListener:
                         self.config.daytona_warning_buffer,
                     )
                     if not ok:
-                        log("WARNING: Daytona resources at limit, skipping this iteration")
+                        log(
+                            "WARNING: Daytona resources at limit, skipping this iteration"
+                        )
                         if self.config.run_once or self.config.dry_run:
                             break
                         hours = self.config.check_interval_hours
@@ -3403,18 +4308,21 @@ Examples:
 
     # Preset configuration
     parser.add_argument(
-        "--preset", "-p",
+        "--preset",
+        "-p",
         choices=list(PRESETS.keys()),
         help="Use a preset configuration (aider, bfcl, medagentbench, gaia, financeagent, swebench, v2, tb2, v1)",
     )
 
     # Dataset configuration
     parser.add_argument(
-        "--datasets", "-d",
+        "--datasets",
+        "-d",
         help="Comma/space separated HF dataset repos (overrides preset)",
     )
     parser.add_argument(
-        "--sbatch-script", "-s",
+        "--sbatch-script",
+        "-s",
         help="SBATCH script to use (overrides preset)",
     )
     parser.add_argument(
@@ -3430,8 +4338,8 @@ Examples:
     parser.add_argument(
         "--cluster-config",
         help="Path to cluster config YAML (e.g. eval/clusters/jupiter.yaml). "
-             "Provides cluster-specific defaults for SLURM, paths, proxy, and hardware. "
-             "CLI flags still override cluster config values.",
+        "Provides cluster-specific defaults for SLURM, paths, proxy, and hardware. "
+        "CLI flags still override cluster config values.",
     )
 
     # Timing configuration
@@ -3469,13 +4377,13 @@ Examples:
     parser.add_argument(
         "--blacklist-file",
         help="Path to blacklisted models file (one model per line). "
-             "Models in this file are never submitted. Overrides priority list.",
+        "Models in this file are never submitted. Overrides priority list.",
     )
     parser.add_argument(
         "--priority-mode",
         choices=["filter_only", "priority_first"],
         help='Priority mode: "filter_only" (default) only evaluates priority models; '
-             '"priority_first" evaluates all models but submits priority ones first',
+        '"priority_first" evaluates all models but submits priority ones first',
     )
 
     # Validation options
@@ -3521,31 +4429,31 @@ Examples:
     )
     parser.add_argument(
         "--agent-parser",
-        help=f"Agent parser type (default: \"{DEFAULT_AGENT_PARSER}\", use \"xml\" for swebench)",
+        help=f'Agent parser type (default: "{DEFAULT_AGENT_PARSER}", use "xml" for swebench)',
     )
     parser.add_argument(
         "--slurm-time",
-        help=f"SLURM time limit (default: \"{DEFAULT_SLURM_TIME}\")",
+        help=f'SLURM time limit (default: "{DEFAULT_SLURM_TIME}")',
     )
     parser.add_argument(
         "--agent-name",
-        help=f"Agent name for harbor and DB entries (default: \"{DEFAULT_AGENT_NAME}\")",
+        help=f'Agent name for harbor and DB entries (default: "{DEFAULT_AGENT_NAME}")',
     )
     parser.add_argument(
         "--slurm-partition",
-        help=f"SLURM partition (default: \"{DEFAULT_SLURM_PARTITION}\")",
+        help=f'SLURM partition (default: "{DEFAULT_SLURM_PARTITION}")',
     )
     parser.add_argument(
         "--slurm-account",
         help="SLURM account for job submission (e.g. 'reformo'). "
-             "Overrides the #SBATCH --account in the sbatch script.",
+        "Overrides the #SBATCH --account in the sbatch script.",
     )
     parser.add_argument(
         "--tp-size",
         type=int,
         choices=[1, 2, 4],
         help=f"vLLM tensor parallel size — number of GPUs per model "
-             f"(default: {DEFAULT_TP_SIZE})",
+        f"(default: {DEFAULT_TP_SIZE})",
     )
     parser.add_argument(
         "--dp-size",
@@ -3553,13 +4461,19 @@ Examples:
         default=1,
         choices=[1, 2, 4, 8],
         help="vLLM native data-parallel size — number of model replicas. "
-             "Total GPUs = tp_size × dp_size. vLLM load-balances requests "
-             "across replicas internally. (default: 1)",
+        "Total GPUs = tp_size × dp_size. vLLM load-balances requests "
+        "across replicas internally. (default: 1)",
     )
     parser.add_argument(
-        "--enable-thinking",
-        action="store_true",
-        help="Enable thinking blocks for model inference (default: False)",
+        "--agent-kwarg",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Extra harbor agent kwarg as KEY=VALUE (repeatable). Forwarded to "
+        "every eval's harbor command as --agent-kwarg KEY=VALUE. To enable "
+        "thinking, pass the live nested chat-template form: --agent-kwarg "
+        '\'extra_body={"chat_template_kwargs":{"enable_thinking":true}}\'. '
+        "Merged with the preset's agent_kwargs (a CLI key overrides the preset).",
     )
     parser.add_argument(
         "--upload-username",
@@ -3571,7 +4485,7 @@ Examples:
         "--max-jobs-submitted",
         type=int,
         help=f"Per-listener SLURM job limit. Each listener tracks its own "
-             f"submitted jobs independently (default: {DEFAULT_MAX_JOBS_SUBMITTED})",
+        f"submitted jobs independently (default: {DEFAULT_MAX_JOBS_SUBMITTED})",
     )
 
     # v3 Enhancement 3: Daytona resource pre-flight check
@@ -3579,7 +4493,7 @@ Examples:
         "--check-daytona-resources",
         action="store_true",
         help="Query Daytona API for active sandbox count; skip if at limit. "
-             "Requires DAYTONA_API_KEY in env",
+        "Requires DAYTONA_API_KEY in env",
     )
     parser.add_argument(
         "--daytona-sandbox-limit",
@@ -3590,7 +4504,7 @@ Examples:
         "--daytona-warning-buffer",
         type=float,
         help=f"Warn when active sandboxes reach this fraction of limit "
-             f"(default: {DEFAULT_DAYTONA_WARNING_BUFFER})",
+        f"(default: {DEFAULT_DAYTONA_WARNING_BUFFER})",
     )
 
     # v3 Enhancement 5: Timeout-config-sensitive dedup
@@ -3598,20 +4512,42 @@ Examples:
         "--timeout-multiplier",
         type=float,
         help=f"Harbor timeout multiplier, stored in DB job config "
-             f"(default: {DEFAULT_TIMEOUT_MULTIPLIER})",
+        f"(default: {DEFAULT_TIMEOUT_MULTIPLIER})",
     )
     parser.add_argument(
         "--timeout-aware",
         action="store_true",
         help="Dedup jobs by model+benchmark+agent+timeout_multiplier instead "
-             "of just model+benchmark. Allows same model with different configs",
+        "of just model+benchmark. Allows same model with different configs",
     )
 
     # Baseline model configs (per-model vLLM overrides)
     parser.add_argument(
         "--baseline-model-configs",
         help="Path to YAML mapping baseline models to vLLM serving params "
-             "(e.g., eval/baseline_model_configs.yaml)",
+        "(e.g., eval/configs/baseline_model_configs_minimal.yaml)",
+    )
+
+    # Shared model-config registry (decoupling refactor; OFF by default through Stage 4).
+    parser.add_argument(
+        "--use-model-registry",
+        action="store_true",
+        default=None,
+        help="Opt in to the shared model-config registry (eval/configs/model_configs.yaml) "
+        "instead of the legacy --baseline-model-configs path. Combine with "
+        "--model-registry / --hardware-profile (or set them in the cluster config). "
+        "OFF by default; the legacy path stays authoritative until the Stage-4 cutover.",
+    )
+    parser.add_argument(
+        "--model-registry",
+        help="Path to the shared model-config registry YAML "
+        "(default eval/configs/model_configs.yaml). Used only with --use-model-registry.",
+    )
+    parser.add_argument(
+        "--hardware-profile",
+        help="Hardware-profile name selecting the registry `variants:` block for this cluster "
+        "(e.g. gh200). Used only with --use-model-registry; falls back to the cluster "
+        "config's `hardware_profile` key.",
     )
 
     # API model config (per-model serving config for Together / OpenAI / Anthropic)
@@ -3619,28 +4555,28 @@ Examples:
         "--api-model-config",
         default="eval/configs/api_model_configs.yaml",
         help="Path to YAML mapping API-served models (together_ai/, openai/, "
-             "anthropic/...) to api_base + key env + agent kwargs. Models that "
-             "match are dispatched to eval/unified_eval_api_harbor.sbatch (no GPU). "
-             "Missing file is OK — listener falls back to vLLM path for all models.",
+        "anthropic/...) to api_base + key env + agent kwargs. Models that "
+        "match are dispatched to eval/unified_eval_api_harbor.sbatch (no GPU). "
+        "Missing file is OK — listener falls back to vLLM path for all models.",
     )
 
     # Harbor config
     parser.add_argument(
         "--harbor-config",
         help="Path to Harbor YAML config (parsed for timeout_multiplier, "
-             "resource overrides; passed as EVAL_HARBOR_CONFIG to sbatch)",
+        "resource overrides; passed as EVAL_HARBOR_CONFIG to sbatch)",
     )
     parser.add_argument(
         "--config-yaml",
         help="Override Harbor eval config YAML filename (e.g. 'ablation_interleaved_true_16k.yaml'). "
-             "Overrides preset default. Resolved from eval/configs/ on the compute node.",
+        "Overrides preset default. Resolved from hpc/harbor_yaml/eval/configs/ on the compute node.",
     )
     parser.add_argument(
         "--max-output-tokens",
         type=int,
         default=None,
         help="Override max output tokens for LLM calls (default: 16384). "
-             "Sets both max_tokens and model_info.max_output_tokens in the agent.",
+        "Sets both max_tokens and model_info.max_output_tokens in the agent.",
     )
 
     # Pre-download model weights
@@ -3648,7 +4584,7 @@ Examples:
         "--pre-download",
         action="store_true",
         help="Pre-download all model weights on login node before submitting jobs. "
-             "Essential for no-internet compute nodes (Leonardo, Jupiter).",
+        "Essential for no-internet compute nodes (Leonardo, Jupiter).",
     )
 
     # Sliding-window batch dependencies
@@ -3656,8 +4592,8 @@ Examples:
         "--batch-size",
         type=int,
         help="Max concurrent jobs via sliding-window SLURM dependencies. "
-             "Job N depends on job N-batch_size finishing (afterany), "
-             "so at most batch-size jobs run at once.",
+        "Job N depends on job N-batch_size finishing (afterany), "
+        "so at most batch-size jobs run at once.",
     )
 
     # Conda environment selector
@@ -3665,8 +4601,8 @@ Examples:
         "--conda-env",
         default="otagent",
         help="Conda environment to use for eval jobs. 'otagent2' has vLLM 0.17+ "
-             "for Qwen3.5 and newer architectures. Available envs are defined in "
-             "the cluster config YAML. (default: otagent)",
+        "for Qwen3.5 and newer architectures. Available envs are defined in "
+        "the cluster config YAML. (default: otagent)",
     )
 
     # v6: Disk-based resume
@@ -3675,7 +4611,7 @@ Examples:
         nargs="+",
         default=None,  # resolved in build_config from cluster config / env / fallback
         help="Path(s) to eval jobs directories for disk-based resume scanning. "
-             "Can specify multiple dirs. (default: $EVAL_JOBS_DIR or cluster config paths.eval_jobs_dir)",
+        "Can specify multiple dirs. (default: $EVAL_JOBS_DIR or cluster config paths.eval_jobs_dir)",
     )
     parser.add_argument(
         "--no-disk-resume",
@@ -3691,66 +4627,65 @@ Examples:
         "--force-reeval",
         action="store_true",
         help="Force re-evaluation: bypass DB status check (submit even if Finished/Started). "
-             "Use with --priority-file to re-run specific models.",
+        "Use with --priority-file to re-run specific models.",
     )
     parser.add_argument(
         "--dp-nodes",
         type=int,
         default=0,
         help="Use DP (data-parallel) eval with N SLURM nodes. "
-             "0 = single-node (default). Each node runs shards_per_node vLLM replicas (4/TP).",
+        "0 = single-node (default). Each node runs shards_per_node vLLM replicas (4/TP).",
     )
     parser.add_argument(
         "--inherit-log",
         nargs="+",
         default=None,
         help="Path(s) to previous listener log file(s). Seeds _submitted_jobs with SLURM IDs "
-             "still active in squeue. Supports multiple logs for chained takeovers. "
-             "Future --inherit-log on THIS listener's log will also pick up inherited IDs.",
+        "still active in squeue. Supports multiple logs for chained takeovers. "
+        "Future --inherit-log on THIS listener's log will also pick up inherited IDs.",
     )
     parser.add_argument(
         "--submission-delay",
         type=float,
         default=1.0,
         help="Seconds to sleep between sbatch submissions (default: 1.0). "
-             "Increase to avoid Daytona rate limits (e.g. 30 for 600 sandboxes/min).",
+        "Increase to avoid Daytona rate limits (e.g. 30 for 600 sandboxes/min).",
     )
     parser.add_argument(
         "--stagger-delay",
         type=int,
         default=0,
         help="Minutes between job starts via SLURM 'after:' dependency chain (default: 0 = disabled). "
-             "Each batch of --chain-batch-size jobs waits N minutes after the previous batch STARTS. "
-             "Prevents Daytona sandbox burst when many pending jobs start simultaneously. "
-             "Minimum 1 (SLURM after: granularity is minutes).",
+        "Each batch of --chain-batch-size jobs waits N minutes after the previous batch STARTS. "
+        "Prevents Daytona sandbox burst when many pending jobs start simultaneously. "
+        "Minimum 1 (SLURM after: granularity is minutes).",
     )
     parser.add_argument(
         "--chain-batch-size",
         type=int,
         default=1,
         help="Jobs per stagger batch (default: 1). With --stagger-delay=1 --chain-batch-size=10, "
-             "10 jobs fire immediately, then the next 10 wait 1 minute after the first batch starts. "
-             "Only meaningful when --stagger-delay > 0.",
+        "10 jobs fire immediately, then the next 10 wait 1 minute after the first batch starts. "
+        "Only meaningful when --stagger-delay > 0.",
     )
     parser.add_argument(
         "--pack-jobs",
         action="store_true",
         help="Pack multiple jobs onto the same node. Queries idle nodes and assigns "
-             "jobs round-robin so that GPUs_PER_NODE / TP_SIZE jobs share one node.",
+        "jobs round-robin so that GPUs_PER_NODE / TP_SIZE jobs share one node.",
     )
     parser.add_argument(
         "--resume-error-threshold",
         type=int,
         default=10,
         help="Min infrastructure errors to trigger resume for completed jobs. "
-             "(default: 3)",
+        "(default: 3)",
     )
     parser.add_argument(
         "--max-resume-count",
         type=int,
         default=5,
-        help="Max times to resume a job dir before giving up. "
-             "(default: 5)",
+        help="Max times to resume a job dir before giving up. (default: 5)",
     )
 
     # Execution mode
@@ -3781,6 +4716,21 @@ Examples:
         help="Pinggy auth token for SSH tunnel.",
     )
     parser.add_argument(
+        "--ingress-mode",
+        type=str,
+        default="pinggy",
+        choices=["pinggy", "controller"],
+        help="How Daytona sandboxes reach vLLM: 'pinggy' (default, legacy tunnel) "
+        "or 'controller' (auth-gated Iris controller ingress). Byte-identical to "
+        "today in pinggy mode.",
+    )
+    parser.add_argument(
+        "--ingress-host",
+        type=str,
+        default=None,
+        help="Public controller-ingress host (used only with --ingress-mode controller).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview mode, no actual submission (implies --once)",
@@ -3791,7 +4741,8 @@ Examples:
         help="Run single iteration and exit",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose logging",
     )
@@ -3845,7 +4796,9 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         datasets = preset_config.get("datasets", [])
 
     if not datasets:
-        print("ERROR: No datasets specified. Use --datasets, EVAL_LISTENER_DATASETS, or --preset")
+        print(
+            "ERROR: No datasets specified. Use --datasets, EVAL_LISTENER_DATASETS, or --preset"
+        )
         sys.exit(2)
 
     # Resolve sbatch script: CLI > ENV > Preset > Cluster config > Default
@@ -3867,8 +4820,14 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         if args.check_hours is not None
         else float(os.getenv("EVAL_LISTENER_CHECK_HOURS", str(DEFAULT_CHECK_HOURS)))
     )
-    stale_hours = args.stale_hours if args.stale_hours is not None else DEFAULT_STALE_JOB_HOURS
-    stale_pending_hours = args.stale_pending_hours if args.stale_pending_hours is not None else DEFAULT_STALE_PENDING_HOURS
+    stale_hours = (
+        args.stale_hours if args.stale_hours is not None else DEFAULT_STALE_JOB_HOURS
+    )
+    stale_pending_hours = (
+        args.stale_pending_hours
+        if args.stale_pending_hours is not None
+        else DEFAULT_STALE_PENDING_HOURS
+    )
 
     # Resolve log file (CLI --log-dir > ENV > Cluster config > default)
     log_dir = Path(
@@ -3887,7 +4846,10 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
     if args.log_file:
         log_file = Path(args.log_file)
     else:
-        log_file = log_dir / f"{suffix}_eval_listener_v6{resume_tag}{dryrun_tag}_{current_time}.log"
+        log_file = (
+            log_dir
+            / f"{suffix}_eval_listener_v6{resume_tag}{dryrun_tag}_{current_time}.log"
+        )
 
     # Resolve priority file: CLI > ENV
     priority_file = args.priority_file or os.getenv("EVAL_LISTENER_PRIORITY_FILE")
@@ -3899,13 +4861,13 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
 
     # Resolve priority mode: CLI > ENV > default
     priority_mode = (
-        args.priority_mode
-        or os.getenv("EVAL_LISTENER_PRIORITY_MODE")
-        or "filter_only"
+        args.priority_mode or os.getenv("EVAL_LISTENER_PRIORITY_MODE") or "filter_only"
     )
 
     # Resolve boolean flags: CLI > ENV > Preset
-    require_priority = args.require_priority_list or _env_bool("EVAL_LISTENER_REQUIRE_PRIORITY_LIST")
+    require_priority = args.require_priority_list or _env_bool(
+        "EVAL_LISTENER_REQUIRE_PRIORITY_LIST"
+    )
     dry_run = args.dry_run or _env_bool("EVAL_LISTENER_DRY_RUN")
     check_hf_exists = (
         args.check_hf_exists
@@ -3921,29 +4883,53 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
 
     n_concurrent = _resolve(args.n_concurrent, "n_concurrent", DEFAULT_N_CONCURRENT)
     n_attempts = _resolve(args.n_attempts, "n_attempts", DEFAULT_N_ATTEMPTS)
-    gpu_memory_util = _resolve(args.gpu_memory_util, "gpu_memory_util", DEFAULT_GPU_MEMORY_UTIL)
+    gpu_memory_util = _resolve(
+        args.gpu_memory_util, "gpu_memory_util", DEFAULT_GPU_MEMORY_UTIL
+    )
 
     # Enhancement 1: Resolve error_threshold with backward compat
     error_threshold_cli = args.error_threshold
     if error_threshold_cli is None:
-        error_threshold_cli = getattr(args, 'error_threshold_compat', None)
-    error_threshold = _resolve(error_threshold_cli, "error_threshold", DEFAULT_ERROR_THRESHOLD)
+        error_threshold_cli = getattr(args, "error_threshold_compat", None)
+    error_threshold = _resolve(
+        error_threshold_cli, "error_threshold", DEFAULT_ERROR_THRESHOLD
+    )
 
-    vllm_max_retries = _resolve(args.vllm_max_retries, "vllm_max_retries", DEFAULT_VLLM_MAX_RETRIES)
+    vllm_max_retries = _resolve(
+        args.vllm_max_retries, "vllm_max_retries", DEFAULT_VLLM_MAX_RETRIES
+    )
     agent_parser = _resolve(args.agent_parser, "agent_parser", DEFAULT_AGENT_PARSER)
-    slurm_time = _resolve(args.slurm_time, "slurm_time", _cc("slurm_time", DEFAULT_SLURM_TIME))
+    slurm_time = _resolve(
+        args.slurm_time, "slurm_time", _cc("slurm_time", DEFAULT_SLURM_TIME)
+    )
     agent_name = _resolve(args.agent_name, "agent_name", DEFAULT_AGENT_NAME)
-    slurm_partition = _resolve(args.slurm_partition, "slurm_partition", _cc("slurm_partition", DEFAULT_SLURM_PARTITION))
-    slurm_account = _resolve(args.slurm_account, "slurm_account", _cc("slurm_account", DEFAULT_SLURM_ACCOUNT))
+    slurm_partition = _resolve(
+        args.slurm_partition,
+        "slurm_partition",
+        _cc("slurm_partition", DEFAULT_SLURM_PARTITION),
+    )
+    slurm_account = _resolve(
+        args.slurm_account, "slurm_account", _cc("slurm_account", DEFAULT_SLURM_ACCOUNT)
+    )
     tp_size = _resolve(args.tp_size, "tp_size", DEFAULT_TP_SIZE)
     dp_size = args.dp_size if args.dp_size else 1
-    enable_thinking = args.enable_thinking or preset_config.get("enable_thinking", DEFAULT_ENABLE_THINKING)
+    # Generic --agent-kwarg list. Two layers are resolved here (uniform across
+    # all models): CLI items (they win) merged over the preset's agent_kwargs.
+    # The PER-MODEL baseline agent_kwargs are merged in LATER, at submit time
+    # (see EvalListener.submit_*), between these two — precedence is
+    # CLI > per-model baseline > preset. We keep the CLI and preset lists
+    # SEPARATE on the config so that three-way precedence can be reconstructed
+    # per model. Thinking rides here as the live nested extra_body form — no
+    # dedicated --enable-thinking flag.
+    cli_agent_kwargs = list(args.agent_kwarg or [])
+    preset_agent_kwargs = list(preset_config.get("agent_kwargs", []) or [])
+    # Global (model-agnostic) list, used as the default for any model without a
+    # per-model agent_kwargs override: CLI wins over preset.
+    agent_kwargs = merge_agent_kwargs(cli_agent_kwargs, preset_agent_kwargs)
 
     # Resolve upload_username: CLI > ENV > current OS user
     upload_username = (
-        args.upload_username
-        or os.getenv("EVAL_UPLOAD_USERNAME")
-        or getpass.getuser()
+        args.upload_username or os.getenv("EVAL_UPLOAD_USERNAME") or getpass.getuser()
     )
 
     # Enhancement 2: SLURM throttle
@@ -3966,7 +4952,11 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         else DEFAULT_DAYTONA_WARNING_BUFFER
     )
 
-    # Enhancement 5: Timeout-config-sensitive dedup
+    # Enhancement 5: Timeout-config-sensitive dedup.
+    # cli_timeout_multiplier preserves whether the flag was EXPLICITLY passed (None
+    # if not) so the per-model hybrid resolution can let CLI win without treating the
+    # 1.0 global default as an override. timeout_multiplier is the effective global.
+    cli_timeout_multiplier = args.timeout_multiplier
     timeout_multiplier = (
         args.timeout_multiplier
         if args.timeout_multiplier is not None
@@ -3980,14 +4970,86 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         auto_snapshot = preset_config.get("auto_snapshot")
 
     # Config YAML: CLI > Preset > Default
-    config_yaml = args.config_yaml or preset_config.get("config_yaml", "dcagent_eval_config.yaml")
+    config_yaml = args.config_yaml or preset_config.get(
+        "config_yaml", "dcagent_eval_config.yaml"
+    )
 
     # Harbor config (parse eval-relevant fields for config-aware dedup)
     harbor_config = args.harbor_config or preset_config.get("harbor_config")
     eval_config = parse_harbor_eval_config(harbor_config)
 
-    # Baseline model configs for per-model vLLM overrides
-    baseline_model_configs_path = args.baseline_model_configs
+    # Baseline model configs for per-model vLLM overrides.
+    # Resolution: CLI flag > cluster config ("baseline_model_configs") > None.
+    # Letting the cluster config supply a default keeps per-model serve overrides
+    # (conda_env / tensor_parallel_size / trust_remote_code / limit_mm_per_prompt)
+    # in force even if an operator forgets --baseline-model-configs. Omitting it
+    # silently fell every per-model-conda_env model (e.g. the qwen3_5_moe 35B-A3B
+    # set) back to the default otagent/vLLM-0.16 serve env (TP=1, no
+    # trust_remote_code) -> "model type qwen3_5_moe not recognized" (2026-06-25,
+    # jobs 47840673/674/677/692/693/694).
+    baseline_model_configs_path = args.baseline_model_configs or _cc(
+        "baseline_model_configs"
+    )
+    if baseline_model_configs_path:
+        src = "CLI" if args.baseline_model_configs else "cluster-config"
+        log(f"Baseline model configs: {baseline_model_configs_path} (from {src})")
+    else:
+        log(
+            "WARNING: no --baseline-model-configs and none in cluster config — "
+            "per-model serve overrides (conda_env / TP / trust_remote_code) will "
+            "NOT apply; models needing a non-default serve env (e.g. qwen3_5_moe "
+            "-> eval-qwen35) will fall back to the default env and likely crash."
+        )
+
+    # Shared model-config registry (decoupling refactor) — DEFAULT-ON as of the Stage-4 cutover.
+    # The registry is now the default resolution path for ALL clusters; resolution is
+    # CLI > cluster-config > DEFAULT-ON. The legacy --baseline-model-configs path STILL works as
+    # an explicit per-launch override (G5 backward-compat), but a CLI --baseline-model-configs is
+    # treated as an explicit OPT-OUT of the registry and emits a DeprecationWarning. A cluster
+    # config's `baseline_model_configs:` key is the benign legacy fallback (no warning) and is
+    # superseded whenever the registry is on. Path + hardware_profile resolve CLI > cluster-config
+    # > sensible default.
+    legacy_override = bool(args.baseline_model_configs)  # explicit CLI flag = opt-out
+    if legacy_override and args.use_model_registry:
+        log(
+            "WARNING: both --use-model-registry and --baseline-model-configs given; "
+            "the explicit --baseline-model-configs override wins (legacy path)."
+        )
+    if args.use_model_registry is not None:
+        use_model_registry = bool(args.use_model_registry)
+    elif legacy_override:
+        # Explicit legacy CLI flag, no explicit --use-model-registry -> honor the legacy path.
+        use_model_registry = False
+    else:
+        # DEFAULT-ON: registry is the default for every cluster (a cluster yaml that omits the
+        # key still gets the registry). A cluster may still pin `use_model_registry: false`.
+        use_model_registry = bool(_cc("use_model_registry", True))
+    if legacy_override and not use_model_registry:
+        # G5 deprecation window: the forked per-cluster baseline files still load, with a warning.
+        warnings.warn(
+            "--baseline-model-configs is DEPRECATED: the shared model-config registry "
+            "(eval/configs/model_configs.yaml) is now the default for all clusters; this flag "
+            "will be removed. Migrate the model's entry into the registry "
+            "(name@<profile> / variants: + cluster hardware_profile).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        log(
+            "DEPRECATED: --baseline-model-configs is superseded by the shared model-config "
+            "registry (eval/configs/model_configs.yaml) — this flag will be removed."
+        )
+    model_registry_path = (
+        args.model_registry
+        or _cc("model_registry")
+        or "eval/configs/model_configs.yaml"
+    )
+    hardware_profile = args.hardware_profile or _cc("hardware_profile")
+    if use_model_registry:
+        log(
+            f"Model-config registry ENABLED (default-on): {model_registry_path} "
+            f"(hardware_profile={hardware_profile or 'default'}) — "
+            f"superseding the legacy baseline-model-configs path for this launch."
+        )
 
     # API model configs for per-model API serving (no-op if file missing)
     api_model_config_path = args.api_model_config
@@ -4006,7 +5068,7 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
     jobs_dirs = args.jobs_dir or [os.environ.get("EVAL_JOBS_DIR", fallback_jobs_dir)]
 
     # Resolve DP sbatch script: Cluster config > Default
-    dp_sbatch_script = _cc_p("dp_sbatch_script", "eval/unified_eval_harbor_dp.sbatch")
+    dp_sbatch_script = _cc_p("dp_sbatch_script", "eval/jupiter/eval_harbor.sbatch")
 
     # agent_envs: resolve from preset. Format: "KEY_NAME,KEY_NAME=ENVVAR,KEY=literal"
     # - "SERPAPI_API_KEY" → reads os.environ["SERPAPI_API_KEY"], passes as SERPAPI_API_KEY=<value>
@@ -4059,7 +5121,9 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         vllm_max_retries=vllm_max_retries,
         agent_parser=agent_parser,
         slurm_time=slurm_time,
-        enable_thinking=enable_thinking,
+        agent_kwargs=agent_kwargs,
+        cli_agent_kwargs=cli_agent_kwargs,
+        preset_agent_kwargs=preset_agent_kwargs,
         agent_name=agent_name,
         slurm_partition=slurm_partition,
         slurm_account=slurm_account,
@@ -4074,6 +5138,7 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         daytona_warning_buffer=daytona_warning_buffer,
         # Enhancement 5
         timeout_multiplier=timeout_multiplier,
+        cli_timeout_multiplier=cli_timeout_multiplier,
         timeout_aware=timeout_aware,
         config_yaml=config_yaml,
         max_output_tokens=args.max_output_tokens,
@@ -4082,6 +5147,9 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         blacklisted_models=blacklisted_models,
         # New features
         baseline_model_configs=baseline_model_configs_path,
+        use_model_registry=use_model_registry,
+        model_registry=model_registry_path,
+        hardware_profile=hardware_profile,
         api_model_config=api_model_config_path,
         harbor_config=harbor_config,
         eval_config=eval_config,
@@ -4107,6 +5175,8 @@ def build_config(args: argparse.Namespace) -> ListenerConfig:
         agent_envs=resolved_agent_envs,
         pinggy_url=args.pinggy_url,
         pinggy_token=args.pinggy_token,
+        ingress_mode=getattr(args, "ingress_mode", "pinggy") or "pinggy",
+        ingress_host=getattr(args, "ingress_host", None),
     )
 
 

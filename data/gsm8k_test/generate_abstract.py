@@ -31,7 +31,9 @@ def extract_solution(solution_str: str) -> Optional[str]:
     return solution.group(1).replace(",", "")
 
 
-def _build_gsm8k_task(problem: Dict[str, Any], task_id: int, output_dir: Path) -> Optional[Path]:
+def _build_gsm8k_task(
+    problem: Dict[str, Any], task_id: int, output_dir: Path
+) -> Optional[Path]:
     question = (problem.get("question") or "").strip()
     solution_value = extract_solution(problem.get("answer", ""))
 
@@ -140,11 +142,19 @@ class GSM8KGenerator(BaseDataGenerator):
 
         dataset = load_dataset("openai/gsm8k", "main")
         test_dataset = dataset["test"]
-        output_root = Path(args.output_dir) if args.output_dir else context.temp_dir / "gsm8k_tasks"
+        output_root = (
+            Path(args.output_dir)
+            if args.output_dir
+            else context.temp_dir / "gsm8k_tasks"
+        )
 
         limit = self._resolve_limit(request)
-        dataset_path = convert_gsm8k_to_sandboxes(test_dataset, output_root, limit=limit)
-        output_path = finalize_dataset_output(dataset_path, getattr(args, "output_dir", None))
+        dataset_path = convert_gsm8k_to_sandboxes(
+            test_dataset, output_root, limit=limit
+        )
+        output_path = finalize_dataset_output(
+            dataset_path, getattr(args, "output_dir", None)
+        )
         final_dataset_path = str(output_path)
 
         uploaded_repo: Optional[str] = None
@@ -158,7 +168,9 @@ class GSM8KGenerator(BaseDataGenerator):
             print(f"Skipping upload. Dataset available at: {final_dataset_path}")
 
         if not Path(final_dataset_path).exists():
-            raise RuntimeError(f"Generated dataset path does not exist: {final_dataset_path}")
+            raise RuntimeError(
+                f"Generated dataset path does not exist: {final_dataset_path}"
+            )
 
         return GenerationResult(
             dataset_path=final_dataset_path,

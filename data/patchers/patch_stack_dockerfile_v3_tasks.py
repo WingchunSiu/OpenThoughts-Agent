@@ -115,6 +115,7 @@ The patcher in this file does the same logic on already-extracted
 task dirs so we can re-upload v3 without touching ``commons.py``,
 but the upstream fix is recommended before generating new corpora.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -163,10 +164,8 @@ def patch_dockerfile_text(text: str) -> tuple[str, bool, str]:
 
     # Find the first WORKDIR after the LAST FROM (i.e. WORKDIR in the
     # final runtime stage, for multi-stage builds).
-    workdir_after_last_from: int | None = None
     for i, ln in enumerate(lines):
         if i > last_from and WORKDIR_RE.match(ln):
-            workdir_after_last_from = i
             break
 
     # If ALL output directives are after the first FROM already and at

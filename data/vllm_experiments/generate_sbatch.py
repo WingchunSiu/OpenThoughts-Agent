@@ -181,62 +181,76 @@ ray stop
         # Distributed configuration
         if node_id == 0:
             # Head node
-            cmd_parts.extend([
-                f"--tensor-parallel-size {config.get('tensor_parallel_size', 1)}",
-                f"--data-parallel-size {config.get('data_parallel_size', 64)}",
-                f"--data-parallel-size-local {config.get('data_parallel_size_local', 8)}",
-            ])
+            cmd_parts.extend(
+                [
+                    f"--tensor-parallel-size {config.get('tensor_parallel_size', 1)}",
+                    f"--data-parallel-size {config.get('data_parallel_size', 64)}",
+                    f"--data-parallel-size-local {config.get('data_parallel_size_local', 8)}",
+                ]
+            )
 
             if config.get("enable_expert_parallel", True):
                 cmd_parts.append("--enable-expert-parallel")
 
-            cmd_parts.extend([
-                f"--distributed-executor-backend {config.get('distributed_executor_backend', 'ray')}",
-                f"--api-server-count {config.get('api_server_count', 8)}",
-                "--port 8000",
-                "--host 0.0.0.0",
-            ])
+            cmd_parts.extend(
+                [
+                    f"--distributed-executor-backend {config.get('distributed_executor_backend', 'ray')}",
+                    f"--api-server-count {config.get('api_server_count', 8)}",
+                    "--port 8000",
+                    "--host 0.0.0.0",
+                ]
+            )
         else:
             # Worker nodes (headless)
-            cmd_parts.extend([
-                "--headless",
-                f"--tensor-parallel-size {config.get('tensor_parallel_size', 1)}",
-                f"--data-parallel-size {config.get('data_parallel_size', 64)}",
-                f"--data-parallel-size-local {config.get('data_parallel_size_local', 8)}",
-                f"--data-parallel-start-rank {node_id * config.get('data_parallel_size_local', 8)}",
-            ])
+            cmd_parts.extend(
+                [
+                    "--headless",
+                    f"--tensor-parallel-size {config.get('tensor_parallel_size', 1)}",
+                    f"--data-parallel-size {config.get('data_parallel_size', 64)}",
+                    f"--data-parallel-size-local {config.get('data_parallel_size_local', 8)}",
+                    f"--data-parallel-start-rank {node_id * config.get('data_parallel_size_local', 8)}",
+                ]
+            )
 
             if config.get("enable_expert_parallel", True):
                 cmd_parts.append("--enable-expert-parallel")
 
-            cmd_parts.extend([
-                "--data-parallel-address $HEAD_NODE_IP",
-                "--data-parallel-rpc-port 13345",
-                f"--distributed-executor-backend {config.get('distributed_executor_backend', 'ray')}",
-            ])
+            cmd_parts.extend(
+                [
+                    "--data-parallel-address $HEAD_NODE_IP",
+                    "--data-parallel-rpc-port 13345",
+                    f"--distributed-executor-backend {config.get('distributed_executor_backend', 'ray')}",
+                ]
+            )
 
         # Memory optimization
-        cmd_parts.extend([
-            f"--gpu-memory-utilization {config.get('gpu_memory_utilization', 0.92)}",
-            f"--max-model-len {config.get('max_model_len', 32768)}",
-            f"--kv-cache-dtype {config.get('kv_cache_dtype', 'auto')}",
-            f"--swap-space-gb {config.get('swap_space_gb', 20)}",
-            f"--block-size {config.get('block_size', 16)}",
-        ])
+        cmd_parts.extend(
+            [
+                f"--gpu-memory-utilization {config.get('gpu_memory_utilization', 0.92)}",
+                f"--max-model-len {config.get('max_model_len', 32768)}",
+                f"--kv-cache-dtype {config.get('kv_cache_dtype', 'auto')}",
+                f"--swap-space-gb {config.get('swap_space_gb', 20)}",
+                f"--block-size {config.get('block_size', 16)}",
+            ]
+        )
 
         # Batching & scheduling
-        cmd_parts.extend([
-            f"--max-num-batched-tokens {config.get('max_num_batched_tokens', 16384)}",
-            f"--max-num-seqs {config.get('max_num_seqs', 256)}",
-            f"--num-scheduler-steps {config.get('num_scheduler_steps', 2)}",
-        ])
+        cmd_parts.extend(
+            [
+                f"--max-num-batched-tokens {config.get('max_num_batched_tokens', 16384)}",
+                f"--max-num-seqs {config.get('max_num_seqs', 256)}",
+                f"--num-scheduler-steps {config.get('num_scheduler_steps', 2)}",
+            ]
+        )
 
         # Chunked prefill
         if config.get("enable_chunked_prefill", True):
-            cmd_parts.extend([
-                "--enable-chunked-prefill",
-                f"--max-num-partial-prefills {config.get('max_num_partial_prefills', 1)}",
-            ])
+            cmd_parts.extend(
+                [
+                    "--enable-chunked-prefill",
+                    f"--max-num-partial-prefills {config.get('max_num_partial_prefills', 1)}",
+                ]
+            )
 
         # Expert parallelism
         if config.get("all2all_backend"):
@@ -257,18 +271,22 @@ ray stop
             cmd_parts.append("--enable-prefix-caching")
 
         # Performance
-        cmd_parts.extend([
-            f"--max-seq-len-to-capture {config.get('max_seq_len_to_capture', 8192)}",
-            f"--dtype {config.get('dtype', 'bfloat16')}",
-            "--trust-remote-code",
-        ])
+        cmd_parts.extend(
+            [
+                f"--max-seq-len-to-capture {config.get('max_seq_len_to_capture', 8192)}",
+                f"--dtype {config.get('dtype', 'bfloat16')}",
+                "--trust-remote-code",
+            ]
+        )
 
         # Monitoring (head node only)
         if node_id == 0:
-            cmd_parts.extend([
-                "--disable-log-stats false",
-                "--prometheus-port 8001",
-            ])
+            cmd_parts.extend(
+                [
+                    "--disable-log-stats false",
+                    "--prometheus-port 8001",
+                ]
+            )
 
         return " \\\n  ".join(cmd_parts)
 
@@ -300,7 +318,7 @@ ray stop
         )
 
         head_script_path = self.output_dir / f"run_{exp_id}_head.sbatch"
-        with open(head_script_path, 'w') as f:
+        with open(head_script_path, "w") as f:
             f.write(head_script)
 
         scripts = {"head": head_script_path}
@@ -342,10 +360,10 @@ ray stop
             launch_script += f"# Experiment {i}\n"
             launch_script += f"echo 'Submitting experiment {i}...'\n"
             launch_script += f"sbatch {head_script}\n"
-            launch_script += f"sleep 2\n\n"
+            launch_script += "sleep 2\n\n"
 
         launch_path = self.output_dir / "launch_all_experiments.sh"
-        with open(launch_path, 'w') as f:
+        with open(launch_path, "w") as f:
             f.write(launch_script)
 
         # Make executable
@@ -356,13 +374,25 @@ ray stop
 
 def main():
     """Generate sbatch scripts from command line."""
-    parser = argparse.ArgumentParser(description="Generate SLURM batch scripts for vLLM experiments")
-    parser.add_argument("--config-dir", default="configs", help="Directory containing config JSON files")
-    parser.add_argument("--output-dir", default=".", help="Output directory for sbatch scripts")
+    parser = argparse.ArgumentParser(
+        description="Generate SLURM batch scripts for vLLM experiments"
+    )
+    parser.add_argument(
+        "--config-dir", default="configs", help="Directory containing config JSON files"
+    )
+    parser.add_argument(
+        "--output-dir", default=".", help="Output directory for sbatch scripts"
+    )
     parser.add_argument("--phase", help="Generate scripts for specific phase")
-    parser.add_argument("--dataset", default="medium_balanced.jsonl", help="Dataset file name")
-    parser.add_argument("--request-rate", type=float, default=10.0, help="Requests per second")
-    parser.add_argument("--single-config", help="Generate script for single config file")
+    parser.add_argument(
+        "--dataset", default="medium_balanced.jsonl", help="Dataset file name"
+    )
+    parser.add_argument(
+        "--request-rate", type=float, default=10.0, help="Requests per second"
+    )
+    parser.add_argument(
+        "--single-config", help="Generate script for single config file"
+    )
 
     args = parser.parse_args()
 
@@ -370,7 +400,7 @@ def main():
 
     if args.single_config:
         # Single config
-        with open(args.single_config, 'r') as f:
+        with open(args.single_config, "r") as f:
             config = json.load(f)
 
         scripts = generator.generate_sbatch_script(
@@ -379,7 +409,7 @@ def main():
             request_rate=args.request_rate,
         )
 
-        print(f"Generated sbatch script:")
+        print("Generated sbatch script:")
         print(f"  Head: {scripts['head']}")
 
     else:
@@ -402,7 +432,7 @@ def main():
 
         configs = []
         for config_file in config_files:
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 configs.append(json.load(f))
 
         # Generate scripts
@@ -417,7 +447,7 @@ def main():
         # Generate launch script
         launch_script = generator.generate_launch_script(all_scripts)
         print(f"Generated launch script: {launch_script}")
-        print(f"\nTo launch all experiments:")
+        print("\nTo launch all experiments:")
         print(f"  ./{launch_script}")
 
 

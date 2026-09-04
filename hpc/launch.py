@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 import json
 import yaml
@@ -11,6 +10,7 @@ from huggingface_hub.errors import HFValidationError
 
 from hpc.arguments import JobType, LlamaFactoryArgs, parse_args
 from hpc.cli_utils import normalize_job_type
+from hpc.data_argument_keys import DATA_ARGUMENT_KEYS
 from hpc.launch_utils import (
     _merge_dependencies,
     apply_env_overrides,
@@ -44,11 +44,7 @@ from hpc.datagen_launch_utils import (
 from hpc.consolidate_launch_utils import (
     launch_consolidate_job,
 )
-from hpc.eval_launch_utils import (
-    launch_eval_job_v2,
-    prepare_eval_configuration,
-    remap_eval_cli_args,
-)
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -83,7 +79,11 @@ def _extract_agent_name(dataset_name: str) -> str:
 
 def write_run_summary(exp_args, train_config):
     job_type = normalize_job_type(exp_args)
-    if job_type is None or job_type not in (JobType.SFT.value, JobType.SFT_MCA.value, JobType.RL.value):
+    if job_type is None or job_type not in (
+        JobType.SFT.value,
+        JobType.SFT_MCA.value,
+        JobType.RL.value,
+    ):
         return
 
     output_dir = train_config.get("output_dir") or exp_args.get("output_dir")
@@ -99,7 +99,9 @@ def write_run_summary(exp_args, train_config):
     hub_model_id = train_config.get("hub_model_id") or exp_args.get("hub_model_id")
     training_parameters_link = build_training_parameters_link(hub_model_id)
 
-    wandb_link, training_start, training_end = collect_wandb_metadata(exp_args, train_config)
+    wandb_link, training_start, training_end = collect_wandb_metadata(
+        exp_args, train_config
+    )
 
     training_type = "SFT" if job_type != JobType.RL.value else "RL"
 
@@ -109,7 +111,9 @@ def write_run_summary(exp_args, train_config):
         "training_end": training_end,
         "created_by": exp_args.get("job_creator", "DCAgent"),
         # Use original model name (e.g., "qwen/qwen3-8B") not resolved HF snapshot path
-        "base_model_name": exp_args.get("_original_model_name_or_path") or train_config.get("model_name_or_path") or exp_args.get("model_name_or_path"),
+        "base_model_name": exp_args.get("_original_model_name_or_path")
+        or train_config.get("model_name_or_path")
+        or exp_args.get("model_name_or_path"),
         "dataset_name": dataset_name,
         "training_type": training_type,
         "training_parameters": training_parameters_link,
@@ -128,6 +132,50 @@ class _DatasetArtifacts:
     dataset_paths: list[str]
     dataset_path: str
     model_path: str
+    # True when --dataset_dir points at a local LLaMA-Factory registry
+    # (dir with dataset_info.json) and the --dataset values are registry KEYS.
+    # In that mode the caller must keep the keys in base_config["dataset"] +
+    # dataset_dir pointing at the registry, NOT overwrite with local paths
+    # (each registry entry carries its own schema/tags).
+    registry_mode: bool = False
+
+
+def _resolve_dataset_entry_for_download(
+    entry: str, dataset_dir: Optional[str]
+) -> tuple[str, str]:
+    """Resolve a ``--dataset`` entry for pre-download.
+
+    When ``--dataset_dir`` points at a local LLaMA-Factory registry (a dir
+    containing ``dataset_info.json``), the ``--dataset`` values are registry
+    KEYS (e.g. ``tulu3``), not HF repo ids — so ``snapshot_download("tulu3")``
+    404s. Resolve the key against the registry instead:
+      - ``file_name`` (local data) -> already on disk; nothing to download.
+      - ``hf_hub_url`` / ``ms_hub_url`` -> the real HF repo id to snapshot.
+      - registered but no resolvable remote -> fall back to the key as repo id.
+    Non-registry entries (or no local registry) fall through to the key as-is.
+
+    Returns ``(kind, value)`` where ``kind`` is ``"local"`` or ``"repo"``.
+    """
+    if dataset_dir and dataset_dir != "ONLINE" and os.path.isdir(dataset_dir):
+        info_path = os.path.join(dataset_dir, "dataset_info.json")
+        if os.path.isfile(info_path):
+            try:
+                with open(info_path) as f:
+                    registry = json.load(f)
+            except (OSError, ValueError):
+                registry = {}
+            spec = registry.get(entry)
+            if isinstance(spec, dict):
+                if spec.get("file_name"):
+                    local = os.path.join(dataset_dir, spec["file_name"])
+                    return (
+                        "local",
+                        os.path.abspath(local) if os.path.exists(local) else entry,
+                    )
+                hub_id = spec.get("hf_hub_url") or spec.get("ms_hub_url")
+                if hub_id:
+                    return ("repo", hub_id)
+    return ("repo", entry)
 
 
 def _load_base_train_config(train_config_path: str) -> dict:
@@ -138,7 +186,9 @@ def _load_base_train_config(train_config_path: str) -> dict:
 def _maybe_include_model_in_job_name(base_config: dict, exp_args: dict) -> dict:
     from hpc.launch_utils import shorten_model_name, JOB_NAME_SEP
 
-    model_name = base_config.get("model_name_or_path") or exp_args.get("model_name_or_path")
+    model_name = base_config.get("model_name_or_path") or exp_args.get(
+        "model_name_or_path"
+    )
     if not isinstance(model_name, str) or not model_name:
         return exp_args
 
@@ -147,7 +197,11 @@ def _maybe_include_model_in_job_name(base_config: dict, exp_args: dict) -> dict:
     if current_job_name and model_component.lower() in current_job_name.lower():
         return exp_args
 
-    suggested = f"{current_job_name}{JOB_NAME_SEP}{model_component}" if current_job_name else model_component
+    suggested = (
+        f"{current_job_name}{JOB_NAME_SEP}{model_component}"
+        if current_job_name
+        else model_component
+    )
     if len(suggested) > 96:
         suggested = suggested[:96].rstrip("-_")
     print(f"Including model identifier in job name: {current_job_name} -> {suggested}")
@@ -161,16 +215,63 @@ def _drop_deprecated_fields(exp_args: dict, base_config: dict) -> None:
         print("Dropping deprecated argument 'push_to_db' from train config")
 
 
+# Launcher-only control keys that LlamaFactoryArgs exposes for our launch-time
+# preflight logic (e.g. _configure_output_and_logging's resume/overwrite guards)
+# but that must NEVER be written into the LLaMA-Factory train_config.yaml.
+# transformers v5 removed `overwrite_output_dir` from Seq2SeqTrainingArguments,
+# so leaving it in the YAML makes LLaMA-Factory's HfArgumentParser raise
+# "Some keys are not used by the HfArgumentParser: ['overwrite_output_dir']".
+_LAUNCHER_ONLY_TRAIN_CONFIG_KEYS = ("overwrite_output_dir",)
+
+
+def _strip_launcher_only_keys(base_config: dict) -> None:
+    """Remove launcher-only control keys from the config before it is dumped to
+    the LLaMA-Factory train_config.yaml. These keys are consumed earlier in
+    construct_config_yaml() and are not recognized by LLaMA-Factory's parser."""
+    for key in _LAUNCHER_ONLY_TRAIN_CONFIG_KEYS:
+        if base_config.pop(key, None) is not None:
+            print(
+                f"Stripping launcher-only key '{key}' from train config (not a LLaMA-Factory arg)"
+            )
+
+
 def _merge_launch_overrides(base_config: dict, exp_args: dict) -> dict:
     explicit_cli_keys = set(exp_args.get("_explicit_cli_keys", []))
     exp_args.pop("_explicit_cli_keys", None)
     preprocessor_owned = set()
+
+    # Registry mode (--dataset_dir with a dataset_info.json): each dataset's
+    # column/tag schema is resolved per-dataset FROM the registry. The global
+    # LlamaFactoryArgs schema defaults (messages="conversations", role_tag="from",
+    # formatting="sharegpt", ...) are non-None, so without this guard they get
+    # copied into the config below and OVERRIDE the per-dataset resolution — which
+    # breaks heterogeneous mixes (e.g. wildchat_386k's column is `conversation`,
+    # not `conversations` -> KeyError in dataset preprocessing). Skip these schema
+    # keys unless the user EXPLICITLY set them on the CLI. (Same registry detection
+    # as _materialize_dataset_and_model.)
+    # NOTE: --dataset_dir arrives in exp_args and has NOT been merged into
+    # base_config yet at this point (that merge happens in the loop below), so
+    # read it from exp_args first or the guard is a silent no-op.
+    _ds_dir = exp_args.get("dataset_dir") or base_config.get("dataset_dir")
+    _registry_mode = bool(
+        _ds_dir
+        and _ds_dir != "ONLINE"
+        and os.path.isdir(_ds_dir)
+        and os.path.isfile(os.path.join(_ds_dir, "dataset_info.json"))
+    )
+    _registry_protected_keys = set(DATA_ARGUMENT_KEYS) | {"formatting"}
 
     llama_fields = {field.name for field in dataclasses.fields(LlamaFactoryArgs)}
     for key, value in exp_args.items():
         if key.startswith("_"):
             continue
         if key == "deepspeed" and key not in explicit_cli_keys:
+            continue
+        if (
+            _registry_mode
+            and key in _registry_protected_keys
+            and key not in explicit_cli_keys
+        ):
             continue
         # Don't overwrite base config values with None defaults from LlamaFactoryArgs.
         # Only override if the value was explicitly set on CLI or is non-None.
@@ -203,22 +304,46 @@ def _materialize_dataset_and_model(
     if exp_args.get("job_type") == JobType.PRETOKENIZE.value:
         model_path = exp_args["model_name_or_path"]
         dataset_path = exp_args["dataset"]
-        dataset_paths = [item.strip() for item in str(dataset_path).split(",") if item.strip()]
+        dataset_paths = [
+            item.strip() for item in str(dataset_path).split(",") if item.strip()
+        ]
         return _DatasetArtifacts(dataset_paths, str(dataset_path), str(model_path))
 
     download_datasets = not exp_args.get("internet_node", False)
+    ds_dir = base_config.get("dataset_dir")
+    registry_mode = bool(
+        ds_dir
+        and ds_dir != "ONLINE"
+        and os.path.isdir(ds_dir)
+        and os.path.isfile(os.path.join(ds_dir, "dataset_info.json"))
+    )
     dataset_paths: list[str] = []
     if dataset_entries:
         if download_datasets:
-            for repo in dataset_entries:
+            for entry in dataset_entries:
+                kind, value = _resolve_dataset_entry_for_download(entry, ds_dir)
+                if kind == "local":
+                    # Registry entry backed by local data (file_name) — already
+                    # on disk under the registry dir; nothing to pre-download.
+                    dataset_paths.append(value)
+                    print(
+                        f"Dataset '{entry}' is local registry data ({value}); skipping download"
+                    )
+                    continue
                 try:
-                    local_path = snapshot_download(repo_id=repo, repo_type="dataset")
+                    local_path = snapshot_download(repo_id=value, repo_type="dataset")
                 except HFValidationError:
-                    if os.path.isdir(repo):
-                        local_path = os.path.abspath(repo)
+                    if os.path.isdir(value):
+                        local_path = os.path.abspath(value)
                     else:
                         raise
                 dataset_paths.append(local_path)
+                if value != entry:
+                    print(
+                        f"Dataset '{entry}' -> HF '{value}' (registry) downloaded to {local_path}"
+                    )
+                else:
+                    print(f"Downloaded dataset to {local_path}")
         else:
             dataset_paths = dataset_entries.copy()
     else:
@@ -228,22 +353,27 @@ def _materialize_dataset_and_model(
     if download_datasets:
         print(f"Downloaded dataset to {dataset_path}")
 
-    if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
+    if (
+        exp_args.get("job_type") == JobType.DATAGEN.value
+        and base_config.get("datagen_mode") == "trace"
+    ):
         from hpc.launch_utils import convert_parquet_to_tasks
+
         dataset_path = convert_parquet_to_tasks(
             snapshot_dir=dataset_path,
             dataset_identifier=base_config["dataset"],
             datasets_dir=datasets_dir,
         )
 
-
     if os.path.isdir(base_config["model_name_or_path"]):
         model_path = os.path.abspath(base_config["model_name_or_path"])
     else:
-        model_path = snapshot_download(repo_id=base_config["model_name_or_path"], repo_type="model")
+        model_path = snapshot_download(
+            repo_id=base_config["model_name_or_path"], repo_type="model"
+        )
     print(f"Downloaded model to {model_path}")
 
-    return _DatasetArtifacts(dataset_paths, dataset_path, model_path)
+    return _DatasetArtifacts(dataset_paths, dataset_path, model_path, registry_mode)
 
 
 _COMPLETED_MODEL_FILES = {
@@ -256,7 +386,9 @@ _COMPLETED_MODEL_FILES = {
 }
 
 
-def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints_dir: str) -> dict:
+def _configure_output_and_logging(
+    base_config: dict, exp_args: dict, checkpoints_dir: str
+) -> dict:
     raw_output_dir = base_config.get("output_dir")
     if raw_output_dir and checkpoints_dir not in raw_output_dir:
         output_dir = os.path.join(checkpoints_dir, raw_output_dir)
@@ -279,9 +411,18 @@ def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints
 
     # Pre-flight check: detect completed or resumable runs in output_dir
     if os.path.isdir(output_dir) and not base_config.get("overwrite_output_dir"):
-        completed_files = [f for f in _COMPLETED_MODEL_FILES if os.path.isfile(os.path.join(output_dir, f))]
+        completed_files = [
+            f
+            for f in _COMPLETED_MODEL_FILES
+            if os.path.isfile(os.path.join(output_dir, f))
+        ]
         checkpoint_dirs = sorted(
-            [d for d in os.listdir(output_dir) if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))],
+            [
+                d
+                for d in os.listdir(output_dir)
+                if d.startswith("checkpoint-")
+                and os.path.isdir(os.path.join(output_dir, d))
+            ],
         )
         if completed_files:
             raise SystemExit(
@@ -303,19 +444,30 @@ def _configure_output_and_logging(base_config: dict, exp_args: dict, checkpoints
 
     if not base_config.get("run_name"):
         base_config["run_name"] = exp_args["job_name"]
-    os.environ["WANDB_NAME"] = str(base_config["run_name"]) if base_config.get("run_name") else exp_args["job_name"]
+    os.environ["WANDB_NAME"] = (
+        str(base_config["run_name"])
+        if base_config.get("run_name")
+        else exp_args["job_name"]
+    )
     return base_config
 
-def _maybe_assign_tokenized_path(base_config: dict, exp_args: dict, dataset_entries: list[str]) -> None:
+
+def _maybe_assign_tokenized_path(
+    base_config: dict, exp_args: dict, dataset_entries: list[str]
+) -> None:
     if base_config.get("tokenized_path") is not None:
         return
 
     tokenized_dir = exp_args.get("tokenized_dir")
-    tokenized_dir = os.path.expandvars(os.environ.get("TOKENIZED_DATASETS_DIR", tokenized_dir))
+    tokenized_dir = os.path.expandvars(
+        os.environ.get("TOKENIZED_DATASETS_DIR", tokenized_dir)
+    )
     if not tokenized_dir:
         return
 
-    model_name = "_".join(base_config["model_name_or_path"].split("/")[-2:]).replace(".", "-")
+    model_name = "_".join(base_config["model_name_or_path"].split("/")[-2:]).replace(
+        ".", "-"
+    )
 
     def _slugify(entry: str) -> str:
         entry = entry.strip().rstrip("/")
@@ -325,7 +477,9 @@ def _maybe_assign_tokenized_path(base_config: dict, exp_args: dict, dataset_entr
 
     dataset_name_parts = [_slugify(entry) for entry in dataset_entries] or ["dataset"]
     dataset_name = "-".join(dataset_name_parts)
-    tokenized_path = os.path.join(tokenized_dir, "_".join([dataset_name, model_name, "tokenized"]))
+    tokenized_path = os.path.join(
+        tokenized_dir, "_".join([dataset_name, model_name, "tokenized"])
+    )
 
     if should_run_pretokenize(exp_args):
         # Pretokenize mode: always set the path (will be created)
@@ -342,10 +496,13 @@ def _maybe_assign_tokenized_path(base_config: dict, exp_args: dict, dataset_entr
         # naming convention (hash-based). If any *_tokenized dir exists in TOKENIZED_DATASETS_DIR,
         # set overwrite_cache=false so LlamaFactory discovers it via its internal lookup.
         import glob
+
         lf_caches = glob.glob(os.path.join(tokenized_dir, "*_tokenized"))
         if lf_caches:
-            print(f"[pretok] Found {len(lf_caches)} LlamaFactory tokenized cache(s) in {tokenized_dir}")
-            print(f"[pretok] Setting overwrite_cache=false so LlamaFactory reuses them")
+            print(
+                f"[pretok] Found {len(lf_caches)} LlamaFactory tokenized cache(s) in {tokenized_dir}"
+            )
+            print("[pretok] Setting overwrite_cache=false so LlamaFactory reuses them")
             base_config["overwrite_cache"] = False
 
 
@@ -358,6 +515,14 @@ def _write_train_config(configs_dir: str, job_name: str, base_config: dict) -> s
 
 
 def construct_config_yaml(exp_args):
+    # Axolotl backend: emit an axolotl-schema YAML instead of the LF one. The LF
+    # (default) path below is byte-identical to pre-change — this branch is only
+    # taken when --sft_backend axolotl.
+    if exp_args.get("sft_backend") == "axolotl":
+        from hpc.axolotl_config_utils import construct_axolotl_config_yaml
+
+        return construct_axolotl_config_yaml(exp_args)
+
     # Load base config first so we can finalize the job name (which may
     # include the model identifier) BEFORE creating experiment directories.
     train_config_path = exp_args.get("train_config_path")
@@ -399,7 +564,9 @@ def construct_config_yaml(exp_args):
     original_model_name = base_config.get("model_name_or_path")
     exp_args["_original_model_name_or_path"] = original_model_name
 
-    artifacts = _materialize_dataset_and_model(base_config, exp_args, dataset_entries, datasets_dir)
+    artifacts = _materialize_dataset_and_model(
+        base_config, exp_args, dataset_entries, datasets_dir
+    )
 
     # Preprocess thinking format for ReasoningTemplate-based templates (e.g. qwen3)
     artifacts = maybe_preprocess_thinking(base_config, exp_args, artifacts)
@@ -411,28 +578,48 @@ def construct_config_yaml(exp_args):
         hub_model_id = f"mlfoundations-dev/{exp_args['job_name']}"
     # Ensure hub_model_id complies with HuggingFace's 96-char repo ID limit
     from hpc.hf_utils import sanitize_hf_repo_id
+
     hub_model_id = sanitize_hf_repo_id(hub_model_id)
     base_config["hub_model_id"] = hub_model_id
 
-    if exp_args.get("job_type") == JobType.DATAGEN.value and base_config.get("datagen_mode") == "trace":
+    if (
+        exp_args.get("job_type") == JobType.DATAGEN.value
+        and base_config.get("datagen_mode") == "trace"
+    ):
         base_config["dataset"] = artifacts.dataset_path
         base_config["dataset_dir"] = artifacts.dataset_path
     elif not exp_args["internet_node"]:
-        if artifacts.dataset_paths:
+        if artifacts.registry_mode:
+            # Registry mode (--dataset_dir with dataset_info.json): keep the
+            # registry KEYS in base_config["dataset"] and dataset_dir pointing at
+            # the registry, so LLaMA-Factory resolves each dataset's own
+            # schema/tags. Overwriting with local snapshot paths drops the
+            # per-dataset tags -> KeyError on heterogeneous mixes.
+            print(
+                f"Registry mode: keeping dataset keys '{base_config.get('dataset')}' "
+                f"(dataset_dir={base_config.get('dataset_dir')}); pre-download warmed the cache"
+            )
+        elif artifacts.dataset_paths:
             base_config["dataset"] = ",".join(artifacts.dataset_paths)
 
     base_config = configure_sft_reporting(base_config, exp_args, artifacts.model_path)
     base_config = _configure_output_and_logging(base_config, exp_args, checkpoints_dir)
     base_config = maybe_compute_gradient_accumulation(base_config, exp_args)
     _maybe_assign_tokenized_path(base_config, exp_args, dataset_entries)
-    apply_data_argument_overrides(base_config, exp_args)
+    apply_data_argument_overrides(
+        base_config, exp_args, registry_mode=artifacts.registry_mode
+    )
+    _strip_launcher_only_keys(base_config)
 
-    train_config_path_out = _write_train_config(configs_dir, exp_args["job_name"], base_config)
+    train_config_path_out = _write_train_config(
+        configs_dir, exp_args["job_name"], base_config
+    )
 
     # Pre-build arrow cache on the login node to avoid NFS race condition
     # when multiple compute nodes try to build it simultaneously.
     if not exp_args.get("internet_node", True):
         from hpc.sft_launch_utils import prebuild_arrow_cache
+
         prebuild_arrow_cache(base_config, train_config_path=train_config_path_out)
 
     exp_args["output_dir"] = base_config["output_dir"]
@@ -440,6 +627,7 @@ def construct_config_yaml(exp_args):
     exp_args["model_name_or_path"] = base_config["model_name_or_path"]
     exp_args["hub_model_id"] = base_config.get("hub_model_id", None)
     return base_config, train_config_path_out
+
 
 def submit_job(
     exp_args=None,
@@ -471,12 +659,11 @@ def submit_job(
                 job_id = job_id.split()[-1]
                 current_dependency = f"afterany:{job_id}"
 
-    job_id = launch_sbatch(
-        exp_args["train_sbatch_path_out"], current_dependency
-    )
+    job_id = launch_sbatch(exp_args["train_sbatch_path_out"], current_dependency)
     job_id = job_id.split()[-1]
     print(f"Writing logs to {exp_args['logs_dir']}/{exp_args['job_name']}_{job_id}.out")
     return job_id
+
 
 def display_args(exp_args, name):
     print()
@@ -485,11 +672,24 @@ def display_args(exp_args, name):
         print(f"{key}: {value}")
     print()
 
+
 def main():
     # Lazy import to avoid torch dependency at module load time
     from database.unified_db.utils import load_supabase_keys
     from hpc.resume_manager import ResumeBail
+
     load_supabase_keys()
+    # Stage-1 thin wrapper: eval_listener forwards sys.argv verbatim to the listener
+    # after the preamble. Fast-pathed BEFORE parse_args() so the listener's ~50 own
+    # flags parse natively (zero forwarding loss, zero argparse coupling). See
+    # hpc/eval_listener_launch_utils.py + notes/ot-agent/eval_listener_unification_plan.md.
+    from hpc.eval_listener_launch_utils import (
+        _is_eval_listener_request,
+        launch_eval_listener_from_argv,
+    )
+
+    if _is_eval_listener_request():
+        return launch_eval_listener_from_argv()
     # this is where defaults are stored for experiments_dir and deepspeed
     cli_args = parse_args()
 
@@ -501,11 +701,6 @@ def main():
 
 
 def _main_dispatch(cli_args):
-
-    # Apply job-type-specific argument remapping
-    job_type_raw = cli_args.get("job_type", "").lower()
-    if job_type_raw == "eval":
-        cli_args = remap_eval_cli_args(cli_args)
 
     # Storing all the arguments in a dictionary that we add to in order of precedence
     exp_args = dict()
@@ -521,7 +716,9 @@ def _main_dispatch(cli_args):
     exp_args = update_exp_args(exp_args, hpc.model_dump())
     explicit_cli_keys = set(cli_args.get("_explicit_cli_keys", []))
     cli_args_filtered = {k: v for k, v in cli_args.items() if k != "_explicit_cli_keys"}
-    exp_args = update_exp_args(exp_args, cli_args_filtered, explicit_keys=explicit_cli_keys)
+    exp_args = update_exp_args(
+        exp_args, cli_args_filtered, explicit_keys=explicit_cli_keys
+    )
     if explicit_cli_keys:
         exp_args["_explicit_cli_keys"] = list(explicit_cli_keys)
 
@@ -532,7 +729,6 @@ def _main_dispatch(cli_args):
         apply_mca_template_fn=apply_mca_training_template,
         apply_cluster_overrides_fn=maybe_apply_cluster_specific_env_overrides,
         prepare_datagen_fn=_prepare_datagen_configuration,
-        prepare_eval_fn=prepare_eval_configuration,
     )
 
     # Job name
@@ -559,16 +755,14 @@ def _main_dispatch(cli_args):
         launch_datagen_job_v2(exp_args, hpc)
         return  # Skip normal training flow
 
-    if job_type == JobType.EVAL.value:
-        launch_eval_job_v2(exp_args, hpc)
-        return
-
     if job_type == JobType.PRETOKENIZE.value:
         schedule_pretokenize(
             exp_args,
             update_exp_args_fn=update_exp_args,
             construct_config_yaml_fn=construct_config_yaml,
-            construct_sbatch_script_fn=lambda args: construct_sft_sbatch_script(args, hpc),
+            construct_sbatch_script_fn=lambda args: construct_sft_sbatch_script(
+                args, hpc
+            ),
             submit_job_fn=submit_job,
         )
         return
@@ -590,6 +784,7 @@ def _main_dispatch(cli_args):
 
     if job_type == JobType.RL.value:
         from hpc.rl_launch_utils import launch_rl_job
+
         launch_rl_job(exp_args, hpc)
         return
 
@@ -598,6 +793,7 @@ def _main_dispatch(cli_args):
         f"Job type '{job_type}' is not yet implemented or is invalid. "
         f"Supported job types: {', '.join(jt.value for jt in JobType)}"
     )
+
 
 if __name__ == "__main__":
     main()

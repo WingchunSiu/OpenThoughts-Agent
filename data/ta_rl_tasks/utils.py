@@ -19,19 +19,21 @@ SECTION_CONFIG_OPEN = "<config_json>"
 SECTION_CONFIG_CLOSE = "</config_json>"
 
 
-def create_engine(*, model_name: str, engine_type: Optional[str] = None) -> InferenceEngine:
+def create_engine(
+    *, model_name: str, engine_type: Optional[str] = None
+) -> InferenceEngine:
     """
     Create an inference engine for test generation.
-    
+
     Args:
         model_name: Model identifier (e.g., 'gpt-5-mini', 'claude-3-5-sonnet-20241022')
         engine_type: Engine type ('openai', 'anthropic', etc.). If None, auto-detects from model_name.
-    
+
     Returns:
         InferenceEngine instance
     """
-    from data.generation.engines import OpenAIEngine, AnthropicEngine, create_inference_engine
-    
+    from data.generation.engines import AnthropicEngine, create_inference_engine
+
     # Auto-detect engine type from model name if not specified
     if engine_type is None:
         if model_name.startswith("claude") or "anthropic" in model_name.lower():
@@ -41,7 +43,7 @@ def create_engine(*, model_name: str, engine_type: Optional[str] = None) -> Infe
         else:
             # Default to OpenAI for backward compatibility
             engine_type = "openai"
-    
+
     # Use the standard engine creation utility if available
     try:
         # Try using the standard engine creation (supports more engine types)
@@ -179,11 +181,15 @@ def write_metadata(dest_dir: Path, trace_row: dict, command_lines: int) -> dict:
         try:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            LOGGER.warning("Existing metadata.json in %s is invalid; overwriting", dest_dir)
+            LOGGER.warning(
+                "Existing metadata.json in %s is invalid; overwriting", dest_dir
+            )
             payload = {}
 
     payload.setdefault("ta_rl_tasks", {})["traces"] = [trace_meta]
-    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    metadata_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return trace_meta
 
 

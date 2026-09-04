@@ -29,7 +29,6 @@ hpc/dotenv/jupiter_eval.env).
 """
 
 import argparse
-import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -61,9 +60,12 @@ def get_recent_models(
 ) -> List[dict]:
     """Return models with creation_time >= cutoff, optionally size-filtered."""
     # Pull once, classify in-process. Models table is small enough.
-    models = client.table("models").select(
-        "id,name,model_size_b,base_model_id,creation_time"
-    ).execute().data
+    models = (
+        client.table("models")
+        .select("id,name,model_size_b,base_model_id,creation_time")
+        .execute()
+        .data
+    )
     root_sizes = _build_root_size_map(models) if size is not None else {}
 
     out = []
@@ -102,9 +104,13 @@ def get_evaled_for_family(client, family_ids: Set[str]) -> Set[str]:
     evaled = set()
     for bid in family_ids:
         # Filter to non-null model_id at query time to keep the response small.
-        rows = client.table("sandbox_jobs").select("model_id").eq(
-            "benchmark_id", bid
-        ).execute().data
+        rows = (
+            client.table("sandbox_jobs")
+            .select("model_id")
+            .eq("benchmark_id", bid)
+            .execute()
+            .data
+        )
         for r in rows:
             mid = r.get("model_id")
             if mid:
@@ -125,10 +131,21 @@ def main():
         default="terminal_bench_2,swebench-verified-random-100-folders",
         help="Comma-separated benchmark names (resolved to families via duplicate_of).",
     )
-    p.add_argument("--size", type=int, default=32, help="Size bucket in B (default 32).")
-    p.add_argument("--max-age-days", type=int, default=7, help="Max model age in days (default 7).")
-    p.add_argument("--include", action="append", default=[], help="Substring filter (repeatable).")
-    p.add_argument("--exclude", action="append", default=[], help="Substring exclusion (repeatable).")
+    p.add_argument(
+        "--size", type=int, default=32, help="Size bucket in B (default 32)."
+    )
+    p.add_argument(
+        "--max-age-days", type=int, default=7, help="Max model age in days (default 7)."
+    )
+    p.add_argument(
+        "--include", action="append", default=[], help="Substring filter (repeatable)."
+    )
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Substring exclusion (repeatable).",
+    )
     p.add_argument(
         "--output-dir",
         default=None,
@@ -183,7 +200,10 @@ def main():
         file=sys.stderr,
     )
     print(file=sys.stderr)
-    print(f"  {'created':<10} {'name':<70} " + " ".join(f"{b[:18]:<18}" for b in benchmarks))
+    print(
+        f"  {'created':<10} {'name':<70} "
+        + " ".join(f"{b[:18]:<18}" for b in benchmarks)
+    )
     print(f"  {'-' * 10} {'-' * 70} " + " ".join(f"{'-' * 18:<18}" for b in benchmarks))
     for m, statuses in rows:
         created = (m.get("creation_time") or "")[:10]
@@ -198,16 +218,18 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
         for b in benchmarks:
             missing = sorted(m["name"] for m, st in rows if not st[b])
-            path = out_dir / f"uneval_{sanitize(b)}_{args.size}b_{args.max_age_days}d.txt"
+            path = (
+                out_dir / f"uneval_{sanitize(b)}_{args.size}b_{args.max_age_days}d.txt"
+            )
             path.write_text("\n".join(missing) + ("\n" if missing else ""))
             print(f"\nWrote {len(missing)} models to {path}", file=sys.stderr)
 
     # Combined "needs any benchmark" list.
     if args.output_dir:
-        any_missing = sorted(
-            {m["name"] for m, st in rows if not all(st.values())}
+        any_missing = sorted({m["name"] for m, st in rows if not all(st.values())})
+        path = (
+            Path(args.output_dir) / f"uneval_any_{args.size}b_{args.max_age_days}d.txt"
         )
-        path = Path(args.output_dir) / f"uneval_any_{args.size}b_{args.max_age_days}d.txt"
         path.write_text("\n".join(any_missing) + ("\n" if any_missing else ""))
         print(f"Wrote {len(any_missing)} models to {path}", file=sys.stderr)
 

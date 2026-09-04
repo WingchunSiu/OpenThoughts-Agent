@@ -34,7 +34,7 @@ source hpc/scripts/common.sh  # Load common functions
 echo "✓ Environment loaded"
 # Test the setup
 echo "Testing HPC system..."
-python3 hpc/test_hpc.py
+python3 hpc/hpc_smoke.py
 
 echo ""
 echo "=== Setup Complete ==="

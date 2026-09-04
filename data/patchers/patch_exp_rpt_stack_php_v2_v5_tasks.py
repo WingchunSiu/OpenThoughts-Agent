@@ -85,6 +85,7 @@ Constraints (per upload spec):
   - Only ``tests/test.sh`` is touched. instruction.md, TestSolution.php,
     environment/Dockerfile, etc. are preserved verbatim.
 """
+
 from __future__ import annotations
 
 import argparse

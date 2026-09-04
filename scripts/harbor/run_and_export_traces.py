@@ -7,35 +7,35 @@ Hugging Face Dataset of extracted traces, without invoking subprocesses.
 Assumes `harbor` is importable (e.g., installed via `pip install -e .`).
 """
 
-import asyncio
-import hashlib
-import json
-import logging
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Any, Optional
-import re
-import importlib
-import inspect
-import os
-from pydantic import BaseModel
+import asyncio  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import shutil  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Optional  # noqa: E402
+import re  # noqa: E402
+import importlib  # noqa: E402
+import inspect  # noqa: E402
+import os  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+from datasets import Dataset  # noqa: E402
 
-from harbor.job import Job
-from harbor.models.agent.name import AgentName
-from harbor.models.environment_type import EnvironmentType
-from harbor.models.job.config import JobConfig
-from harbor.models.trial.config import AgentConfig, EnvironmentConfig, VerifierConfig
+from harbor.job import Job  # noqa: E402
+from harbor.models.agent.name import AgentName  # noqa: E402
+from harbor.models.environment_type import EnvironmentType  # noqa: E402
+from harbor.models.job.config import JobConfig  # noqa: E402
+from harbor.models.trial.config import AgentConfig, EnvironmentConfig, VerifierConfig  # noqa: E402
 
-from scripts.harbor._harbor_compat import (
+from scripts.harbor._harbor_compat import (  # noqa: E402
     LocalDatasetConfig,
     create_job,
     get_orchestrator_field,
     set_orchestrator_field,
 )
-from harbor.utils.traces_utils import export_traces as _export_traces
-from data.gcs_cache import gcs_cache
-from scripts.harbor.job_config_utils import (
+from harbor.utils.traces_utils import export_traces as _export_traces  # noqa: E402
+from data.gcs_cache import gcs_cache  # noqa: E402
+from scripts.harbor.job_config_utils import (  # noqa: E402
     ensure_trailing_dataset,
     set_job_metadata,
     set_local_dataset,
@@ -58,7 +58,7 @@ def _compute_dataset_checksum(dataset_path: Path) -> str:
     hasher = hashlib.sha256()
 
     # Get all files in sorted order for deterministic hashing
-    all_files = sorted(dataset_path.rglob('*'))
+    all_files = sorted(dataset_path.rglob("*"))
 
     for file_path in all_files:
         if file_path.is_file():
@@ -68,7 +68,7 @@ def _compute_dataset_checksum(dataset_path: Path) -> str:
 
             # Add file contents to hash
             try:
-                with open(file_path, 'rb') as f:
+                with open(file_path, "rb") as f:
                     # Read in chunks to handle large files
                     while chunk := f.read(8192):
                         hasher.update(chunk)
@@ -100,7 +100,6 @@ def _find_job_by_checksum(jobs_dir: Path, checksum: str) -> Optional[str]:
 
             checksum_file = job_folder / ".dataset_checksum"
             if checksum_file.exists():
-                
                 existing_checksum = checksum_file.read_text().strip()
                 if existing_checksum == checksum:
                     return job_folder.name
@@ -143,7 +142,7 @@ def _cleanup_empty_agent_trials(job_dir: Path) -> int:
             continue
 
         # Skip special files like .dataset_checksum
-        if trial_dir.name.startswith('.'):
+        if trial_dir.name.startswith("."):
             continue
 
         # Check if trial config exists - if not, this trial is corrupted
@@ -165,7 +164,7 @@ def _cleanup_empty_agent_trials(job_dir: Path) -> int:
             # Check if directory is empty (no files, only empty subdirectories if any)
             has_content = False
             try:
-                for item in agent_dir.rglob('*'):
+                for item in agent_dir.rglob("*"):
                     if item.is_file():
                         has_content = True
                         break
@@ -174,7 +173,9 @@ def _cleanup_empty_agent_trials(job_dir: Path) -> int:
                 has_content = True
 
             if not has_content:
-                logger.info(f"Removing trial with empty agent directory: {trial_dir.name}")
+                logger.info(
+                    f"Removing trial with empty agent directory: {trial_dir.name}"
+                )
                 try:
                     shutil.rmtree(trial_dir)
                     removed_count += 1
@@ -182,6 +183,7 @@ def _cleanup_empty_agent_trials(job_dir: Path) -> int:
                     logger.warning(f"Failed to remove {trial_dir.name}: {e}")
 
     return removed_count
+
 
 def _shutdown_litellm(timeout: float = 5.0) -> None:
     """Best-effort LiteLLM shutdown to avoid dangling tasks/sessions."""
@@ -195,17 +197,24 @@ def _shutdown_litellm(timeout: float = 5.0) -> None:
         return
 
     try:
-        result = shutdown_fn(timeout=timeout) if "timeout" in inspect.signature(shutdown_fn).parameters else shutdown_fn()  # type: ignore[arg-type]
+        result = (
+            shutdown_fn(timeout=timeout)
+            if "timeout" in inspect.signature(shutdown_fn).parameters
+            else shutdown_fn()
+        )  # type: ignore[arg-type]
         if inspect.isawaitable(result):
             asyncio.run(result)
     except Exception as exc:  # pragma: no cover - defensive cleanup
         print(f"[run_dataset_to_traces] Warning: LiteLLM shutdown raised {exc!r}")
 
+
 def _is_pydantic_model(x) -> bool:
     return isinstance(x, BaseModel)
 
 
-def _merge_verifier_timeout_into_config(config: JobConfig, verifier_timeout_sec: float | None) -> None:
+def _merge_verifier_timeout_into_config(
+    config: JobConfig, verifier_timeout_sec: float | None
+) -> None:
     if verifier_timeout_sec is None:
         return
     v = getattr(config, "verifier", None)
@@ -213,9 +222,12 @@ def _merge_verifier_timeout_into_config(config: JobConfig, verifier_timeout_sec:
         config.verifier = VerifierConfig(override_timeout_sec=verifier_timeout_sec)
         return
     if _is_pydantic_model(v):
-        config.verifier = v.model_copy(update={"override_timeout_sec": verifier_timeout_sec})
+        config.verifier = v.model_copy(
+            update={"override_timeout_sec": verifier_timeout_sec}
+        )
     elif isinstance(v, dict):
-        nv = dict(v); nv["override_timeout_sec"] = verifier_timeout_sec
+        nv = dict(v)
+        nv["override_timeout_sec"] = verifier_timeout_sec  # noqa: E702
         config.verifier = nv
     else:
         raise TypeError(f"Unsupported verifier type on JobConfig: {type(v)}")
@@ -248,7 +260,10 @@ def _merge_disable_verification_into_config(
 
     raise TypeError(f"Unsupported verifier type on JobConfig: {type(verifier)}")
 
-def _merge_agent_timeout_into_config(config: JobConfig, agent_timeout_sec: float | None) -> None:
+
+def _merge_agent_timeout_into_config(
+    config: JobConfig, agent_timeout_sec: float | None
+) -> None:
     if agent_timeout_sec is None:
         return
     agents = getattr(config, "agents", None)
@@ -258,13 +273,17 @@ def _merge_agent_timeout_into_config(config: JobConfig, agent_timeout_sec: float
     merged = []
     for a in agents:
         if _is_pydantic_model(a):
-            merged.append(a.model_copy(update={"override_timeout_sec": agent_timeout_sec}))
+            merged.append(
+                a.model_copy(update={"override_timeout_sec": agent_timeout_sec})
+            )
         elif isinstance(a, dict):
-            na = dict(a); na["override_timeout_sec"] = agent_timeout_sec
+            na = dict(a)
+            na["override_timeout_sec"] = agent_timeout_sec  # noqa: E702
             merged.append(na)
         else:
             raise TypeError(f"Unsupported agent type on JobConfig.agents: {type(a)}")
     config.agents = merged
+
 
 def force_resume(
     existing_job_dir: str,
@@ -277,7 +296,9 @@ def force_resume(
     verbose: bool = False,
 ) -> Dataset:
     existing_job_dir = Path(existing_job_dir)
-    config = JobConfig.model_validate_json((existing_job_dir / "config.json").read_text())
+    config = JobConfig.model_validate_json(
+        (existing_job_dir / "config.json").read_text()
+    )
     job = create_job(Job, config)
 
     try:
@@ -286,7 +307,7 @@ def force_resume(
         _shutdown_litellm(timeout=5.0)
 
     ds = _export_traces(
-        root=job_dir,
+        root=existing_job_dir,
         recursive=bool(recursive),
         episodes=episodes,
         to_sharegpt=to_sharegpt,
@@ -298,6 +319,7 @@ def force_resume(
         include_verifier_output=True,
     )
     return ds
+
 
 @gcs_cache()
 def run_dataset_to_traces(
@@ -420,7 +442,9 @@ def run_dataset_to_traces(
         log_progress = log_progress.lower() not in {"", "false", "0", "no"}
 
     if disable_verification:
-        logger.info("[run_dataset_to_traces] Verification disabled; Harbor tests will be skipped.")
+        logger.info(
+            "[run_dataset_to_traces] Verification disabled; Harbor tests will be skipped."
+        )
 
     # Compute checksum of the dataset directory
     logger.info(f"Computing checksum for dataset: {dataset_path}")
@@ -430,21 +454,29 @@ def run_dataset_to_traces(
     # Check if a job with this checksum already exists
     try:
         existing_job_name = _find_job_by_checksum(jobs_dir, dataset_checksum)
-    except:
+    except:  # noqa: E722
         existing_job_name = None
-        
+
     if existing_job_name and not job_name:
         existing_job_dir = jobs_dir / existing_job_name
         config_path = existing_job_dir / "config.json"
-        with open(config_path, 'r') as file:
+        with open(config_path, "r") as file:
             data = json.load(file)
-        
-        if data['agents'][0]['model_name'] != model_name or data['agents'][0]['kwargs'] != agent_kwargs or data['agents'][0]['name'] != agent_name:
-            logger.warning(f"Existing job '{existing_job_name}' has different model name, kwargs, or name")
-            logger.warning(f" → Creating new job")
-            existing_job_name = None    
+
+        if (
+            data["agents"][0]["model_name"] != model_name
+            or data["agents"][0]["kwargs"] != agent_kwargs
+            or data["agents"][0]["name"] != agent_name
+        ):
+            logger.warning(
+                f"Existing job '{existing_job_name}' has different model name, kwargs, or name"
+            )
+            logger.warning(" → Creating new job")
+            existing_job_name = None
         else:
-            logger.info(f"✓ Found existing job with matching checksum: {existing_job_name}")
+            logger.info(
+                f"✓ Found existing job with matching checksum: {existing_job_name}"
+            )
             logger.info(f"→ Resuming job: {existing_job_name}")
             job_name = existing_job_name
 
@@ -452,19 +484,26 @@ def run_dataset_to_traces(
             existing_job_dir = jobs_dir / existing_job_name
             removed_count = _cleanup_empty_agent_trials(existing_job_dir)
             if removed_count > 0:
-                logger.info(f"  Cleaned up {removed_count} trial(s) with empty agent directories")
+                logger.info(
+                    f"  Cleaned up {removed_count} trial(s) with empty agent directories"
+                )
     elif existing_job_name and job_name and existing_job_name != job_name:
-        logger.warning(f"Existing job '{existing_job_name}' has the same dataset checksum")
-        logger.warning(f"  But you specified job_name='{job_name}'. Proceeding with your specified name.")
+        logger.warning(
+            f"Existing job '{existing_job_name}' has the same dataset checksum"
+        )
+        logger.warning(
+            f"  But you specified job_name='{job_name}'. Proceeding with your specified name."
+        )
     else:
         if not existing_job_name:
-            logger.info(f"✗ No existing job found with matching checksum")
-            logger.info(f"→ Creating new job")
-
+            logger.info("✗ No existing job found with matching checksum")
+            logger.info("→ Creating new job")
 
     if existing_job_name:
         existing_job_dir = jobs_dir / existing_job_name
-        config = JobConfig.model_validate_json((existing_job_dir / "config.json").read_text())
+        config = JobConfig.model_validate_json(
+            (existing_job_dir / "config.json").read_text()
+        )
 
         # Update orchestrator concurrency if it changed to keep Harbor validation happy
         desired_n_concurrent = int(n_concurrent)
@@ -477,9 +516,13 @@ def run_dataset_to_traces(
                     f"  Updating n_concurrent_trials: {old_n_concurrent} → {desired_n_concurrent}"
                 )
                 orchestrator_cfg.n_concurrent_trials = desired_n_concurrent
-                (existing_job_dir / "config.json").write_text(config.model_dump_json(indent=4))
+                (existing_job_dir / "config.json").write_text(
+                    config.model_dump_json(indent=4)
+                )
         else:
-            logger.warning("Existing Harbor config missing orchestrator settings; leaving unchanged.")
+            logger.warning(
+                "Existing Harbor config missing orchestrator settings; leaving unchanged."
+            )
 
         _merge_agent_timeout_into_config(config, agent_timeout_sec)
         _merge_verifier_timeout_into_config(config, verifier_timeout_sec)
@@ -495,7 +538,11 @@ def run_dataset_to_traces(
                     "Pass force_build=True (default) or pre-build via Harbor tooling."
                 )
 
-            env_label = env_type.value if isinstance(env_type, EnvironmentType) else str(env_type)
+            env_label = (
+                env_type.value
+                if isinstance(env_type, EnvironmentType)
+                else str(env_type)
+            )
             print(
                 f"[run_dataset_to_traces] env={env_label} force_build={force_build} delete_env={delete_env}"
             )
@@ -504,7 +551,9 @@ def run_dataset_to_traces(
 
             resolved_override_cpus = override_cpus
             if resolved_override_cpus is None:
-                candidate = env_kwargs_dict.pop("override_cpus", None) or env_kwargs_dict.pop("cpu", None)
+                candidate = env_kwargs_dict.pop(
+                    "override_cpus", None
+                ) or env_kwargs_dict.pop("cpu", None)
                 if candidate is not None:
                     resolved_override_cpus = int(candidate)
             if resolved_override_cpus is None:
@@ -513,7 +562,9 @@ def run_dataset_to_traces(
                     try:
                         resolved_override_cpus = int(env_val)
                     except ValueError:
-                        logger.warning(f"[run_dataset_to_traces] Ignoring invalid SANDBOX_CPU: {env_val!r}")
+                        logger.warning(
+                            f"[run_dataset_to_traces] Ignoring invalid SANDBOX_CPU: {env_val!r}"
+                        )
 
             resolved_override_memory_mb = override_memory_mb
             if resolved_override_memory_mb is None:
@@ -534,7 +585,9 @@ def run_dataset_to_traces(
                     try:
                         resolved_override_memory_mb = int(env_val) * 1024
                     except ValueError:
-                        logger.warning(f"[run_dataset_to_traces] Ignoring invalid SANDBOX_MEMORY_GB: {env_val!r}")
+                        logger.warning(
+                            f"[run_dataset_to_traces] Ignoring invalid SANDBOX_MEMORY_GB: {env_val!r}"
+                        )
 
             resolved_override_storage_mb = override_storage_mb
             if resolved_override_storage_mb is None:
@@ -546,7 +599,9 @@ def run_dataset_to_traces(
                 if candidate is not None:
                     resolved_override_storage_mb = int(candidate)
             if resolved_override_storage_mb is None:
-                candidate = env_kwargs_dict.pop("storage_gb", None) or env_kwargs_dict.pop("disk_gb", None)
+                candidate = env_kwargs_dict.pop(
+                    "storage_gb", None
+                ) or env_kwargs_dict.pop("disk_gb", None)
                 if candidate is not None:
                     resolved_override_storage_mb = int(candidate) * 1024
             if resolved_override_storage_mb is None:
@@ -555,7 +610,9 @@ def run_dataset_to_traces(
                     try:
                         resolved_override_storage_mb = int(env_val) * 1024
                     except ValueError:
-                        logger.warning(f"[run_dataset_to_traces] Ignoring invalid SANDBOX_DISK_GB: {env_val!r}")
+                        logger.warning(
+                            f"[run_dataset_to_traces] Ignoring invalid SANDBOX_DISK_GB: {env_val!r}"
+                        )
 
             # Build a JobConfig programmatically
             config = JobConfig()
@@ -570,7 +627,11 @@ def run_dataset_to_traces(
             set_orchestrator_field(config, "quiet", bool(quiet))
 
             # Agents
-            if agent_name is not None or agent_import_path is not None or model_name is not None:
+            if (
+                agent_name is not None
+                or agent_import_path is not None
+                or model_name is not None
+            ):
                 config.agents = [
                     AgentConfig(
                         name=agent_name,
@@ -626,6 +687,7 @@ def run_dataset_to_traces(
     )
     return _finalize_trace_dataset(ds)
 
+
 def only_export_traces(
     job_dir: Path | str,
     *,
@@ -651,6 +713,7 @@ def only_export_traces(
         include_verifier_output=True,
     )
     return _finalize_trace_dataset(ds)
+
 
 _BASH_JOB_CONTROL_WARNING = (
     "bash: initialize_job_control: no job control in background: Bad file descriptor"
@@ -714,7 +777,12 @@ def _sanitize_surrogates(dataset):
         return dataset
 
     if isinstance(dataset, DatasetDict):
-        return DatasetDict({k: v.map(_strip_surrogates_from_record, load_from_cache_file=False) for k, v in dataset.items()})
+        return DatasetDict(
+            {
+                k: v.map(_strip_surrogates_from_record, load_from_cache_file=False)
+                for k, v in dataset.items()
+            }
+        )
     if isinstance(dataset, Dataset):
         return dataset.map(_strip_surrogates_from_record, load_from_cache_file=False)
     return dataset
@@ -732,6 +800,7 @@ def _strip_surrogates(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _strip_surrogates(val) for key, val in value.items()}
     return value
+
 
 def _ensure_sharegpt_conversations(dataset):
     """Guarantee conversation columns conform to ShareGPT expectations."""
@@ -807,7 +876,9 @@ def _squash_system_turns(conversations):
     if leftover:
         if cleaned and cleaned[-1].get("role") == "user":
             existing = cleaned[-1].get("content") or ""
-            cleaned[-1]["content"] = f"{existing}\n\n{leftover}" if existing else leftover
+            cleaned[-1]["content"] = (
+                f"{existing}\n\n{leftover}" if existing else leftover
+            )
         else:
             cleaned.append({"role": "user", "content": leftover})
 
@@ -815,6 +886,7 @@ def _squash_system_turns(conversations):
         cleaned.insert(0, {"role": "user", "content": ""})
 
     return cleaned
+
 
 def _compute_hdf5_checksum(hdf5_path: Path) -> str:
     """
@@ -828,7 +900,7 @@ def _compute_hdf5_checksum(hdf5_path: Path) -> str:
     """
     hasher = hashlib.sha256()
 
-    with open(hdf5_path, 'rb') as f:
+    with open(hdf5_path, "rb") as f:
         # Read in chunks to handle large files
         while chunk := f.read(8192):
             hasher.update(chunk)
@@ -897,15 +969,23 @@ def run_dataset_to_traces_hdf5(
     if existing_job_name and not job_name:
         existing_job_dir = jobs_dir / existing_job_name
         config_path = existing_job_dir / "config.json"
-        with open(config_path, 'r') as file:
+        with open(config_path, "r") as file:
             data = json.load(file)
 
-        if data['agents'][0]['model_name'] != model_name or data['agents'][0]['kwargs'] != agent_kwargs or data['agents'][0]['name'] != agent_name:
-            logger.warning(f"Existing job '{existing_job_name}' has different model name, kwargs, or name")
-            logger.warning(f" → Creating new job")
+        if (
+            data["agents"][0]["model_name"] != model_name
+            or data["agents"][0]["kwargs"] != agent_kwargs
+            or data["agents"][0]["name"] != agent_name
+        ):
+            logger.warning(
+                f"Existing job '{existing_job_name}' has different model name, kwargs, or name"
+            )
+            logger.warning(" → Creating new job")
             existing_job_name = None
         else:
-            logger.info(f"✓ Found existing job with matching checksum: {existing_job_name}")
+            logger.info(
+                f"✓ Found existing job with matching checksum: {existing_job_name}"
+            )
             logger.info(f"→ Resuming job: {existing_job_name}")
             job_name = existing_job_name
 
@@ -913,31 +993,43 @@ def run_dataset_to_traces_hdf5(
             existing_job_dir = jobs_dir / existing_job_name
             removed_count = _cleanup_empty_agent_trials(existing_job_dir)
             if removed_count > 0:
-                logger.info(f"  Cleaned up {removed_count} trial(s) with empty agent directories")
+                logger.info(
+                    f"  Cleaned up {removed_count} trial(s) with empty agent directories"
+                )
     elif existing_job_name and job_name and existing_job_name != job_name:
-        logger.warning(f"Existing job '{existing_job_name}' has the same dataset checksum")
-        logger.warning(f"  But you specified job_name='{job_name}'. Proceeding with your specified name.")
+        logger.warning(
+            f"Existing job '{existing_job_name}' has the same dataset checksum"
+        )
+        logger.warning(
+            f"  But you specified job_name='{job_name}'. Proceeding with your specified name."
+        )
     else:
         if not existing_job_name:
-            logger.info(f"✗ No existing job found with matching checksum")
-            logger.info(f"→ Creating new job")
+            logger.info("✗ No existing job found with matching checksum")
+            logger.info("→ Creating new job")
 
     if existing_job_name:
-        config = JobConfig.model_validate_json((existing_job_dir / "config.json").read_text())
+        config = JobConfig.model_validate_json(
+            (existing_job_dir / "config.json").read_text()
+        )
 
         # Update config with new parameters (only orchestrator settings, agent config must match)
         old_n_concurrent = get_orchestrator_field(config, "n_concurrent_trials")
         set_orchestrator_field(config, "n_concurrent_trials", int(n_concurrent))
         if old_n_concurrent != n_concurrent:
-            logger.info(f"  Updating n_concurrent_trials: {old_n_concurrent} → {n_concurrent}")
+            logger.info(
+                f"  Updating n_concurrent_trials: {old_n_concurrent} → {n_concurrent}"
+            )
             # Save updated config so Harbor's validation passes
-            (existing_job_dir / "config.json").write_text(config.model_dump_json(indent=4))
+            (existing_job_dir / "config.json").write_text(
+                config.model_dump_json(indent=4)
+            )
 
         job = create_job(Job, config)
     else:
         # Extract HDF5 to persistent directory for harbor to use (enables resuming)
         # Use a deterministic path based on HDF5 file location
-        logger.info(f"Extracting HDF5 to persistent directory for job execution...")
+        logger.info("Extracting HDF5 to persistent directory for job execution...")
         from data.commons import extract_hdf5_to_task_paths
 
         # Create persistent extraction directory next to the HDF5 file
@@ -945,11 +1037,15 @@ def run_dataset_to_traces_hdf5(
 
         # Always extract when creating a new job (clean up old extraction if it exists)
         if persistent_extract_dir.exists():
-            logger.info(f"Cleaning up old extraction directory: {persistent_extract_dir}")
+            logger.info(
+                f"Cleaning up old extraction directory: {persistent_extract_dir}"
+            )
             shutil.rmtree(persistent_extract_dir)
 
         logger.info(f"Extracting to: {persistent_extract_dir}")
-        extracted_paths = extract_hdf5_to_task_paths(str(hdf5_path), output_dir=str(persistent_extract_dir))
+        extracted_paths = extract_hdf5_to_task_paths(
+            str(hdf5_path), output_dir=str(persistent_extract_dir)
+        )
         logger.info(f"Extracted {len(extracted_paths)} tasks")
 
         dataset_path = persistent_extract_dir
@@ -969,7 +1065,9 @@ def run_dataset_to_traces_hdf5(
                 "Pass force_build=True (default) or pre-build via sandboxes tooling."
             )
 
-        env_label = env_type.value if isinstance(env_type, EnvironmentType) else str(env_type)
+        env_label = (
+            env_type.value if isinstance(env_type, EnvironmentType) else str(env_type)
+        )
         print(
             f"[run_dataset_to_traces_hdf5] env={env_label} force_build={force_build} delete_env={delete_env}"
         )
@@ -987,7 +1085,11 @@ def run_dataset_to_traces_hdf5(
         set_orchestrator_field(config, "quiet", bool(quiet))
 
         # Agents
-        if agent_name is not None or agent_import_path is not None or model_name is not None:
+        if (
+            agent_name is not None
+            or agent_import_path is not None
+            or model_name is not None
+        ):
             config.agents = [
                 AgentConfig(
                     name=agent_name,
@@ -998,7 +1100,10 @@ def run_dataset_to_traces_hdf5(
             ]
         # Environment
         config.environment = EnvironmentConfig(
-            type=env_type, force_build=bool(force_build), delete=bool(delete_env), kwargs=env_kwargs or {}
+            type=env_type,
+            force_build=bool(force_build),
+            delete=bool(delete_env),
+            kwargs=env_kwargs or {},
         )
 
         # Dataset of tasks
@@ -1061,8 +1166,15 @@ if __name__ == "__main__":
             out[k.strip()] = v.strip()
         return out
 
-    parser = argparse.ArgumentParser(description="Run a Harbor dataset and export traces (no subprocesses)")
-    parser.add_argument("--dataset-path", required=True, type=Path, help="Path to directory containing task subdirectories")
+    parser = argparse.ArgumentParser(
+        description="Run a Harbor dataset and export traces (no subprocesses)"
+    )
+    parser.add_argument(
+        "--dataset-path",
+        required=True,
+        type=Path,
+        help="Path to directory containing task subdirectories",
+    )
     parser.add_argument("--job-name", type=str, default=None)
     parser.add_argument("--jobs-dir", type=Path, default=Path("jobs"))
     parser.add_argument("--recursive", action="store_true", default=True)
@@ -1072,27 +1184,77 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true", default=True)
     parser.add_argument("--progress-log", action="store_true", default=False)
 
-    parser.add_argument("--agent-name", type=str, default=None, help=f"Agent name enum (e.g., {', '.join([a.value for a in AgentName])})")
+    parser.add_argument(
+        "--agent-name",
+        type=str,
+        default=None,
+        help=f"Agent name enum (e.g., {', '.join([a.value for a in AgentName])})",
+    )
     parser.add_argument("--agent-import-path", type=str, default=None)
     parser.add_argument("--model-name", type=str, default=None)
-    parser.add_argument("-ak", "--agent-kwarg", action="append", default=None, help="Agent kwarg key=value (repeat)")
+    parser.add_argument(
+        "-ak",
+        "--agent-kwarg",
+        action="append",
+        default=None,
+        help="Agent kwarg key=value (repeat)",
+    )
 
-    parser.add_argument("--env", type=str, choices=[e.value for e in EnvironmentType], default=EnvironmentType.DOCKER.value)
-    parser.add_argument("--no-force-build", dest="force_build", action="store_false", default=True)
-    parser.add_argument("--no-delete-env", dest="delete_env", action="store_false", default=True)
-    parser.add_argument("-ek", "--env-kwarg", action="append", default=None, help="Environment kwarg key=value (repeat)")
-    parser.add_argument("--override-cpus", type=int, default=None, help="Override sandbox CPU count.")
-    parser.add_argument("--override-memory-mb", type=int, default=None, help="Override sandbox memory in MB.")
-    parser.add_argument("--override-storage-mb", type=int, default=None, help="Override sandbox storage in MB.")
+    parser.add_argument(
+        "--env",
+        type=str,
+        choices=[e.value for e in EnvironmentType],
+        default=EnvironmentType.DOCKER.value,
+    )
+    parser.add_argument(
+        "--no-force-build", dest="force_build", action="store_false", default=True
+    )
+    parser.add_argument(
+        "--no-delete-env", dest="delete_env", action="store_false", default=True
+    )
+    parser.add_argument(
+        "-ek",
+        "--env-kwarg",
+        action="append",
+        default=None,
+        help="Environment kwarg key=value (repeat)",
+    )
+    parser.add_argument(
+        "--override-cpus", type=int, default=None, help="Override sandbox CPU count."
+    )
+    parser.add_argument(
+        "--override-memory-mb",
+        type=int,
+        default=None,
+        help="Override sandbox memory in MB.",
+    )
+    parser.add_argument(
+        "--override-storage-mb",
+        type=int,
+        default=None,
+        help="Override sandbox storage in MB.",
+    )
 
     parser.add_argument("--episodes", type=str, choices=["all", "last"], default="last")
     parser.add_argument("--sharegpt", action="store_true", default=False)
     parser.add_argument("--push", action="store_true", default=False)
     parser.add_argument("--repo", type=str, default=None)
-    parser.add_argument("--filter", type=str, choices=["success", "failure", "none"], default="none")
+    parser.add_argument(
+        "--filter", type=str, choices=["success", "failure", "none"], default="none"
+    )
     parser.add_argument("--verbose", action="store_true", default=False)
-    parser.add_argument("--agent-timeout-sec", type=float, default=None, help="Override Harbor agent timeout for each trial (seconds)")
-    parser.add_argument("--verifier-timeout-sec", type=float, default=None, help="Override Harbor verifier timeout for each trial (seconds)")
+    parser.add_argument(
+        "--agent-timeout-sec",
+        type=float,
+        default=None,
+        help="Override Harbor agent timeout for each trial (seconds)",
+    )
+    parser.add_argument(
+        "--verifier-timeout-sec",
+        type=float,
+        default=None,
+        help="Override Harbor verifier timeout for each trial (seconds)",
+    )
 
     args = parser.parse_args()
 

@@ -10,7 +10,6 @@ swebench, and the gold patch as the reference solution.
 from __future__ import annotations
 
 import argparse
-import json
 import tempfile
 from pathlib import Path
 
@@ -114,29 +113,39 @@ def create_sandboxed_tasks(
 def add_swe_rebench_args(parser: argparse.ArgumentParser) -> None:
     """Add SWE-rebench-specific CLI arguments."""
     parser.add_argument(
-        "--limit", type=int, default=10_000,
+        "--limit",
+        type=int,
+        default=10_000,
         help="Max number of tasks to generate",
     )
     parser.add_argument(
-        "--offset", type=int, default=0,
+        "--offset",
+        type=int,
+        default=0,
         help="Dataset row offset to start from",
     )
     parser.add_argument(
-        "--split", type=str, default="filtered",
+        "--split",
+        type=str,
+        default="filtered",
         choices=["filtered", "test"],
         help="Dataset split: 'filtered' (6.5k) or 'test' (21k)",
     )
     parser.add_argument(
-        "--subsample-count", type=int, default=10_000,
+        "--subsample-count",
+        type=int,
+        default=10_000,
         help="Number of tasks to retain after subsampling",
     )
     parser.add_argument(
-        "--repo-id", type=str,
+        "--repo-id",
+        type=str,
         default="mlfoundations-dev/swe_rebench-sandboxes",
         help="HuggingFace repo id for upload",
     )
     parser.add_argument(
-        "--no-upload", action="store_true",
+        "--no-upload",
+        action="store_true",
         help="Skip the upload step",
     )
 

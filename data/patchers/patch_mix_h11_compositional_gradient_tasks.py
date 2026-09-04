@@ -130,6 +130,7 @@ Usage
         --dst-parquet /tmp/out.parquet \\
         --no-upload
 """
+
 from __future__ import annotations
 
 import argparse

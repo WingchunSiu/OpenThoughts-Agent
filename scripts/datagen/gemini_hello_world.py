@@ -53,7 +53,9 @@ def _determine_project_id(path: pathlib.Path) -> str:
     return project_id
 
 
-def _configure_vertex_env(creds_path: pathlib.Path, project_id: str, location: str) -> None:
+def _configure_vertex_env(
+    creds_path: pathlib.Path, project_id: str, location: str
+) -> None:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(creds_path)
     os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
     os.environ["GOOGLE_CLOUD_LOCATION"] = location
@@ -67,8 +69,12 @@ def _resolve_thinking_level(label: str | None) -> Optional[genai_types.ThinkingL
     try:
         return getattr(genai_types.ThinkingLevel, normalized)
     except AttributeError as exc:
-        valid = ", ".join(level.upper() for level in THINKING_LEVEL_CHOICES if level != "off")
-        raise ValueError(f"Unsupported thinking level '{label}'. Choose from: {valid}") from exc
+        valid = ", ".join(
+            level.upper() for level in THINKING_LEVEL_CHOICES if level != "off"
+        )
+        raise ValueError(
+            f"Unsupported thinking level '{label}'. Choose from: {valid}"
+        ) from exc
 
 
 def _build_generation_config(

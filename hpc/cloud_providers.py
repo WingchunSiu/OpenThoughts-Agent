@@ -18,8 +18,6 @@ For setup instructions, run:
 
 from __future__ import annotations
 
-import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
@@ -214,8 +212,7 @@ def resolve_provider_name(name: str) -> str:
     if name_lower in PROVIDERS:
         return name_lower
     raise ValueError(
-        f"Unknown provider '{name}'. "
-        f"Supported: {', '.join(sorted(PROVIDERS.keys()))}"
+        f"Unknown provider '{name}'. Supported: {', '.join(sorted(PROVIDERS.keys()))}"
     )
 
 
@@ -336,8 +333,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Cloud provider utilities")
     parser.add_argument("--list", "-l", action="store_true", help="List all providers")
-    parser.add_argument("--check", "-c", action="store_true", help="Check all credentials")
-    parser.add_argument("--setup", "-s", metavar="PROVIDER", help="Show setup instructions")
+    parser.add_argument(
+        "--check", "-c", action="store_true", help="Check all credentials"
+    )
+    parser.add_argument(
+        "--setup", "-s", metavar="PROVIDER", help="Show setup instructions"
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()

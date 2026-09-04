@@ -68,7 +68,11 @@ def convert_adversarial(row: dict, row_idx: int) -> HarborTask | None:
     template = row.get("judge_prompt_template")
     if isinstance(template, str) and 0 < len(template) <= _MAX_TEMPLATE_BYTES:
         try:
-            template = sanitize_text(template, field_name="judge_prompt_template", max_len=_MAX_TEMPLATE_BYTES)
+            template = sanitize_text(
+                template,
+                field_name="judge_prompt_template",
+                max_len=_MAX_TEMPLATE_BYTES,
+            )
         except SanitizationError:
             template = None
     else:
@@ -77,7 +81,9 @@ def convert_adversarial(row: dict, row_idx: int) -> HarborTask | None:
     if isinstance(system_prompt, str) and 0 < len(system_prompt) <= _MAX_TEMPLATE_BYTES:
         try:
             system_prompt = sanitize_text(
-                system_prompt, field_name="judge_system_prompt", max_len=_MAX_TEMPLATE_BYTES
+                system_prompt,
+                field_name="judge_system_prompt",
+                max_len=_MAX_TEMPLATE_BYTES,
             )
         except SanitizationError:
             system_prompt = None
@@ -96,7 +102,9 @@ def convert_adversarial(row: dict, row_idx: int) -> HarborTask | None:
         verifier_data["judge_system_prompt"] = system_prompt
     task_id = task_id_for(
         "adversarial",
-        (uuid or str(tid) or prompt[:128]) + "|" + json.dumps([r["id"] for r in rubric]),
+        (uuid or str(tid) or prompt[:128])
+        + "|"
+        + json.dumps([r["id"] for r in rubric]),
     )
     return HarborTask(
         task_id=task_id,

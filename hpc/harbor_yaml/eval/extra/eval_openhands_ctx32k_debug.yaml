@@ -1,4 +1,3 @@
-# Harbor eval configuration (debug, fast-fail, 16 concurrency, OpenHands, 32k context).
 
 job_name: debug-openhands-eval-job
 jobs_dir: trace_jobs
@@ -54,12 +53,6 @@ verifier:
   override_timeout_sec:
   max_timeout_sec:
   disable: false
-
-metrics:
-  - type: mean-drop-ei
-    kwargs: {}
-  - type: accuracy-drop-ei
-    kwargs: {}
 
 agents:
 - name: openhands

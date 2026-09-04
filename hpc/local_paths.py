@@ -28,7 +28,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Mapping, Optional
+from typing import Iterable, List, Optional
 
 
 # Root for every persistent local write the launcher controls. A single
@@ -69,8 +69,10 @@ PATHS: _Layout = _build_layout(OT_AGENT_HOME)
 # output is stable across runs.
 LEGACY_PATHS: tuple[tuple[str, Path], ...] = (
     ("cloud_runs (old rsync dest)", Path.home() / "cloud_runs"),
-    ("hf cache (sky launcher)",
-     Path.home() / "Documents" / "OpenThoughts-Agent" / ".hf_cloud_cache"),
+    (
+        "hf cache (sky launcher)",
+        Path.home() / "Documents" / "OpenThoughts-Agent" / ".hf_cloud_cache",
+    ),
     ("tiktoken cache", Path.home() / ".cache" / "tiktoken_encodings"),
 )
 
@@ -144,35 +146,43 @@ def inventory() -> List[InventoryEntry]:
     daemon's ``status`` view.
     """
     managed: list[tuple[str, Path]] = [
-        ("state",       PATHS.state),
-        ("runs",        PATHS.runs),
-        ("cache",       PATHS.cache),
-        ("logs",        PATHS.logs),
-        ("cache/hf",    PATHS.cache / "hf"),
+        ("state", PATHS.state),
+        ("runs", PATHS.runs),
+        ("cache", PATHS.cache),
+        ("logs", PATHS.logs),
+        ("cache/hf", PATHS.cache / "hf"),
         ("cache/tiktoken", PATHS.cache / "tiktoken"),
         # Individual SQLite catalogs under state/. Listing them explicitly
         # makes "did the registry initialize?" answerable from `inventory`.
-        ("state/iris_jobs.db",     PATHS.state / "iris_jobs.db"),
+        ("state/iris_jobs.db", PATHS.state / "iris_jobs.db"),
         ("state/model_mirrors.db", PATHS.state / "model_mirrors.db"),
     ]
 
     entries: list[InventoryEntry] = []
     for name, path in managed:
         exists = path.exists()
-        entries.append(InventoryEntry(
-            name=name, path=path, kind="managed",
-            exists=exists,
-            size_bytes=_dir_size_bytes(path) if exists else 0,
-            mtime=path.stat().st_mtime if exists else None,
-        ))
+        entries.append(
+            InventoryEntry(
+                name=name,
+                path=path,
+                kind="managed",
+                exists=exists,
+                size_bytes=_dir_size_bytes(path) if exists else 0,
+                mtime=path.stat().st_mtime if exists else None,
+            )
+        )
     for name, path in LEGACY_PATHS:
         exists = path.exists()
-        entries.append(InventoryEntry(
-            name=name, path=path, kind="legacy",
-            exists=exists,
-            size_bytes=_dir_size_bytes(path) if exists else 0,
-            mtime=path.stat().st_mtime if exists else None,
-        ))
+        entries.append(
+            InventoryEntry(
+                name=name,
+                path=path,
+                kind="legacy",
+                exists=exists,
+                size_bytes=_dir_size_bytes(path) if exists else 0,
+                mtime=path.stat().st_mtime if exists else None,
+            )
+        )
     return entries
 
 
@@ -190,7 +200,11 @@ def _format_inventory(entries: Iterable[InventoryEntry]) -> str:
         "-" * 110,
     ]
     for e in entries:
-        mtime_s = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.mtime)) if e.mtime else "-"
+        mtime_s = (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.mtime))
+            if e.mtime
+            else "-"
+        )
         rows.append(
             f"{e.kind:<8} {e.name:<20} {str(e.exists):<7} "
             f"{_humanize_bytes(e.size_bytes):>12}  {mtime_s:<20}  {e.path}"
@@ -226,11 +240,15 @@ def _cli_clean(args: argparse.Namespace) -> int:
                 continue
 
     if not to_delete:
-        print(f"Nothing older than {args.older_than}d under {PATHS.runs} or {PATHS.logs}.")
+        print(
+            f"Nothing older than {args.older_than}d under {PATHS.runs} or {PATHS.logs}."
+        )
         return 0
 
-    print(f"{'Would delete' if args.dry_run else 'Deleting'} {len(to_delete)} entries "
-          f"older than {args.older_than}d:")
+    print(
+        f"{'Would delete' if args.dry_run else 'Deleting'} {len(to_delete)} entries "
+        f"older than {args.older_than}d:"
+    )
     for p in to_delete:
         size = _humanize_bytes(_dir_size_bytes(p) if p.is_dir() else os.path.getsize(p))
         print(f"  {size}  {p}")
@@ -294,24 +312,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pi = sub.add_parser("inventory", help="List every persistent path the launcher writes to.")
+    pi = sub.add_parser(
+        "inventory", help="List every persistent path the launcher writes to."
+    )
     pi.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
     pi.set_defaults(func=_cli_inventory)
 
-    pc = sub.add_parser("clean",
-                        help="Delete runs/ and logs/ entries older than --older-than days.")
-    pc.add_argument("--older-than", type=int, default=30,
-                    help="Age threshold in days (default 30).")
-    pc.add_argument("--dry-run", action="store_true", default=True,
-                    help="Default; pass --apply to delete.")
-    pc.add_argument("--apply", action="store_false", dest="dry_run",
-                    help="Actually delete the listed entries.")
+    pc = sub.add_parser(
+        "clean", help="Delete runs/ and logs/ entries older than --older-than days."
+    )
+    pc.add_argument(
+        "--older-than", type=int, default=30, help="Age threshold in days (default 30)."
+    )
+    pc.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Default; pass --apply to delete.",
+    )
+    pc.add_argument(
+        "--apply",
+        action="store_false",
+        dest="dry_run",
+        help="Actually delete the listed entries.",
+    )
     pc.set_defaults(func=_cli_clean)
 
-    pm = sub.add_parser("migrate",
-                        help="Move legacy paths into the managed tree (~/.ot-agent/).")
-    pm.add_argument("--apply", action="store_true",
-                    help="Actually move; default is dry-run.")
+    pm = sub.add_parser(
+        "migrate", help="Move legacy paths into the managed tree (~/.ot-agent/)."
+    )
+    pm.add_argument(
+        "--apply", action="store_true", help="Actually move; default is dry-run."
+    )
     pm.set_defaults(func=_cli_migrate)
 
     args = p.parse_args(argv)

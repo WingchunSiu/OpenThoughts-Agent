@@ -1,19 +1,16 @@
-### model
 model_name_or_path: Qwen/Qwen2.5-7B-Instruct
 
-### method
 stage: sft
 do_train: true
 finetuning_type: full
-deepspeed: sft/zero3.json  # choices: [ds_z0_config.json, ds_z2_config.json, ds_z3_config.json]
+deepspeed: sft/zero3.json
 enable_liger_kernel: true
 packing: true
 neat_packing: true
 
 attn: fa2
 
-### dataset
-template: qwen #used to be qwen25
+template: qwen
 cutoff_len: 16384
 overwrite_cache: true
 preprocessing_num_workers: 16
@@ -21,12 +18,10 @@ dataloader_persistent_workers: true
 dataloader_pin_memory: false
 dataloader_num_workers: 1
 
-### output
 logging_steps: 1
 save_strategy: epoch
 plot_loss: true
 
-### train
 global_batch_size: 512
 learning_rate: 8.0e-5
 num_train_epochs: 5.0

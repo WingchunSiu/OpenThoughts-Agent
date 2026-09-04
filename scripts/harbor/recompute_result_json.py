@@ -50,7 +50,10 @@ try:
     from harbor.models.trial.result import TrialResult
 except ImportError as exc:
     print(f"Error: Could not import Harbor modules: {exc}", file=sys.stderr)
-    print("Make sure Harbor is installed (pip install -e /path/to/harbor)", file=sys.stderr)
+    print(
+        "Make sure Harbor is installed (pip install -e /path/to/harbor)",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 
@@ -92,6 +95,7 @@ def resolve_job_dir(user_path: Path) -> Path:
 # Safe JSON serialization (mirrors Harbor's _safe_model_dump_json)
 # ---------------------------------------------------------------------------
 
+
 def _json_default(obj):
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -110,6 +114,7 @@ def safe_model_dump_json(model, **dump_kwargs) -> str:
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
+
 
 def load_trial_results(job_dir: Path, verbose: bool = False) -> list[TrialResult]:
     """Load all trial result.json files from a job directory."""
@@ -216,7 +221,9 @@ def recompute(
         agent_name = tr.agent_info.name
         model_name = tr.agent_info.model_info.name if tr.agent_info.model_info else None
         dataset_name = tr.source or "adhoc"
-        evals_key = JobStats.format_agent_evals_key(agent_name, model_name, dataset_name)
+        evals_key = JobStats.format_agent_evals_key(
+            agent_name, model_name, dataset_name
+        )
 
         trials_map[evals_key].append(tr)
         if tr.verifier_result is not None:
@@ -245,6 +252,7 @@ def recompute(
             existing = json.loads(existing_result_path.read_text())
             if "id" in existing:
                 from uuid import UUID
+
                 job_id = UUID(existing["id"])
             if "started_at" in existing and existing["started_at"]:
                 started_at = datetime.fromisoformat(existing["started_at"])
@@ -262,7 +270,7 @@ def recompute(
     )
 
     # Print summary
-    print(f"\nResults summary:")
+    print("\nResults summary:")
     print(f"  Total trials: {stats.n_trials}")
     print(f"  Total errors: {stats.n_errors}")
     for evals_key, eval_stats in stats.evals.items():
@@ -285,6 +293,7 @@ def recompute(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -318,7 +327,10 @@ def main() -> None:
     if args.metrics_config:
         metrics_config_path = Path(args.metrics_config).expanduser().resolve()
         if not metrics_config_path.exists():
-            print(f"Error: Metrics config not found: {metrics_config_path}", file=sys.stderr)
+            print(
+                f"Error: Metrics config not found: {metrics_config_path}",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     recompute(

@@ -64,7 +64,9 @@ class FreelancerGenerator(BaseDataGenerator):
     ) -> GenerationResult:
         args = context.args
         limit = self._resolve_limit(request)
-        max_projects = args.max_projects if getattr(args, "max_projects", None) else None
+        max_projects = (
+            args.max_projects if getattr(args, "max_projects", None) else None
+        )
         if limit and limit > 0:
             max_projects = min(max_projects, limit) if max_projects else limit
 
@@ -81,7 +83,9 @@ class FreelancerGenerator(BaseDataGenerator):
         temp_tasks_dir = Path(generate_tasks_from_questions(questions, "freelancer"))
         target_count = getattr(args, "upsample_count", 10_000)
         upsampled_dir = upsample_tasks_directory(str(temp_tasks_dir), target_count)
-        output_path = finalize_dataset_output(upsampled_dir, getattr(args, "output_dir", None))
+        output_path = finalize_dataset_output(
+            upsampled_dir, getattr(args, "output_dir", None)
+        )
         dataset_path = str(output_path)
 
         shutil.rmtree(temp_tasks_dir, ignore_errors=True)
@@ -116,4 +120,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

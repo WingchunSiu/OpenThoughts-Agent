@@ -6,7 +6,11 @@ import os
 from pathlib import Path
 from typing import Optional, Callable
 
-from hpc.checkpoint_utils import is_huggingface_repo, needs_pre_download, pre_download_model
+from hpc.checkpoint_utils import (
+    is_huggingface_repo,
+    needs_pre_download,
+    pre_download_model,
+)
 from hpc.hf_utils import sanitize_hf_repo_id
 from hpc.launch_utils import (
     sanitize_repo_for_job,
@@ -57,8 +61,13 @@ def launch_consolidate_job(
 
     base_repo = exp_args.get("consolidate_base_repo")
     output_repo = exp_args.get("consolidate_output_repo")
-    commit_message = exp_args.get("consolidate_commit_message") or "Merge ZeRO shards into safetensors"
-    push_to_hub_flag = parse_bool_with_default(exp_args.get("push_to_hub"), default=True)
+    commit_message = (
+        exp_args.get("consolidate_commit_message")
+        or "Merge ZeRO shards into safetensors"
+    )
+    push_to_hub_flag = parse_bool_with_default(
+        exp_args.get("push_to_hub"), default=True
+    )
 
     expanded_input = Path(str(input_value)).expanduser()
     input_is_local = False
@@ -71,7 +80,9 @@ def launch_consolidate_job(
             )
     if input_is_local:
         if not output_repo:
-            raise ValueError("--consolidate_output_repo is required when --consolidate_input points to a local path")
+            raise ValueError(
+                "--consolidate_output_repo is required when --consolidate_input points to a local path"
+            )
     else:
         if not output_repo:
             raise ValueError(
@@ -82,9 +93,13 @@ def launch_consolidate_job(
                 "When --consolidate_input and --consolidate_output_repo both reference Hugging Face repos, they must differ."
             )
     # Sanitize and truncate output_repo to comply with HuggingFace's 96-char limit
-    effective_output_repo = sanitize_hf_repo_id(output_repo) if output_repo else output_repo
+    effective_output_repo = (
+        sanitize_hf_repo_id(output_repo) if output_repo else output_repo
+    )
     if effective_output_repo != output_repo:
-        print(f"Truncated output repo for HF compliance: {output_repo} -> {effective_output_repo}")
+        print(
+            f"Truncated output repo for HF compliance: {output_repo} -> {effective_output_repo}"
+        )
     input_kind = "local" if input_is_local else "repo"
 
     # Pre-download base_repo on no-internet clusters (login node has internet)
@@ -95,7 +110,11 @@ def launch_consolidate_job(
         print(f"  Base repo cached at: {base_repo}")
 
     # Pre-download input repo on no-internet clusters when input is an HF repo
-    if not input_is_local and needs_pre_download(hpc) and is_huggingface_repo(str(input_value)):
+    if (
+        not input_is_local
+        and needs_pre_download(hpc)
+        and is_huggingface_repo(str(input_value))
+    ):
         print(f"Pre-downloading input repo for no-internet cluster: {input_value}")
         dl_result = pre_download_model(str(input_value))
         input_value = dl_result.local_path
@@ -130,9 +149,13 @@ def launch_consolidate_job(
 
     partition = exp_args.get("partition") or getattr(hpc, "partition", "")
     account = exp_args.get("account") or getattr(hpc, "account", "")
-    time_limit = exp_args.get("time_limit") or getattr(hpc, "default_time_limit", "24:00:00")
+    time_limit = exp_args.get("time_limit") or getattr(
+        hpc, "default_time_limit", "24:00:00"
+    )
 
-    cpus_per_task = int(exp_args.get("cpus_per_task") or getattr(hpc, "cpus_per_node", 1) or 1)
+    cpus_per_task = int(
+        exp_args.get("cpus_per_task") or getattr(hpc, "cpus_per_node", 1) or 1
+    )
     if hpc_name == "capella":
         cpus_per_task = min(cpus_per_task, 14)
 
@@ -142,7 +165,9 @@ def launch_consolidate_job(
     gpus_requested = 1  # consolidate jobs use 1 GPU
     total_gpus = getattr(hpc, "gpus_per_node", 1) or 1
     if mem_per_node and gpus_requested < total_gpus:
-        scaled_mem = scale_memory_for_partial_gpus(mem_per_node, gpus_requested, total_gpus)
+        scaled_mem = scale_memory_for_partial_gpus(
+            mem_per_node, gpus_requested, total_gpus
+        )
         mem_directive = f"#SBATCH --mem={scaled_mem}"
     elif mem_per_node:
         mem_directive = f"#SBATCH --mem={mem_per_node}"
@@ -162,12 +187,18 @@ def launch_consolidate_job(
     else:
         template_path = os.path.join(template_dir, "consolidate_template.sbatch")
         if not os.path.exists(template_path):
-            raise FileNotFoundError(f"Consolidate sbatch template not found at {template_path}")
+            raise FileNotFoundError(
+                f"Consolidate sbatch template not found at {template_path}"
+            )
         environment_preamble = _derive_consolidate_preamble(hpc).strip()
 
-    python_script_path = os.path.join(os.path.dirname(__file__), "sbatch_consolidate", "consolidate.py")
+    python_script_path = os.path.join(
+        os.path.dirname(__file__), "sbatch_consolidate", "consolidate.py"
+    )
     if not os.path.exists(python_script_path):
-        raise FileNotFoundError(f"Consolidate helper script not found at {python_script_path}")
+        raise FileNotFoundError(
+            f"Consolidate helper script not found at {python_script_path}"
+        )
 
     cluster_env_file = getattr(hpc, "dotenv_filename", "") or ""
 

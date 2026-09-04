@@ -44,7 +44,7 @@ def sync_outputs(
     local_spec = str(target) + "/"
 
     if verbose:
-        print(f"[cloud-sync] Syncing outputs from cluster...")
+        print("[cloud-sync] Syncing outputs from cluster...")
         print(f"[cloud-sync]   Remote: {remote_spec}")
         print(f"[cloud-sync]   Local:  {local_spec}")
 
@@ -73,23 +73,38 @@ def sync_outputs(
             # rsync code 23: partial transfer due to error (often "file/directory not found")
             # This is expected when remote directory doesn't exist yet
             stderr_lower = (result.stderr or "").lower()
-            if "no such file" in stderr_lower or "does not exist" in stderr_lower or "change_dir" in stderr_lower:
+            if (
+                "no such file" in stderr_lower
+                or "does not exist" in stderr_lower
+                or "change_dir" in stderr_lower
+            ):
                 if verbose:
-                    print(f"[cloud-sync] Remote directory doesn't exist yet (will sync later): {remote_path}")
+                    print(
+                        f"[cloud-sync] Remote directory doesn't exist yet (will sync later): {remote_path}"
+                    )
                 return True  # Treat as success - directory will be created later
             else:
                 # Other partial transfer errors should still be reported
-                print(f"[cloud-sync] rsync partial transfer (code 23): {result.stderr}", file=sys.stderr)
+                print(
+                    f"[cloud-sync] rsync partial transfer (code 23): {result.stderr}",
+                    file=sys.stderr,
+                )
                 return False
         else:
-            print(f"[cloud-sync] rsync failed with code {result.returncode}", file=sys.stderr)
+            print(
+                f"[cloud-sync] rsync failed with code {result.returncode}",
+                file=sys.stderr,
+            )
             if not verbose and result.stderr:
                 print(f"[cloud-sync] Error: {result.stderr}", file=sys.stderr)
             _print_manual_instructions(cluster_name, remote_path, target)
             return False
 
     except FileNotFoundError:
-        print("[cloud-sync] rsync not found. Install it or sync manually:", file=sys.stderr)
+        print(
+            "[cloud-sync] rsync not found. Install it or sync manually:",
+            file=sys.stderr,
+        )
         _print_manual_instructions(cluster_name, remote_path, target)
         return False
     except Exception as e:
@@ -98,7 +113,9 @@ def sync_outputs(
         return False
 
 
-def _print_manual_instructions(cluster_name: str, remote_path: str, local_path: Path) -> None:
+def _print_manual_instructions(
+    cluster_name: str, remote_path: str, local_path: Path
+) -> None:
     """Print manual sync instructions as fallback."""
     print(
         f"\n[cloud-sync] Manual sync instructions:\n"

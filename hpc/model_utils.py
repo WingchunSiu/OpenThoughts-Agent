@@ -11,6 +11,7 @@ These utilities are shared across all execution paths:
 - Cloud launchers (data/cloud/launch_tracegen_cloud.py, eval/cloud/launch_eval_cloud.py)
 - HPC SLURM launchers (hpc/launch.py --job_type datagen)
 """
+
 from __future__ import annotations
 
 import sys
@@ -88,13 +89,18 @@ def setup_gpt_oss_tiktoken(
             if verbose:
                 print(f"[tiktoken] Downloaded: {local_path}")
         except urllib.error.URLError as e:
-            print(f"[tiktoken] Warning: Failed to download {filename}: {e}", file=sys.stderr)
+            print(
+                f"[tiktoken] Warning: Failed to download {filename}: {e}",
+                file=sys.stderr,
+            )
             # Don't fail - vLLM might still work if files exist elsewhere
 
     return cache_dir, env_vars
 
 
-def get_model_specific_env_vars(model: Optional[str], verbose: bool = True) -> Dict[str, str]:
+def get_model_specific_env_vars(
+    model: Optional[str], verbose: bool = True
+) -> Dict[str, str]:
     """Get model-specific environment variables.
 
     This is the main entry point for model-specific setup. It checks the model

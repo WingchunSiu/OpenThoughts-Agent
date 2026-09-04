@@ -2,7 +2,13 @@
 """Convert togethercomputer/CoderForge-Preview (4 subsets) to unified shareGPT + upload.
 Memory-bounded: streams each parquet shard, writes to unified output parquet in 500-row chunks.
 """
-import os, json, sys, argparse, random, glob, gc
+
+import os
+import json
+import argparse
+import random
+import glob
+import gc
 from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -83,11 +89,16 @@ def to_sharegpt(raw_messages_json):
     return turns
 
 
-SCHEMA = pa.schema([
-    ("conversations", pa.list_(pa.struct([("role", pa.string()), ("content", pa.string())]))),
-    ("source", pa.string()),
-    ("instance_id", pa.string()),
-])
+SCHEMA = pa.schema(
+    [
+        (
+            "conversations",
+            pa.list_(pa.struct([("role", pa.string()), ("content", pa.string())])),
+        ),
+        ("source", pa.string()),
+        ("instance_id", pa.string()),
+    ]
+)
 
 
 def find_traj_dir():
@@ -98,7 +109,9 @@ def find_traj_dir():
 
 
 def write_full_parquet(traj_dir, out_path):
-    print(f"[cf] Streaming {traj_dir} -> {out_path} (chunk_size={CHUNK_SIZE})", flush=True)
+    print(
+        f"[cf] Streaming {traj_dir} -> {out_path} (chunk_size={CHUNK_SIZE})", flush=True
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists():
         out_path.unlink()
@@ -118,11 +131,13 @@ def write_full_parquet(traj_dir, out_path):
                 if not convo or len(convo) < 2:
                     continue
                 src = f"togethercomputer/CoderForge-Preview/{subset}"
-                chunk.append({
-                    "conversations": convo,
-                    "source": src,
-                    "instance_id": r["trajectory_id"] or f"{subset}-{total}",
-                })
+                chunk.append(
+                    {
+                        "conversations": convo,
+                        "source": src,
+                        "instance_id": r["trajectory_id"] or f"{subset}-{total}",
+                    }
+                )
                 source_counts[src] = source_counts.get(src, 0) + 1
                 if len(chunk) >= CHUNK_SIZE:
                     out_tbl = pa.Table.from_pylist(chunk, schema=SCHEMA)
@@ -169,6 +184,7 @@ def write_subset_parquet(full_path, subset_path, indices):
 
 def push(path, repo_id, token, private=False):
     from datasets import Dataset
+
     print(f"[cf] Loading {path.name} for push to {repo_id}", flush=True)
     ds = Dataset.from_parquet(str(path))
     print(f"[cf]  -> {len(ds)} rows, pushing...", flush=True)

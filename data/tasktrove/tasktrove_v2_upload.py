@@ -7,6 +7,7 @@
 
 Pre-req: v1 tag already created.
 """
+
 import os
 import sys
 import shutil
@@ -19,7 +20,9 @@ from huggingface_hub import HfApi
 
 REPO = "open-thoughts/TaskTrove"
 STAGING = Path("/Users/benjaminfeuer/Documents/scaling_laws_papers/tasktrove_v2")
-README_SRC = Path("/Users/benjaminfeuer/Documents/scaling_laws_papers/tasktrove_v2_README.md")
+README_SRC = Path(
+    "/Users/benjaminfeuer/Documents/scaling_laws_papers/tasktrove_v2_README.md"
+)
 
 
 def v2_dir_names() -> set[str]:
@@ -33,7 +36,9 @@ def main():
 
     # 1. README
     shutil.copyfile(README_SRC, STAGING / "README.md")
-    print(f"Copied README -> {STAGING}/README.md ({(STAGING / 'README.md').stat().st_size} bytes)")
+    print(
+        f"Copied README -> {STAGING}/README.md ({(STAGING / 'README.md').stat().st_size} bytes)"
+    )
 
     # 2. Compute v1-only dirs to delete
     files = api.list_repo_files(repo_id=REPO, repo_type="dataset", revision="main")
@@ -48,7 +53,7 @@ def main():
     if missing:
         print(f"MISSING v2 dirs ({len(missing)}): {sorted(missing)}")
         sys.exit(1)
-    print(f"All 96 v2 dirs present in staging.")
+    print("All 96 v2 dirs present in staging.")
 
     # 4. delete_patterns for every depth
     delete_patterns = []

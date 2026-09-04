@@ -85,6 +85,7 @@ Usage
     python -m data.patchers.patch_mix_h2_language_balanced_tasks --root <dir> --dry-run
     python -m data.patchers.patch_mix_h2_language_balanced_tasks --root <dir> --limit 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -156,7 +157,7 @@ def patch_test_sh_text(text: str) -> tuple[str, bool]:
 
     m = SHEBANG_RE.match(text)
     if m:
-        new_text = m.group(1) + REWARD_FLOOR + text[m.end():]
+        new_text = m.group(1) + REWARD_FLOOR + text[m.end() :]
     else:
         # No shebang -- prepend a #!/bin/bash plus the floor.
         new_text = "#!/bin/bash\n" + REWARD_FLOOR + text
@@ -213,7 +214,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Optional TSV file to record tasks whose patched test.sh "
-             "failed `bash -n` (task_id\\tstderr_first_line).",
+        "failed `bash -n` (task_id\\tstderr_first_line).",
     )
     return p.parse_args()
 
@@ -306,8 +307,12 @@ def main() -> int:
 
     print("\n[patcher] Result summary:")
     for k in (
-        "patched", "already_patched", "skipped_other_source",
-        "skipped_no_metadata", "skipped_no_test_sh", "dropped_bash_n_fail",
+        "patched",
+        "already_patched",
+        "skipped_other_source",
+        "skipped_no_metadata",
+        "skipped_no_test_sh",
+        "dropped_bash_n_fail",
     ):
         print(f"  {counts[k]:6d}  {k}")
     print(f"[patcher] Root:    {root}")

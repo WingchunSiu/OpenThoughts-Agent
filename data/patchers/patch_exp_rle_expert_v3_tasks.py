@@ -170,6 +170,7 @@ MARKER_FILENAME = ".exp_rle_expert_v3_patched"
 # R9: trivial-assertion rubber-stamp detector
 # ---------------------------------------------------------------------------
 
+
 def _is_tautological_assertion(expr: ast.AST) -> bool:
     """True if ``assert <expr>`` is statically true regardless of program
     state. Covers ``assert True``, ``assert 1``, ``assert 1 == 1``,
@@ -228,7 +229,9 @@ def _is_xfail_strict(decorator_list: list[ast.expr]) -> bool:
     return False
 
 
-def _test_body_is_outcome_independent(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def _test_body_is_outcome_independent(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
     """True iff every statement in ``func.body`` is a no-op or a
     statically-true assertion (or an xfail-strict ``assert False`` xpass)."""
     xfail_strict = _is_xfail_strict(func.decorator_list)
@@ -255,6 +258,7 @@ def _test_body_is_outcome_independent(func: ast.FunctionDef | ast.AsyncFunctionD
 # ---------------------------------------------------------------------------
 # R10: "no impl referenced" — test cannot import the agent's solution
 # ---------------------------------------------------------------------------
+
 
 def _has_local_or_relative_import(tree: ast.Module) -> bool:
     """True iff ``tree`` has any import that resolves to a project-local
@@ -300,9 +304,7 @@ def _module_level_known_names(tree: ast.Module) -> set[str]:
                     for elt in t.elts:
                         if isinstance(elt, ast.Name):
                             names.add(elt.id)
-        elif isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        ):
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)
     names.update(dir(builtins))
     return names
@@ -473,6 +475,7 @@ def _no_impl_referenced(tree: ast.Module) -> bool:
 # Evaluator
 # ---------------------------------------------------------------------------
 
+
 def evaluate_task(task_dir: Path) -> dict:
     """Return a per-task verdict.
 
@@ -524,23 +527,46 @@ def evaluate_task(task_dir: Path) -> dict:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N drop samples per reason.")
-    p.add_argument("--force", action="store_true",
-                   help="Re-run even if the idempotency marker is present.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad",
+        type=int,
+        default=20,
+        help="Print the first N drop samples per reason.",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run even if the idempotency marker is present.",
+    )
     return p.parse_args()
 
 
@@ -552,7 +578,9 @@ def main() -> None:
 
     marker = root / MARKER_FILENAME
     if marker.exists() and not args.force and not args.dry_run:
-        print(f"[patch_exp_rle_expert_v3] marker present at {marker}; skipping (use --force to re-run).")
+        print(
+            f"[patch_exp_rle_expert_v3] marker present at {marker}; skipping (use --force to re-run)."
+        )
         return
 
     task_dirs = sorted(d for d in root.iterdir() if d.is_dir())
@@ -585,7 +613,7 @@ def main() -> None:
     print(f"[patch_exp_rle_expert_v3] total:           {total}")
     print(f"[patch_exp_rle_expert_v3] kept:            {kept}")
     print(f"[patch_exp_rle_expert_v3] dropped:         {dropped}")
-    print(f"[patch_exp_rle_expert_v3] dropped breakdown:")
+    print("[patch_exp_rle_expert_v3] dropped breakdown:")
     for reason, n in sorted(by_reason.items(), key=lambda kv: -kv[1]):
         print(f"    {reason:30s} {n:4d}")
 
@@ -613,11 +641,7 @@ def main() -> None:
             removed += 1
     print(f"[patch_exp_rle_expert_v3] removed {removed} dropped task directories.")
 
-    marker.write_text(
-        f"total={total}\n"
-        f"kept={kept}\n"
-        f"removed={removed}\n"
-    )
+    marker.write_text(f"total={total}\nkept={kept}\nremoved={removed}\n")
     print(f"[patch_exp_rle_expert_v3] wrote idempotency marker: {marker}")
 
 

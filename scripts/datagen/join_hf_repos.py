@@ -17,11 +17,12 @@ import os
 from typing import List
 
 from datasets import load_dataset, Dataset, DatasetDict, concatenate_datasets
-from huggingface_hub import HfApi, create_repo
+from huggingface_hub import create_repo
 
 try:
     from data.commons import clean_empty_structs  # best-effort cleanup before push
 except Exception:
+
     def clean_empty_structs(dataset: Dataset) -> Dataset:  # type: ignore
         return dataset
 
@@ -60,7 +61,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def _ensure_repo(repo_id: str, private: bool, token: str | None) -> None:
-    create_repo(repo_id=repo_id, repo_type="dataset", private=private, token=token, exist_ok=True)
+    create_repo(
+        repo_id=repo_id,
+        repo_type="dataset",
+        private=private,
+        token=token,
+        exist_ok=True,
+    )
 
 
 def _load_all(sources: List[str]) -> List[DatasetDict]:
@@ -69,7 +76,7 @@ def _load_all(sources: List[str]) -> List[DatasetDict]:
         dsd = load_dataset(src)  # Expect DatasetDict
         if isinstance(dsd, Dataset):  # Fallback if a single split dataset is returned
             dsd = DatasetDict({"train": dsd})
-        dsds.append(dsd) 
+        dsds.append(dsd)
     return dsds
 
 
@@ -100,7 +107,9 @@ def main() -> None:
     for i, dsd in enumerate(src_dsds[1:], start=2):
         splits = set(dsd.keys())
         if splits != base_splits:
-            raise ValueError(f"Source #{i} splits {sorted(splits)} != base splits {sorted(base_splits)}")
+            raise ValueError(
+                f"Source #{i} splits {sorted(splits)} != base splits {sorted(base_splits)}"
+            )
 
     print("[join] Concatenating splits in order...")
     merged = _merge_by_split(src_dsds)
@@ -109,10 +118,14 @@ def main() -> None:
     _ensure_repo(args.target, args.private, token)
 
     print(f"[join] Pushing merged dataset to {args.target}...")
-    merged.push_to_hub(args.target, private=args.private, token=token, commit_message=args.commit_message)  # type: ignore[arg-type]
+    merged.push_to_hub(
+        args.target,
+        private=args.private,
+        token=token,
+        commit_message=args.commit_message,
+    )  # type: ignore[arg-type]
     print(f"[join] Done. https://huggingface.co/datasets/{args.target}")
 
 
 if __name__ == "__main__":
     main()
-

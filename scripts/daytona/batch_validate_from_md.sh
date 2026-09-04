@@ -14,7 +14,7 @@
 #
 # Defaults:
 #   INPUT_MD     /Users/benjaminfeuer/Documents/notes/ot-agent/task_repos/rl_to_check.md
-#   SECRETS_ENV  /Users/benjaminfeuer/Documents/secrets.env
+#   SECRETS_ENV  ${DC_AGENT_SECRET_ENV}  (see .agents/secret.md)
 #   TARGET_DIR   /Users/benjaminfeuer/Documents/agent-traces-analysis
 #
 # Env overrides:
@@ -34,7 +34,7 @@
 set -euo pipefail
 
 INPUT_MD="${1:-/Users/benjaminfeuer/Documents/notes/ot-agent/task_repos/rl_to_check.md}"
-SECRETS_ENV="${2:-/Users/benjaminfeuer/Documents/secrets.env}"
+SECRETS_ENV="${2:-${DC_AGENT_SECRET_ENV:?Set DC_AGENT_SECRET_ENV to your secrets.env (see .agents/secret.md)}}"
 TARGET_DIR="${3:-/Users/benjaminfeuer/Documents/agent-traces-analysis}"
 
 SAMPLE_SIZE="${SAMPLE_SIZE:-200}"

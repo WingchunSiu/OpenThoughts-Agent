@@ -16,6 +16,7 @@ import numpy as np
 @dataclass
 class BenchmarkPrompt:
     """A single benchmark prompt with metadata."""
+
     prompt: str
     prompt_length: int  # tokens (approximate)
     expected_output_length: int  # tokens
@@ -62,24 +63,57 @@ class DatasetLoader:
     }
 
     TASK_EXAMPLES = [
-        "fibonacci numbers", "binary search", "linked list reversal", "merge sort",
-        "breadth-first search", "depth-first search", "dynamic programming solution",
-        "LRU cache", "hash table", "binary tree traversal", "graph algorithms",
-        "string matching", "matrix operations", "recursive backtracking",
+        "fibonacci numbers",
+        "binary search",
+        "linked list reversal",
+        "merge sort",
+        "breadth-first search",
+        "depth-first search",
+        "dynamic programming solution",
+        "LRU cache",
+        "hash table",
+        "binary tree traversal",
+        "graph algorithms",
+        "string matching",
+        "matrix operations",
+        "recursive backtracking",
     ]
 
     CONCEPT_EXAMPLES = [
-        "machine learning", "neural networks", "transformers", "attention mechanisms",
-        "gradient descent", "backpropagation", "regularization", "cross-validation",
-        "reinforcement learning", "generative models", "transfer learning",
-        "distributed computing", "MapReduce", "consensus algorithms", "CAP theorem",
+        "machine learning",
+        "neural networks",
+        "transformers",
+        "attention mechanisms",
+        "gradient descent",
+        "backpropagation",
+        "regularization",
+        "cross-validation",
+        "reinforcement learning",
+        "generative models",
+        "transfer learning",
+        "distributed computing",
+        "MapReduce",
+        "consensus algorithms",
+        "CAP theorem",
     ]
 
     TOPIC_EXAMPLES = [
-        "Python decorators", "context managers", "generators", "coroutines",
-        "metaclasses", "descriptors", "async/await", "type hints",
-        "REST APIs", "GraphQL", "microservices", "serverless architecture",
-        "Docker containers", "Kubernetes", "CI/CD pipelines", "test automation",
+        "Python decorators",
+        "context managers",
+        "generators",
+        "coroutines",
+        "metaclasses",
+        "descriptors",
+        "async/await",
+        "type hints",
+        "REST APIs",
+        "GraphQL",
+        "microservices",
+        "serverless architecture",
+        "Docker containers",
+        "Kubernetes",
+        "CI/CD pipelines",
+        "test automation",
     ]
 
     def __init__(self, output_dir: str = "datasets", seed: int = 42):
@@ -93,7 +127,9 @@ class DatasetLoader:
         """Estimate token count (rough approximation: 1 token ≈ 4 characters)."""
         return len(text) // 4
 
-    def generate_synthetic_prompt(self, length_category: str = "medium") -> BenchmarkPrompt:
+    def generate_synthetic_prompt(
+        self, length_category: str = "medium"
+    ) -> BenchmarkPrompt:
         """Generate a synthetic prompt of specified length category."""
         if length_category not in self.PROMPT_TEMPLATES:
             length_category = "medium"
@@ -128,7 +164,7 @@ class DatasetLoader:
             metadata={
                 "category": length_category,
                 "template_type": "synthetic",
-            }
+            },
         )
 
     def generate_dataset(
@@ -154,7 +190,7 @@ class DatasetLoader:
 
         # Normalize distribution
         total = sum(length_distribution.values())
-        length_distribution = {k: v/total for k, v in length_distribution.items()}
+        length_distribution = {k: v / total for k, v in length_distribution.items()}
 
         # Calculate counts for each category
         counts = {}
@@ -170,7 +206,9 @@ class DatasetLoader:
             for _ in range(count):
                 prompt = self.generate_synthetic_prompt(category)
                 # Cap output length
-                prompt.expected_output_length = min(prompt.expected_output_length, max_output_tokens)
+                prompt.expected_output_length = min(
+                    prompt.expected_output_length, max_output_tokens
+                )
                 prompts.append(prompt)
 
         # Shuffle
@@ -179,10 +217,7 @@ class DatasetLoader:
         return prompts
 
     def save_dataset(
-        self,
-        prompts: List[BenchmarkPrompt],
-        filename: str,
-        format: str = "jsonl"
+        self, prompts: List[BenchmarkPrompt], filename: str, format: str = "jsonl"
     ) -> Path:
         """
         Save dataset to file.
@@ -198,7 +233,7 @@ class DatasetLoader:
         output_path = self.output_dir / filename
 
         if format == "jsonl":
-            with open(output_path, 'w') as f:
+            with open(output_path, "w") as f:
                 for prompt in prompts:
                     record = {
                         "prompt": prompt.prompt,
@@ -217,7 +252,7 @@ class DatasetLoader:
                 }
                 for p in prompts
             ]
-            with open(output_path, 'w') as f:
+            with open(output_path, "w") as f:
                 json.dump(records, f, indent=2)
         else:
             raise ValueError(f"Unknown format: {format}")
@@ -234,25 +269,29 @@ class DatasetLoader:
         prompts = []
 
         if filename.endswith(".jsonl"):
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 for line in f:
                     record = json.loads(line)
-                    prompts.append(BenchmarkPrompt(
-                        prompt=record["prompt"],
-                        prompt_length=record["prompt_length"],
-                        expected_output_length=record["expected_output_length"],
-                        metadata=record.get("metadata", {}),
-                    ))
+                    prompts.append(
+                        BenchmarkPrompt(
+                            prompt=record["prompt"],
+                            prompt_length=record["prompt_length"],
+                            expected_output_length=record["expected_output_length"],
+                            metadata=record.get("metadata", {}),
+                        )
+                    )
         elif filename.endswith(".json"):
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 records = json.load(f)
                 for record in records:
-                    prompts.append(BenchmarkPrompt(
-                        prompt=record["prompt"],
-                        prompt_length=record["prompt_length"],
-                        expected_output_length=record["expected_output_length"],
-                        metadata=record.get("metadata", {}),
-                    ))
+                    prompts.append(
+                        BenchmarkPrompt(
+                            prompt=record["prompt"],
+                            prompt_length=record["prompt_length"],
+                            expected_output_length=record["expected_output_length"],
+                            metadata=record.get("metadata", {}),
+                        )
+                    )
         else:
             raise ValueError(f"Unknown file format: {filename}")
 
@@ -292,7 +331,9 @@ class DatasetLoader:
             length_distribution={"short": 0.3, "medium": 0.5, "long": 0.2},
             max_output_tokens=512,
         )
-        datasets["large_throughput"] = self.save_dataset(large, "large_throughput.jsonl")
+        datasets["large_throughput"] = self.save_dataset(
+            large, "large_throughput.jsonl"
+        )
 
         # Short prompts (500 prompts) - for latency testing
         print("Generating short prompts dataset (500 prompts)...")
@@ -319,14 +360,14 @@ class DatasetLoader:
         prompt_lengths = [p.prompt_length for p in prompts]
         output_lengths = [p.expected_output_length for p in prompts]
 
-        print(f"\nDataset Statistics:")
+        print("\nDataset Statistics:")
         print(f"  Total prompts: {len(prompts)}")
-        print(f"\n  Prompt lengths (tokens):")
+        print("\n  Prompt lengths (tokens):")
         print(f"    Mean: {np.mean(prompt_lengths):.1f}")
         print(f"    Median: {np.median(prompt_lengths):.1f}")
         print(f"    Min: {np.min(prompt_lengths)}")
         print(f"    Max: {np.max(prompt_lengths)}")
-        print(f"\n  Expected output lengths (tokens):")
+        print("\n  Expected output lengths (tokens):")
         print(f"    Mean: {np.mean(output_lengths):.1f}")
         print(f"    Median: {np.median(output_lengths):.1f}")
         print(f"    Min: {np.min(output_lengths)}")
@@ -338,9 +379,9 @@ class DatasetLoader:
         for cat in categories:
             category_counts[cat] = category_counts.get(cat, 0) + 1
 
-        print(f"\n  Category distribution:")
+        print("\n  Category distribution:")
         for cat, count in sorted(category_counts.items()):
-            print(f"    {cat}: {count} ({count/len(prompts)*100:.1f}%)")
+            print(f"    {cat}: {count} ({count / len(prompts) * 100:.1f}%)")
 
 
 def main():
@@ -349,10 +390,18 @@ def main():
 
     parser = argparse.ArgumentParser(description="Generate vLLM benchmark datasets")
     parser.add_argument("--output-dir", default="datasets", help="Output directory")
-    parser.add_argument("--num-prompts", type=int, default=500, help="Number of prompts")
-    parser.add_argument("--max-output-tokens", type=int, default=512, help="Max output tokens")
-    parser.add_argument("--create-suite", action="store_true", help="Create full benchmark suite")
-    parser.add_argument("--show-stats", action="store_true", help="Show dataset statistics")
+    parser.add_argument(
+        "--num-prompts", type=int, default=500, help="Number of prompts"
+    )
+    parser.add_argument(
+        "--max-output-tokens", type=int, default=512, help="Max output tokens"
+    )
+    parser.add_argument(
+        "--create-suite", action="store_true", help="Create full benchmark suite"
+    )
+    parser.add_argument(
+        "--show-stats", action="store_true", help="Show dataset statistics"
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()

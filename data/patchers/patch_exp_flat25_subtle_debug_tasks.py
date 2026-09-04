@@ -111,6 +111,7 @@ Constraints (per upload spec):
     set; it can only drop. Mutation of ``test.sh`` doesn't change the
     Dockerfile so it doesn't change the snapshot identity.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -144,8 +145,11 @@ V2_MARKER = "# --- laion v2 patch: passed_count gate ---"
 #         * passed_count >= 1
 #         * failed_count == 0 AND error_count == 0
 #   - "all-skipped" or "zero-collected" runs leave passed_count = 0 -> 0.
-NEW_TEST_SH = r"""#!/bin/bash
-""" + V2_MARKER + r"""
+NEW_TEST_SH = (
+    r"""#!/bin/bash
+"""
+    + V2_MARKER
+    + r"""
 # v2 verifier: gate reward on (a) clean exit AND (b) pytest reporting
 # at least one test actually PASSED. v1 trusted the pytest exit code,
 # which is 0 for "0 collected" and "all skipped" runs - both let
@@ -228,6 +232,7 @@ else
     exit 1
 fi
 """
+)
 
 
 def patch_test_sh(test_sh: Path, dry_run: bool) -> str:
@@ -264,21 +269,38 @@ def patch_test_sh(test_sh: Path, dry_run: bool) -> str:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import samples.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad", type=int, default=20, help="Print the first N bad-import samples."
+    )
     return p.parse_args()
 
 
@@ -292,7 +314,9 @@ def main() -> None:
     if args.limit:
         task_dirs = task_dirs[: args.limit]
 
-    print(f"[patch_exp_flat25_subtle_debug] inspecting {len(task_dirs)} tasks under {root}")
+    print(
+        f"[patch_exp_flat25_subtle_debug] inspecting {len(task_dirs)} tasks under {root}"
+    )
 
     syntax_dropped = 0
     no_test_dropped = 0
@@ -324,9 +348,11 @@ def main() -> None:
         reason = v["reason"]
         if reason == "no_test_file":
             no_test_dropped += 1
-        elif (reason.startswith("syntax_error")
-              or reason.startswith("ast_syntax")
-              or reason.startswith("compile_error")):
+        elif (
+            reason.startswith("syntax_error")
+            or reason.startswith("ast_syntax")
+            or reason.startswith("compile_error")
+        ):
             syntax_dropped += 1
         elif reason == "missing_import":
             import_dropped += 1
@@ -342,21 +368,31 @@ def main() -> None:
     print(f"[patch_exp_flat25_subtle_debug] import dropped: {import_dropped}")
     print(f"[patch_exp_flat25_subtle_debug] kept:           {kept}")
     print()
-    print(f"[patch_exp_flat25_subtle_debug] test.sh mutation (on KEPT tasks):")
-    for k in ("patched", "patched_unusual", "already",
-              "missing", "skipped_no_pytest", "unparseable"):
+    print("[patch_exp_flat25_subtle_debug] test.sh mutation (on KEPT tasks):")
+    for k in (
+        "patched",
+        "patched_unusual",
+        "already",
+        "missing",
+        "skipped_no_pytest",
+        "unparseable",
+    ):
         print(f"  {k:<20}: {patch_counts[k]:>5}")
 
     if bad_import_samples:
         print()
-        print(f"[patch_exp_flat25_subtle_debug] sample bad-import drops "
-              f"(first {len(bad_import_samples)}):")
+        print(
+            f"[patch_exp_flat25_subtle_debug] sample bad-import drops "
+            f"(first {len(bad_import_samples)}):"
+        )
         for tid, bad in bad_import_samples:
             print(f"  {tid}: {bad}")
 
     if args.report_json:
         args.report_json.write_text(json.dumps(verdicts, indent=2))
-        print(f"[patch_exp_flat25_subtle_debug] wrote per-task verdicts: {args.report_json}")
+        print(
+            f"[patch_exp_flat25_subtle_debug] wrote per-task verdicts: {args.report_json}"
+        )
 
     if args.dry_run:
         print("[patch_exp_flat25_subtle_debug] dry-run: not deleting dropped tasks.")
@@ -370,7 +406,9 @@ def main() -> None:
         if target.exists():
             shutil.rmtree(target)
             removed += 1
-    print(f"[patch_exp_flat25_subtle_debug] removed {removed} dropped task directories.")
+    print(
+        f"[patch_exp_flat25_subtle_debug] removed {removed} dropped task directories."
+    )
 
 
 if __name__ == "__main__":

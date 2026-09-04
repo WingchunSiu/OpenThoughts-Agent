@@ -81,7 +81,9 @@ Examples:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    output_path = Path(args.output) if args.output else RUBRICS_DIR / f"{args.collection_id}.json"
+    output_path = (
+        Path(args.output) if args.output else RUBRICS_DIR / f"{args.collection_id}.json"
+    )
 
     try:
         rubrics = download_rubrics(args.collection_id)
@@ -108,4 +110,3 @@ Examples:
 
 if __name__ == "__main__":
     sys.exit(main())
-    

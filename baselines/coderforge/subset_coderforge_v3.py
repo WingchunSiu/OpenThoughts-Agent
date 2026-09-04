@@ -24,13 +24,12 @@ Target repos on HF (laion/):
 
 Streaming one shard at a time keeps memory bounded.
 """
+
 import argparse
 import gc
 import glob
-import json
 import os
 import random
-import re
 from pathlib import Path
 
 import pyarrow as pa
@@ -42,7 +41,14 @@ SRC_REPO = "togethercomputer/CoderForge-Preview"
 SRC_SUBSET_DIR = "trajectories-tokenized_qwencoder"
 SOURCE_TAG = f"{SRC_REPO}/{SRC_SUBSET_DIR}"
 TARGET_BASE = "laion/CoderForge-Preview-v3"
-SIZES = [316, 1000, 3160, 10000, 31600, 100000]   # full uploaded as TARGET_BASE separately
+SIZES = [
+    316,
+    1000,
+    3160,
+    10000,
+    31600,
+    100000,
+]  # full uploaded as TARGET_BASE separately
 # Per the CoderForge-Preview blog (https://www.together.ai/blog/coderforge-preview)
 # the authors trained only on successful+test-passing+license-filtered trajectories —
 # this is the `filtered_reward1` slug (155,144 rows). The other 3 slugs (R2E_Gym,
@@ -54,15 +60,17 @@ SEED = 42
 STAGING = Path("/e/data1/datasets/playground/ot-baf/_cf_v3_staging")
 
 # Schema we emit per row (adds attention_mask + source to source schema).
-OUT_SCHEMA = pa.schema([
-    ("trajectory_id", pa.string()),
-    ("reward", pa.float64()),
-    ("chat_template_applied", pa.string()),
-    ("input_ids", pa.list_(pa.int32())),
-    ("attention_mask", pa.list_(pa.int8())),
-    ("labels", pa.list_(pa.int64())),
-    ("source", pa.string()),
-])
+OUT_SCHEMA = pa.schema(
+    [
+        ("trajectory_id", pa.string()),
+        ("reward", pa.float64()),
+        ("chat_template_applied", pa.string()),
+        ("input_ids", pa.list_(pa.int32())),
+        ("attention_mask", pa.list_(pa.int8())),
+        ("labels", pa.list_(pa.int64())),
+        ("source", pa.string()),
+    ]
+)
 
 
 def count_source_rows(source_dir):
@@ -145,7 +153,10 @@ def stream_and_subset(source_dir, sizes, full_size, seed, staging):
         if p.exists():
             p.unlink()
 
-    writers = {s: pq.ParquetWriter(out_paths[s], OUT_SCHEMA, compression="snappy") for s in idxset}
+    writers = {
+        s: pq.ParquetWriter(out_paths[s], OUT_SCHEMA, compression="snappy")
+        for s in idxset
+    }
     full_writer = pq.ParquetWriter(full_path, OUT_SCHEMA, compression="snappy")
 
     counts = {s: 0 for s in idxset}
@@ -156,8 +167,20 @@ def stream_and_subset(source_dir, sizes, full_size, seed, staging):
         shards = sorted(glob.glob(f"{source_dir}/{slug}-*-of-*.parquet"))
         for si, sp in enumerate(shards):
             if si % 20 == 0:
-                print(f"  [{slug}] shard {si}/{len(shards)} (global_i={global_i}, full_written={counts['full']})", flush=True)
-            tbl = pq.read_table(sp, columns=["trajectory_id", "reward", "chat_template_applied", "input_ids", "labels"])
+                print(
+                    f"  [{slug}] shard {si}/{len(shards)} (global_i={global_i}, full_written={counts['full']})",
+                    flush=True,
+                )
+            tbl = pq.read_table(
+                sp,
+                columns=[
+                    "trajectory_id",
+                    "reward",
+                    "chat_template_applied",
+                    "input_ids",
+                    "labels",
+                ],
+            )
             rows = tbl.to_pylist()
             buf_full = []
             buf_size = {s: [] for s in idxset}
@@ -191,7 +214,10 @@ def stream_and_subset(source_dir, sizes, full_size, seed, staging):
 
     for k, v in counts.items():
         label = f"full ({full_size})" if k == "full" else f"{k}"
-        print(f"  [out] {label}: {v} rows, {out_paths.get(k, full_path).stat().st_size / 1e9:.2f} GB", flush=True)
+        print(
+            f"  [out] {label}: {v} rows, {out_paths.get(k, full_path).stat().st_size / 1e9:.2f} GB",
+            flush=True,
+        )
 
     return out_paths, full_path
 
@@ -203,8 +229,11 @@ def push_dataset(api, target_repo, parquet_path, size, full_size, token):
     readme_tmp = parquet_path.parent / f"README_{size}.md"
     readme_tmp.write_text(make_readme(target_repo, size, full_size))
 
-    path_in_repo = f"data/train-00000-of-00001.parquet"   # HF default layout
-    print(f"[push] uploading {parquet_path.name} ({parquet_path.stat().st_size / 1e9:.2f} GB) -> {target_repo}", flush=True)
+    path_in_repo = "data/train-00000-of-00001.parquet"  # HF default layout
+    print(
+        f"[push] uploading {parquet_path.name} ({parquet_path.stat().st_size / 1e9:.2f} GB) -> {target_repo}",
+        flush=True,
+    )
     api.upload_file(
         path_or_fileobj=str(parquet_path),
         path_in_repo=path_in_repo,
@@ -223,11 +252,23 @@ def push_dataset(api, target_repo, parquet_path, size, full_size, token):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--download-only", action="store_true", help="Download source shards and exit")
-    ap.add_argument("--skip-download", action="store_true", help="Assume source shards are already local")
-    ap.add_argument("--build-only", action="store_true", help="Write subset parquets, skip uploads")
-    ap.add_argument("--skip-full", action="store_true", help="Don't upload the full (413k) dataset")
-    ap.add_argument("--only-small", action="store_true", help="Only upload 316 + 1000 (skip larger)")
+    ap.add_argument(
+        "--download-only", action="store_true", help="Download source shards and exit"
+    )
+    ap.add_argument(
+        "--skip-download",
+        action="store_true",
+        help="Assume source shards are already local",
+    )
+    ap.add_argument(
+        "--build-only", action="store_true", help="Write subset parquets, skip uploads"
+    )
+    ap.add_argument(
+        "--skip-full", action="store_true", help="Don't upload the full (413k) dataset"
+    )
+    ap.add_argument(
+        "--only-small", action="store_true", help="Only upload 316 + 1000 (skip larger)"
+    )
     args = ap.parse_args()
 
     token = os.environ["HF_TOKEN"]
@@ -235,7 +276,9 @@ def main():
 
     # Download upstream shards to local HF cache
     if not args.skip_download:
-        print("[download] snapshot_download trajectories-tokenized_qwencoder/", flush=True)
+        print(
+            "[download] snapshot_download trajectories-tokenized_qwencoder/", flush=True
+        )
         src_root = snapshot_download(
             repo_id=SRC_REPO,
             repo_type="dataset",
@@ -246,7 +289,9 @@ def main():
         source_dir = os.path.join(src_root, SRC_SUBSET_DIR)
     else:
         # Discover from HF_HOME cache
-        hits = glob.glob(f"{os.environ.get('HF_HOME','~/.cache/huggingface')}/hub/datasets--togethercomputer--CoderForge-Preview/snapshots/*/{SRC_SUBSET_DIR}")
+        hits = glob.glob(
+            f"{os.environ.get('HF_HOME', '~/.cache/huggingface')}/hub/datasets--togethercomputer--CoderForge-Preview/snapshots/*/{SRC_SUBSET_DIR}"
+        )
         if not hits:
             raise SystemExit("--skip-download but no cached source dir found")
         source_dir = sorted(hits)[-1]
@@ -259,7 +304,9 @@ def main():
     print(f"[src] total rows: {full_size:,}", flush=True)
 
     sizes = [316, 1000] if args.only_small else SIZES
-    out_paths, full_path = stream_and_subset(source_dir, sizes, full_size, SEED, STAGING)
+    out_paths, full_path = stream_and_subset(
+        source_dir, sizes, full_size, SEED, STAGING
+    )
 
     if args.build_only:
         print("[build-only] skipping uploads", flush=True)

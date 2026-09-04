@@ -7,6 +7,11 @@
 #SBATCH --job-name={job_name}
 #SBATCH --mail-type=END,TIME_LIMIT,FAIL
 #SBATCH --mail-user={email_address}
+# Send a batch-shell-only warning while the Ray job steps are still alive. The
+# USR1 trap below translates this into a cooperative TERM for the RL runner.
+# Five minutes covers MarinSkyRL's 120-second entrypoint shutdown deadline and
+# leaves time for artifact-store and Ray-log cleanup before the hard time limit.
+#SBATCH --signal=B:USR1@300
 {sbatch_extra_directives}
 
 # ==============================================================================
@@ -48,6 +53,22 @@ elif [ -n "${DCFT:-}" ]; then
   WORKDIR="$DCFT"
 else
   WORKDIR="$PWD"
+fi
+
+# --- WORKDIR sanity guard (HARD FAIL — do not remove) ---
+# If WORKDIR does not point at the OpenThoughts-Agent repo root, every downstream
+# `source "$WORKDIR/hpc/..."` and `python -m hpc....` fails cryptically and the job
+# dies instantly. This happens when a job is submitted from outside the repo with
+# DCFT/DCFT_PRIVATE unset, so the fallback resolves WORKDIR=$PWD (the wrong dir).
+# Fail loudly and immediately instead of running from the wrong place.
+if [ ! -f "$WORKDIR/hpc/shell_utils/triton_cache.sh" ]; then
+  echo "FATAL: WORKDIR='$WORKDIR' is not the OpenThoughts-Agent repo root." >&2
+  echo "       (marker hpc/shell_utils/triton_cache.sh not found under it)." >&2
+  echo "       Submit the job FROM the repo dir with DCFT exported — on Jupiter:" >&2
+  echo "         cd /e/scratch/jureap59/feuer1/OpenThoughts-Agent && export DCFT=\$PWD" >&2
+  echo "       or pass --chdir <repo> to sbatch. Do NOT submit from \$HOME or a scratch subdir." >&2
+  echo "       See .agents/skills/rl-agentic-launch-jupiter for the correct launch procedure." >&2
+  exit 1
 fi
 cd "$WORKDIR"
 
@@ -106,7 +127,31 @@ fi
 # --- NCCL/Networking settings (cluster-specific) ---
 {nccl_exports}
 
+# --- RL container env (Apptainer SIF overlays / pydeps / extra exports) ---
+# Emitted by the launcher from the RL yaml `container:` section (if present).
+# Sets RL_CONTAINER_OVERLAYS / RL_CONTAINER_PYDEPS (read at runtime by
+# hpc/rl_launch_utils.py build_apptainer_prefix + _build_container_pythonpath)
+# plus any container.extra_env exports (e.g. SKYRL_GDN_MASK_FLA, alloc-conf).
+# Empty (comment-only) when the yaml has no container section — byte-identical
+# to the prior non-container path. Exported here so every Ray daemon/driver
+# (apptainer --env passthrough + srun --export=ALL) inherits them.
+{rl_container_env}
+
 # --- Standard environment variables ---
+# UV_USE_IO_URING=0 forces libuv (bundled in uvloop 0.22.1 as libuv 1.48.0)
+# onto the plain, immediate epoll_ctl path instead of the io_uring EPOLL_CTL
+# batching path. libuv 1.48.0 defers EPOLL_CTL_DEL through an io_uring SQ; under
+# high socket churn (timeout-heavy RL rollouts → constant connect/teardown to
+# vLLM + Daytona) a deferred op runs against a closed/recycled fd and libuv
+# aborts() in uv__epoll_ctl_flush — surfacing as `uv__epoll_ctl_prep ->
+# Fatal Python error: Aborted` in the skyrl_entrypoint Ray driver at ~30-70 min.
+# Fixed upstream in libuv 1.49.0 ("don't delay EPOLL_CTL_DEL operations"), which
+# no uvloop release ships yet. This var is exported in the top-level batch shell
+# and propagates to every Ray head/worker via `srun --export=ALL` (ray_utils.py),
+# so the skyrl_entrypoint Ray task inherits it. Harmless on io_uring-disabled
+# nodes (they already run the plain-epoll path). See
+# notes/ot-agent/agent_logs/2026-05-28_uvloop_libuv_io_uring_epoll_abort_rootcause.md
+export UV_USE_IO_URING=0
 export PYTHONFAULTHANDLER=1
 export TORCH_SHOW_CPP_STACKTRACES=1
 export CUDA_LAUNCH_BLOCKING=0
@@ -118,18 +163,22 @@ export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=1800
 # real failure point (often a peer-node HSN socket close on Perlmutter)
 # instead of a downstream SIGABRT in a NCCL destructor.
 export NCCL_BLOCKING_WAIT=1
-# TORCH_NCCL_TRACE_BUFFER_SIZE > 0 enables PyTorch's NCCL FlightRecorder,
-# which captures rank-by-rank stack traces of the most recent N collective
-# operations. On crash, ProcessGroupNCCL.cpp emits these traces — the
-# "Stack trace of the failed collective not found, potentially because
-# FlightRecorder is disabled" line in prior Perlmutter crashes goes away
-# and we get the actual offending collective + stack frames.
-export TORCH_NCCL_TRACE_BUFFER_SIZE=2000
 export OMP_NUM_THREADS=1
 export PYTHONPATH="$WORKDIR:${PYTHONPATH:-}"
 
 # --- RL-specific environment variables ---
 {rl_env_exports}
+
+# --- RL container env (LATE override — config container.extra_env wins) ---
+# Re-emit the yaml container.extra_env exports AFTER both the hardcoded
+# export TORCH_NCCL_* lines above and the RL-specific env exports block,
+# so a config that intentionally sets a normally-hardcoded var (e.g. #232 lowering
+# TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC to 600 so NCCL's flight-recorder fires BEFORE
+# vLLM's 900s execute_model watchdog and actually dumps) wins by shell last-write.
+# No-op for every config whose extra_env does NOT collide with a hardcoded var
+# (the earlier container-env block already exported those, re-export is
+# idempotent), so this is byte-identical behavior for all existing configs.
+{rl_container_env_late}
 
 # --- Ray defaults ---
 {ray_env_exports}
@@ -158,6 +207,11 @@ mkdir -p "{experiments_dir}/logs"
 mkdir -p "{experiments_dir}/exports"
 mkdir -p "{experiments_dir}/ray_logs"
 
+# Preserve rank-by-rank collective history on the shared experiment filesystem.
+# PyTorch appends the global rank to this prefix when its NCCL watchdog fires.
+source "$WORKDIR/hpc/shell_utils/nccl_flight_recorder.sh"
+setup_nccl_flight_recorder "{experiments_dir}" || exit $?
+
 # --- Cleanup trap to preserve Ray logs ---
 # Ray uses /tmp by default for logs/sockets. This trap copies them to the
 # experiments directory for debugging after the job terminates.
@@ -175,7 +229,7 @@ cleanup_ray_logs() {
   done
 
   # --- Worker node logs (clusters with intra-node SSH, e.g. Jupiter) ---
-  local WORKER_LOG_SCRIPT="$WORKDIR/scripts/ray/collect_worker_ray_logs.sh"
+  local WORKER_LOG_SCRIPT="$WORKDIR/hpc/ray/collect_worker_ray_logs.sh"
   if [[ -f "$WORKER_LOG_SCRIPT" ]]; then
     source "$WORKER_LOG_SCRIPT"
     collect_worker_ray_logs "{experiments_dir}/ray_logs"
@@ -183,7 +237,130 @@ cleanup_ray_logs() {
 
   echo "Ray log preservation complete"
 }
-trap cleanup_ray_logs EXIT
+
+ARTIFACT_STORE_ENABLED="{artifact_store_enabled}"
+ARTIFACT_STORE_IMAGE="{artifact_store_image}"
+ARTIFACT_STORE_MOUNT="{artifact_store_mount}"
+ARTIFACT_STORE_LEASE="${ARTIFACT_STORE_IMAGE}.mount-lease"
+ARTIFACT_STORE_MOUNTED=0
+ARTIFACT_STORE_LEASE_HELD=0
+RL_RUNNER_PID=""
+
+release_artifact_store_lease() {
+  if [[ "$ARTIFACT_STORE_LEASE_HELD" != "1" ]]; then
+    return
+  fi
+  rm -f "$ARTIFACT_STORE_LEASE/owner"
+  rmdir "$ARTIFACT_STORE_LEASE"
+  ARTIFACT_STORE_LEASE_HELD=0
+}
+
+acquire_artifact_store_lease() {
+  if ! mkdir "$ARTIFACT_STORE_LEASE" 2>/dev/null; then
+    local previous_job=""
+    local previous_state=""
+    if [[ -f "$ARTIFACT_STORE_LEASE/owner" ]]; then
+      previous_job=$(sed -n 's/^job_id=//p' "$ARTIFACT_STORE_LEASE/owner" | head -1)
+    fi
+    if [[ -z "$previous_job" ]]; then
+      echo "FATAL: artifact store has an active non-Slurm mount lease: $ARTIFACT_STORE_LEASE" >&2
+      return 1
+    fi
+    if ! previous_state=$(squeue -h -j "$previous_job" -o '%T'); then
+      echo "FATAL: could not validate artifact-store lease owner job $previous_job" >&2
+      return 1
+    fi
+    if [[ -n "$previous_state" ]]; then
+      echo "FATAL: artifact store is owned by active job $previous_job ($previous_state)" >&2
+      return 1
+    fi
+    echo "Recovering stale artifact-store lease from completed job $previous_job"
+    rm -f "$ARTIFACT_STORE_LEASE/owner"
+    rmdir "$ARTIFACT_STORE_LEASE"
+    mkdir "$ARTIFACT_STORE_LEASE"
+  fi
+  printf 'kind=writer\njob_id=%s\nnode=%s\n' "$SLURM_JOB_ID" "$(hostname)" > "$ARTIFACT_STORE_LEASE/owner"
+  ARTIFACT_STORE_LEASE_HELD=1
+}
+
+cleanup_artifact_store() {
+  local status=0
+  if [[ "$ARTIFACT_STORE_MOUNTED" != "1" ]]; then
+    release_artifact_store_lease
+    return
+  fi
+  echo "Flushing artifact store: $ARTIFACT_STORE_IMAGE"
+  if ! sync; then
+    echo "FATAL: sync failed for artifact store $ARTIFACT_STORE_IMAGE" >&2
+    status=1
+  fi
+  if ! fusermount3 -u "$ARTIFACT_STORE_MOUNT"; then
+    echo "FATAL: could not unmount artifact store $ARTIFACT_STORE_MOUNT" >&2
+    return 1
+  fi
+  ARTIFACT_STORE_MOUNTED=0
+  flock -u 9 || true
+  exec 9>&-
+  rmdir "$ARTIFACT_STORE_MOUNT" 2>/dev/null || true
+  release_artifact_store_lease
+  echo "Artifact store unmounted"
+  return "$status"
+}
+
+cleanup_job() {
+  local status=$?
+  local cleanup_status=0
+  trap - EXIT TERM USR1
+  set +e
+  cleanup_artifact_store || cleanup_status=1
+  cleanup_ray_logs || cleanup_status=1
+  if [[ "$status" == "0" ]] && [[ "$cleanup_status" != "0" ]]; then
+    status=$cleanup_status
+  fi
+  exit "$status"
+}
+
+source "$WORKDIR/hpc/shell_utils/rl_shutdown.sh"
+
+forward_termination() {
+  echo "Received Slurm shutdown signal; forwarding SIGTERM to the RL runner"
+  if ! forward_termination_to_rl_runner "$RL_RUNNER_PID"; then
+    exit 143
+  fi
+}
+
+trap cleanup_job EXIT
+trap forward_termination TERM USR1
+
+if [[ "$ARTIFACT_STORE_ENABLED" == "1" ]]; then
+  if [[ ! -f "$ARTIFACT_STORE_IMAGE" ]]; then
+    echo "FATAL: artifact-store image is missing: $ARTIFACT_STORE_IMAGE" >&2
+    exit 1
+  fi
+  mkdir -p "$ARTIFACT_STORE_MOUNT"
+  acquire_artifact_store_lease
+  exec 9>"${ARTIFACT_STORE_IMAGE}.lock"
+  if ! flock -n 9; then
+    echo "FATAL: artifact store already has an active writer: $ARTIFACT_STORE_IMAGE" >&2
+    exit 1
+  fi
+  set +e
+  e2fsck -p "$ARTIFACT_STORE_IMAGE"
+  E2FSCK_STATUS=$?
+  set -e
+  if [[ "$E2FSCK_STATUS" -gt 1 ]]; then
+    echo "FATAL: e2fsck failed for $ARTIFACT_STORE_IMAGE (status $E2FSCK_STATUS)" >&2
+    exit "$E2FSCK_STATUS"
+  fi
+  fuse2fs -o rw,fakeroot "$ARTIFACT_STORE_IMAGE" "$ARTIFACT_STORE_MOUNT"
+  if ! mountpoint -q "$ARTIFACT_STORE_MOUNT"; then
+    echo "FATAL: fuse2fs returned without mounting $ARTIFACT_STORE_MOUNT" >&2
+    exit 1
+  fi
+  ARTIFACT_STORE_MOUNTED=1
+  mkdir -p "$ARTIFACT_STORE_MOUNT/trace_jobs"
+  echo "Artifact store mounted at $ARTIFACT_STORE_MOUNT"
+fi
 
 # --- SSH Tunneling (JSC clusters only) ---
 {ssh_tunnel_setup}
@@ -202,6 +379,7 @@ echo "Config: {config_path}"
 echo "Working directory: $WORKDIR"
 echo "Python: $(which python)"
 echo "Python version: $(python --version)"
+echo "UV_USE_IO_URING: ${UV_USE_IO_URING:-<unset>}"  # libuv io_uring epoll-abort fix; must be 0
 
 # --- Proxy setup for no-internet clusters ---
 # Uses LD_PRELOAD set by ssh_tunnel_setup (proxychains library approach)
@@ -218,4 +396,17 @@ else
 fi
 echo "========================================"
 
-python -m hpc.rl_launch_utils --config "{config_path}"
+python -m hpc.rl_launch_utils --config "{config_path}" &
+RL_RUNNER_PID=$!
+set +e
+while true; do
+  wait "$RL_RUNNER_PID"
+  RL_STATUS=$?
+  if ! kill -0 "$RL_RUNNER_PID" 2>/dev/null; then
+    break
+  fi
+  echo "RL runner is still shutting down; continuing to wait"
+done
+set -e
+RL_RUNNER_PID=""
+exit "$RL_STATUS"

@@ -124,7 +124,9 @@ def reset_repo(
         _run(["git", "add", "-A"], cwd=repo_dir)
         _run(["git", "commit", "--allow-empty", "-m", commit_message], cwd=repo_dir)
         _run(["git", "branch", "-M", branch], cwd=repo_dir)
-        _run(["git", "remote", "add", "origin", remote_url], cwd=repo_dir, redact=[token])
+        _run(
+            ["git", "remote", "add", "origin", remote_url], cwd=repo_dir, redact=[token]
+        )
         _run(["git", "push", "--force", "origin", branch], cwd=repo_dir, redact=[token])
         print("[reset] Force push complete; repository history replaced.")
 

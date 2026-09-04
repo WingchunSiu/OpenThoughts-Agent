@@ -53,7 +53,9 @@ def _preset_dataset_prefixes():
     seen = []
     for cfg in PRESETS.values():
         # PRESETS uses 'datasets' (plural list); fall back to 'dataset' for safety.
-        datasets = cfg.get("datasets") or ([cfg["dataset"]] if cfg.get("dataset") else [])
+        datasets = cfg.get("datasets") or (
+            [cfg["dataset"]] if cfg.get("dataset") else []
+        )
         for ds in datasets:
             short = ds.split("/", 1)[-1] if "/" in ds else ds
             short = short.replace("-", "_")
@@ -150,7 +152,7 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
                     if source:
                         for org_prefix in ["DCAgent2_", "DCAgent_"]:
                             if source.startswith(org_prefix):
-                                source = source[len(org_prefix):]
+                                source = source[len(org_prefix) :]
                                 break
                         benchmark = source
                     break
@@ -174,13 +176,16 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
             for prefix in prefixes_long_first:
                 token = prefix + "_"
                 if dirname.startswith(token):
-                    rest = dirname[len(token):]
+                    rest = dirname[len(token) :]
                     parts = rest.rsplit("_", 2)
                     if len(parts) >= 3 and len(parts[-1]) == 6 and len(parts[-2]) == 8:
                         model = "_".join(parts[:-2])
                     break
 
-        if benchmark_filter and benchmark_filter.lower() not in (benchmark or "").lower():
+        if (
+            benchmark_filter
+            and benchmark_filter.lower() not in (benchmark or "").lower()
+        ):
             continue
 
         # Extract accuracy
@@ -192,16 +197,21 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
                 if mr is not None:
                     accuracy = mr
 
-        results.append({
-            "dir": entry,
-            "model": model or entry.name,
-            "model_short": (model.split("/")[-1] if model and "/" in model else model) or entry.name,
-            "benchmark": benchmark or "unknown",
-            "n_trials": n_trials,
-            "n_total": n_total,
-            "elapsed_h": elapsed_h,
-            "accuracy": accuracy,
-        })
+        results.append(
+            {
+                "dir": entry,
+                "model": model or entry.name,
+                "model_short": (
+                    model.split("/")[-1] if model and "/" in model else model
+                )
+                or entry.name,
+                "benchmark": benchmark or "unknown",
+                "n_trials": n_trials,
+                "n_total": n_total,
+                "elapsed_h": elapsed_h,
+                "accuracy": accuracy,
+            }
+        )
 
     # Deduplicate: same model+benchmark, keep best progress
     seen = {}
@@ -215,7 +225,11 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
 def check_db_exists(model_name, benchmark_name):
     """Check if model/benchmark pair already has a Finished job in DB."""
     try:
-        from unified_db.utils import get_model_by_name, get_benchmark_by_name, get_supabase_client
+        from unified_db.utils import (
+            get_model_by_name,
+            get_benchmark_by_name,
+            get_supabase_client,
+        )
 
         model = get_model_by_name(model_name)
         if not model:
@@ -290,19 +304,42 @@ def _upload_one(args_tuple):
 def main():
     parser = argparse.ArgumentParser(description="Detect and upload overlong eval jobs")
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOBS_DIR)
-    parser.add_argument("--upload", action="store_true", help="Actually upload (default: dry run)")
-    parser.add_argument("--benchmark", "-b", type=str, default=None, help="Filter by benchmark")
-    parser.add_argument("--min-elapsed", type=float, default=20, help="Min elapsed hours to consider overlong")
-    parser.add_argument("--skip-db-check", action="store_true", help="Skip checking DB for existing records")
-    parser.add_argument("--skip-hf", action="store_true", help="Skip HuggingFace upload (DB only)")
+    parser.add_argument(
+        "--upload", action="store_true", help="Actually upload (default: dry run)"
+    )
+    parser.add_argument(
+        "--benchmark", "-b", type=str, default=None, help="Filter by benchmark"
+    )
+    parser.add_argument(
+        "--min-elapsed",
+        type=float,
+        default=20,
+        help="Min elapsed hours to consider overlong",
+    )
+    parser.add_argument(
+        "--skip-db-check",
+        action="store_true",
+        help="Skip checking DB for existing records",
+    )
+    parser.add_argument(
+        "--skip-hf", action="store_true", help="Skip HuggingFace upload (DB only)"
+    )
     parser.add_argument("--force", action="store_true", help="Override quality gates")
-    parser.add_argument("--parallel", "-p", type=int, default=1, help="Number of parallel upload workers (default: 1)")
+    parser.add_argument(
+        "--parallel",
+        "-p",
+        type=int,
+        default=1,
+        help="Number of parallel upload workers (default: 1)",
+    )
     args = parser.parse_args()
 
     if args.force:
         os.environ["EVAL_UPLOAD_FORCE"] = "1"
 
-    print(f"Scanning {args.jobs_dir} for overlong jobs (>{args.min_elapsed}h elapsed, incomplete)...")
+    print(
+        f"Scanning {args.jobs_dir} for overlong jobs (>{args.min_elapsed}h elapsed, incomplete)..."
+    )
     overlong = detect_overlong_jobs(args.jobs_dir, args.min_elapsed, args.benchmark)
     print(f"Found {len(overlong)} overlong model/benchmark pairs\n")
 
@@ -310,12 +347,14 @@ def main():
         return
 
     # Display table
-    print(f"{'Model':<55} {'Benchmark':<20} {'Progress':>12} {'Elapsed':>8} {'Accuracy':>8} {'Action':>10}")
+    print(
+        f"{'Model':<55} {'Benchmark':<20} {'Progress':>12} {'Elapsed':>8} {'Accuracy':>8} {'Action':>10}"
+    )
     print("-" * 120)
 
     to_upload = []
     for r in overlong:
-        acc_str = f"{r['accuracy']:.1%}" if r['accuracy'] is not None else "N/A"
+        acc_str = f"{r['accuracy']:.1%}" if r["accuracy"] is not None else "N/A"
         progress = f"{r['n_trials']}/{r['n_total']}"
 
         if not args.skip_db_check:
@@ -330,9 +369,13 @@ def main():
             action = "UPLOAD" if args.upload else "would upload"
             to_upload.append(r)
 
-        print(f"{r['model_short']:<55} {r['benchmark']:<20} {progress:>12} {r['elapsed_h']:>6.1f}h {acc_str:>8} {action:>10}")
+        print(
+            f"{r['model_short']:<55} {r['benchmark']:<20} {progress:>12} {r['elapsed_h']:>6.1f}h {acc_str:>8} {action:>10}"
+        )
 
-    print(f"\n{len(to_upload)} jobs to upload, {len(overlong) - len(to_upload)} already in DB")
+    print(
+        f"\n{len(to_upload)} jobs to upload, {len(overlong) - len(to_upload)} already in DB"
+    )
 
     if not args.upload:
         print("\nDry run — pass --upload to actually upload.")
@@ -344,7 +387,9 @@ def main():
 
     n_workers = min(args.parallel, len(to_upload))
     hf_label = "skip" if args.skip_hf else "enabled"
-    print(f"\nUploading {len(to_upload)} overlong jobs (workers={n_workers}, hf={hf_label})...\n")
+    print(
+        f"\nUploading {len(to_upload)} overlong jobs (workers={n_workers}, hf={hf_label})...\n"
+    )
 
     if n_workers <= 1:
         # Sequential
@@ -361,6 +406,7 @@ def main():
     else:
         # Parallel
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
         success = 0
         failed = 0
         work = [(r, args.skip_hf) for r in to_upload]

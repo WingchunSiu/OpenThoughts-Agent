@@ -24,7 +24,6 @@ import logging
 import os
 import re
 import sys
-from pathlib import Path
 from typing import Any, Optional, List, Dict
 
 from datasets import load_dataset
@@ -119,16 +118,22 @@ def convert_trajectory_to_agent_run(
                     try:
                         arguments = json.loads(arguments)
                     except json.JSONDecodeError:
-                        logger.warning(f"Could not parse arguments JSON string: {arguments}")
+                        logger.warning(
+                            f"Could not parse arguments JSON string: {arguments}"
+                        )
                         arguments = {"raw_arguments": arguments}
                 elif not isinstance(arguments, dict):
-                    logger.warning(f"Arguments is not a dict or JSON string: {arguments}")
+                    logger.warning(
+                        f"Arguments is not a dict or JSON string: {arguments}"
+                    )
                     arguments = {}
 
                 # Clean up problematic characters
                 if isinstance(arguments, dict):
                     if "keystrokes" in arguments:
-                        arguments["keystrokes"] = to_jsonable_python(arguments["keystrokes"])
+                        arguments["keystrokes"] = to_jsonable_python(
+                            arguments["keystrokes"]
+                        )
                     if "command" in arguments:
                         arguments["command"] = to_jsonable_python(arguments["command"])
 
@@ -166,8 +171,10 @@ def convert_trajectory_to_agent_run(
     row_metadata = row_metadata or {}
     agent_metadata_raw: Dict[str, Any] = {
         "source": source_info or "hf_dataset",
-        "agent": row_metadata.get("agent") or trajectory_data.get("agent", {}).get("name", "unknown"),
-        "model": row_metadata.get("model") or trajectory_data.get("agent", {}).get("model_name", "unknown"),
+        "agent": row_metadata.get("agent")
+        or trajectory_data.get("agent", {}).get("name", "unknown"),
+        "model": row_metadata.get("model")
+        or trajectory_data.get("agent", {}).get("model_name", "unknown"),
         "model_provider": row_metadata.get("model_provider"),
         "date": row_metadata.get("date"),
         "task": row_metadata.get("task"),
@@ -198,7 +205,9 @@ def convert_trajectory_to_agent_run(
         agent_result = result_data.get("agent_result")
         if agent_result:
             if isinstance(agent_result, dict) and "metadata" in agent_result:
-                agent_result = {k: v for k, v in agent_result.items() if k != "metadata"}
+                agent_result = {
+                    k: v for k, v in agent_result.items() if k != "metadata"
+                }
             result_metadata_raw["agent_result"] = agent_result
 
         verifier_result = result_data.get("verifier_result")
@@ -256,13 +265,14 @@ def extract_json_from_content(content: str) -> Optional[Dict[str, Any]]:
             depth -= 1
             if depth == 0:
                 try:
-                    return json.loads(content[start:i+1])
+                    return json.loads(content[start : i + 1])
                 except json.JSONDecodeError:
                     return None
     return None
 
 
 # --- Helper functions for convert_conversations_to_agent_run ---
+
 
 def _parse_system_prompt_with_terminal(content: str) -> tuple:
     """
@@ -351,12 +361,12 @@ def _parse_tool_call_tags(content: str, msg_idx: int) -> tuple:
     parsed_tool_calls: List[ToolCall] = []
 
     # Extract all tool_call blocks
-    tool_call_pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+    tool_call_pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
     tool_call_matches = re.findall(tool_call_pattern, content, re.DOTALL)
 
     # Also try without closing tag (sometimes truncated)
     if not tool_call_matches:
-        tool_call_pattern_open = r'<tool_call>\s*(\{[^<]*)'
+        tool_call_pattern_open = r"<tool_call>\s*(\{[^<]*)"
         tool_call_matches = re.findall(tool_call_pattern_open, content, re.DOTALL)
 
     for tc_idx, tc_json in enumerate(tool_call_matches):
@@ -385,14 +395,20 @@ def _parse_tool_call_tags(content: str, msg_idx: int) -> tuple:
             think_start = content.find("<think>")
             think_end = content.find("</think>")
             if think_end > think_start:
-                thinking = content[think_start:think_end + 8].strip()
-                if thinking and thinking != "<think>\n\n</think>" and thinking != "<think></think>":
+                thinking = content[think_start : think_end + 8].strip()
+                if (
+                    thinking
+                    and thinking != "<think>\n\n</think>"
+                    and thinking != "<think></think>"
+                ):
                     clean_content_parts.append(thinking)
         # Get text before first <tool_call>
         pre_tool_call = content.split("<tool_call>")[0].strip()
         # Remove <think>...</think> from pre_tool_call if already added
         if "<think>" in pre_tool_call and "</think>" in pre_tool_call:
-            pre_tool_call = re.sub(r'<think>.*?</think>', '', pre_tool_call, flags=re.DOTALL).strip()
+            pre_tool_call = re.sub(
+                r"<think>.*?</think>", "", pre_tool_call, flags=re.DOTALL
+            ).strip()
         if pre_tool_call:
             clean_content_parts.append(pre_tool_call)
         if clean_content_parts:
@@ -423,7 +439,10 @@ def _parse_json_commands(content: str, msg_idx: int) -> tuple:
                 id=f"call_{msg_idx}_{cmd_idx}",
                 type="function",
                 function="terminal",
-                arguments={"keystrokes": cmd.get("keystrokes", ""), "duration": cmd.get("duration", 0.1)},
+                arguments={
+                    "keystrokes": cmd.get("keystrokes", ""),
+                    "duration": cmd.get("duration", 0.1),
+                },
                 parse_error=None,
                 view=None,
             )
@@ -449,8 +468,12 @@ def _parse_json_commands(content: str, msg_idx: int) -> tuple:
             think_start = content.find("<think>")
             think_end = content.find("</think>")
             if think_end > think_start:
-                thinking = content[think_start:think_end + 8].strip()
-                if thinking and thinking != "<think>\n\n</think>" and thinking != "<think></think>":
+                thinking = content[think_start : think_end + 8].strip()
+                if (
+                    thinking
+                    and thinking != "<think>\n\n</think>"
+                    and thinking != "<think></think>"
+                ):
                     clean_content_parts.append(thinking)
         # Add analysis and plan from parsed JSON if available
         if parsed_json:
@@ -478,23 +501,23 @@ def _parse_tool_response_feedback(content: str) -> Dict[str, Any]:
         Dict with keys: 'error', 'warning', 'terminal_output', 'raw_content'
     """
     result = {
-        'error': None,
-        'warning': None,
-        'terminal_output': None,
-        'raw_content': content,
+        "error": None,
+        "warning": None,
+        "terminal_output": None,
+        "raw_content": content,
     }
 
     # Check for parsing error feedback
     if content.startswith("Previous response had parsing errors:"):
         # Extract error
-        error_match = re.search(r'ERROR:\s*([^\n]+)', content)
+        error_match = re.search(r"ERROR:\s*([^\n]+)", content)
         if error_match:
-            result['error'] = error_match.group(1).strip()
+            result["error"] = error_match.group(1).strip()
 
         # Extract warnings
-        warning_match = re.search(r'WARNINGS:\s*((?:- [^\n]+\n?)+)', content)
+        warning_match = re.search(r"WARNINGS:\s*((?:- [^\n]+\n?)+)", content)
         if warning_match:
-            result['warning'] = warning_match.group(1).strip()
+            result["warning"] = warning_match.group(1).strip()
 
         # The rest is the "Please fix" message - no terminal output
         return result
@@ -502,19 +525,19 @@ def _parse_tool_response_feedback(content: str) -> Dict[str, Any]:
     # Check for warning feedback
     if content.startswith("Previous response had warnings:"):
         # Extract warnings
-        warning_match = re.search(r'WARNINGS:\s*((?:- [^\n]+\n?)+)', content)
+        warning_match = re.search(r"WARNINGS:\s*((?:- [^\n]+\n?)+)", content)
         if warning_match:
-            result['warning'] = warning_match.group(1).strip()
+            result["warning"] = warning_match.group(1).strip()
 
         # Extract terminal output after "New Terminal Output:"
-        terminal_match = re.search(r'New Terminal Output:\s*\n(.*)', content, re.DOTALL)
+        terminal_match = re.search(r"New Terminal Output:\s*\n(.*)", content, re.DOTALL)
         if terminal_match:
-            result['terminal_output'] = terminal_match.group(1).strip()
+            result["terminal_output"] = terminal_match.group(1).strip()
 
         return result
 
     # No feedback prefix - content is just terminal output
-    result['terminal_output'] = content
+    result["terminal_output"] = content
     return result
 
 
@@ -551,7 +574,9 @@ def convert_conversations_to_agent_run(
             content = msg.get("content", "")
             # Detect system prompt patterns
             if content.startswith("You are ") or content.startswith("You're "):
-                system_content, terminal_content = _parse_system_prompt_with_terminal(content)
+                system_content, terminal_content = _parse_system_prompt_with_terminal(
+                    content
+                )
 
                 # Add system message (without terminal state)
                 system_message_data = {
@@ -583,15 +608,17 @@ def convert_conversations_to_agent_run(
             # Create tool message(s) for each pending tool call
             for tool_call_id in pending_tool_call_ids:
                 # Build tool message content - prefer terminal output if available
-                tool_content = feedback.get('terminal_output') or feedback.get('raw_content', content)
+                tool_content = feedback.get("terminal_output") or feedback.get(
+                    "raw_content", content
+                )
 
                 # Build error dict from parsed feedback - only if there's an actual error
                 # Warnings alone don't constitute an error
                 error_dict = None
-                if feedback.get('error'):
-                    error_dict = {'error': feedback['error']}
-                    if feedback.get('warning'):
-                        error_dict['warning'] = feedback['warning']
+                if feedback.get("error"):
+                    error_dict = {"error": feedback["error"]}
+                    if feedback.get("warning"):
+                        error_dict["warning"] = feedback["warning"]
 
                 tool_message_data = {
                     "role": "tool",
@@ -685,7 +712,9 @@ def convert_conversations_to_agent_run(
     return agent_run
 
 
-def load_dataset_from_hf(dataset_name: str, split: str = "train") -> List[Dict[str, Any]]:
+def load_dataset_from_hf(
+    dataset_name: str, split: str = "train"
+) -> List[Dict[str, Any]]:
     """
     Load a dataset from HuggingFace.
 
@@ -707,7 +736,9 @@ def load_dataset_from_hf(dataset_name: str, split: str = "train") -> List[Dict[s
         raise
 
 
-def process_dataset_row(row: Dict[str, Any], row_idx: int, dataset_name: str) -> Optional[AgentRun]:
+def process_dataset_row(
+    row: Dict[str, Any], row_idx: int, dataset_name: str
+) -> Optional[AgentRun]:
     """
     Process a single row from a HuggingFace dataset.
 
@@ -777,7 +808,9 @@ def process_dataset_row(row: Dict[str, Any], row_idx: int, dataset_name: str) ->
             "run_id": row.get("run_id"),
             "trial_name": row.get("trial_name"),
         }
-        return convert_trajectory_to_agent_run(trajectory_data, result_data, source_info, row_metadata)
+        return convert_trajectory_to_agent_run(
+            trajectory_data, result_data, source_info, row_metadata
+        )
 
     except Exception as e:
         logger.error(f"Row {row_idx}: Error processing - {e}")
@@ -811,7 +844,9 @@ def upload_to_docent(
                 name=collection_name,
                 description=f"RL eval traces: {collection_name}",
             )
-            logger.info(f"Created collection '{collection_name}' with ID: {collection_id}")
+            logger.info(
+                f"Created collection '{collection_name}' with ID: {collection_id}"
+            )
         except Exception as e:
             logger.error(f"Failed to create collection: {e}")
             raise
@@ -904,7 +939,7 @@ def main():
 
     # Process each dataset
     for dataset_name in args.dataset:
-        logger.info(f"\n{'='*60}")
+        logger.info(f"\n{'=' * 60}")
         logger.info(f"Processing dataset: {dataset_name}")
         logger.info("=" * 60)
 
@@ -916,7 +951,9 @@ def main():
 
         # Apply row limit
         if args.max_rows > 0 and len(rows) > args.max_rows:
-            logger.info(f"Limiting to {args.max_rows} rows (total available: {len(rows)})")
+            logger.info(
+                f"Limiting to {args.max_rows} rows (total available: {len(rows)})"
+            )
             rows = rows[: args.max_rows]
 
         # Process rows
@@ -929,11 +966,13 @@ def main():
             if agent_run:
                 dataset_runs.append(agent_run)
 
-        logger.info(f"Successfully processed {len(dataset_runs)} runs from {dataset_name}")
+        logger.info(
+            f"Successfully processed {len(dataset_runs)} runs from {dataset_name}"
+        )
         all_agent_runs.extend(dataset_runs)
 
     # Summary
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info("Processing Summary")
     logger.info("=" * 60)
     logger.info(f"Total agent runs: {len(all_agent_runs)}")
@@ -949,11 +988,17 @@ def main():
 
     # Dry run mode
     if args.dry_run:
-        logger.info(f"\nDRY RUN: Would upload {len(all_agent_runs)} agent runs to Docent")
+        logger.info(
+            f"\nDRY RUN: Would upload {len(all_agent_runs)} agent runs to Docent"
+        )
         if all_agent_runs:
             sample = all_agent_runs[0]
-            logger.info(f"Sample run has {len(sample.transcripts[0].messages)} messages")
-            logger.info(f"Sample metadata: {json.dumps(sample.metadata, indent=2, default=str)[:500]}")
+            logger.info(
+                f"Sample run has {len(sample.transcripts[0].messages)} messages"
+            )
+            logger.info(
+                f"Sample metadata: {json.dumps(sample.metadata, indent=2, default=str)[:500]}"
+            )
         return 0
 
     # Upload to Docent

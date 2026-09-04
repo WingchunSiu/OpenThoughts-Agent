@@ -34,6 +34,7 @@ the test.sh patch but skip the instruction.md hint.
 CLI shape mirrors other v3 patchers in this directory (`--root`, `--dry-run`,
 `--limit`).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,14 +92,13 @@ def patch_test_sh(text: str) -> tuple[str, bool, str]:
     # Indent the injection block to match the go test line so syntax stays
     # consistent inside any if-blocks. Each inner line gets `indent` prepended.
     indented_block = "".join(
-        f"{indent}{line}\n" if line else "\n"
-        for line in TESTSH_INJECTION.split("\n")
+        f"{indent}{line}\n" if line else "\n" for line in TESTSH_INJECTION.split("\n")
     )
     # Strip a trailing extra newline from the join (TESTSH_INJECTION ends with \n).
     if indented_block.endswith("\n\n"):
         indented_block = indented_block[:-1]
 
-    new_text = text[: m.start()] + indented_block + text[m.start():]
+    new_text = text[: m.start()] + indented_block + text[m.start() :]
     if not new_text.endswith("\n"):
         new_text += "\n"
     return new_text, True, "injected"
@@ -179,6 +179,7 @@ def patch_instruction_md(text: str, test_pkg: str) -> tuple[str, bool]:
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
+
 
 def main() -> int:
     p = argparse.ArgumentParser()

@@ -20,22 +20,23 @@ if str(_repo_root) not in sys.path:
 # Handle --list-providers before importing anything heavy
 if "--list-providers" in sys.argv:
     from hpc.cloud_providers import list_providers
+
     print(list_providers(verbose=True))
     sys.exit(0)
 
-import argparse
+import argparse  # noqa: E402
 
-from hpc.launch_utils import PROJECT_ROOT
-from hpc.cloud_launch_utils import CloudLauncher, repo_relative, parse_gpu_count
-from hpc.cloud_sync_utils import sync_outputs
-from hpc.arg_groups import (
+from hpc.launch_utils import PROJECT_ROOT  # noqa: E402
+from hpc.cloud_launch_utils import CloudLauncher, repo_relative, parse_gpu_count  # noqa: E402
+from hpc.cloud_sync_utils import sync_outputs  # noqa: E402
+from hpc.arg_groups import (  # noqa: E402
     add_harbor_args,
     add_harbor_env_arg,
     add_model_compute_args,
     add_hf_upload_args,
     add_tasks_input_arg,
 )
-from hpc.cloud_launch_utils import infer_harbor_env_from_config
+from hpc.cloud_launch_utils import infer_harbor_env_from_config  # noqa: E402
 
 
 class TracegenCloudLauncher(CloudLauncher):
@@ -62,12 +63,19 @@ class TracegenCloudLauncher(CloudLauncher):
 
         # Harbor environment backend (unified --harbor_env, with legacy aliases)
         # Default=None to allow inference from harbor config's environment.type field
-        add_harbor_env_arg(parser, default=None, legacy_names=["--trace-env", "--trace_env"])
+        add_harbor_env_arg(
+            parser, default=None, legacy_names=["--trace-env", "--trace_env"]
+        )
 
         # Tracegen-specific required arguments (underscore primary, kebab alias)
-        parser.add_argument("--datagen_config", required=True,
-                            help="Datagen config with vLLM settings (required).")
-        parser.add_argument("--datagen-config", dest="datagen_config", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--datagen_config",
+            required=True,
+            help="Datagen config with vLLM settings (required).",
+        )
+        parser.add_argument(
+            "--datagen-config", dest="datagen_config", help=argparse.SUPPRESS
+        )
 
         add_tasks_input_arg(parser, required=True)
 
@@ -91,27 +99,49 @@ class TracegenCloudLauncher(CloudLauncher):
             args.tasks_input_path = repo_relative(args.tasks_input_path, self.repo_root)
 
         # Infer --harbor_env from harbor config if not provided
-        infer_harbor_env_from_config(args, args.harbor_config, log_prefix="[tracegen-cloud]")
+        infer_harbor_env_from_config(
+            args, args.harbor_config, log_prefix="[tracegen-cloud]"
+        )
+
+        # Resolve per-model serve config from model_config/ (single source of
+        # truth). agent_kwargs are merged + forwarded here; serve intrinsics +
+        # parallelism are applied downstream by run_tracegen.py on the VM (same
+        # model_config/). When --model isn't passed (model inferred from the
+        # datagen config on the worker), resolution is deferred to the worker.
+        from hpc.model_config_apply import apply_to_launcher
+
+        apply_to_launcher(args, log_prefix="[tracegen-cloud]")
 
     def build_task_command(self, args, remote_output_dir: str) -> List[str]:
         """Build the run_tracegen.py command."""
         cmd: List[str] = [
-            "python", "data/local/run_tracegen.py",
-            "--harbor_config", args.harbor_config,
-            "--datagen_config", args.datagen_config,
-            "--tasks_input_path", args.tasks_input_path,
+            "python",
+            "data/local/run_tracegen.py",
+            "--harbor_config",
+            args.harbor_config,
+            "--datagen_config",
+            args.datagen_config,
+            "--tasks_input_path",
+            args.tasks_input_path,
         ]
 
         if args.model:
             cmd.extend(["--model", args.model])
 
-        cmd.extend([
-            "--agent", args.agent,
-            "--n_concurrent", str(args.n_concurrent),
-            "--n_attempts", str(args.n_attempts),
-            "--gpus", str(args.gpus),
-            "--experiments_dir", remote_output_dir,
-        ])
+        cmd.extend(
+            [
+                "--agent",
+                args.agent,
+                "--n_concurrent",
+                str(args.n_concurrent),
+                "--n_attempts",
+                str(args.n_attempts),
+                "--gpus",
+                str(args.gpus),
+                "--experiments_dir",
+                remote_output_dir,
+            ]
+        )
 
         # Only pass --harbor_env if explicitly specified (otherwise infer from config)
         if args.harbor_env:
@@ -137,17 +167,24 @@ class TracegenCloudLauncher(CloudLauncher):
 
         return cmd
 
-    def get_periodic_sync_paths(self, args, remote_output_dir: str, remote_workdir: str) -> List[tuple]:
+    def get_periodic_sync_paths(
+        self, args, remote_output_dir: str, remote_workdir: str
+    ) -> List[tuple]:
         """Return paths to sync periodically during job execution.
 
         Syncs logs and Harbor trace_jobs directory to track trace generation progress.
         """
         return [
             (f"{remote_output_dir}/logs", str(Path(args.local_sync_dir) / "logs")),
-            (f"{remote_workdir}/trace_jobs", str(Path(args.local_sync_dir) / "trace_jobs")),
+            (
+                f"{remote_workdir}/trace_jobs",
+                str(Path(args.local_sync_dir) / "trace_jobs"),
+            ),
         ]
 
-    def sync_additional_outputs(self, cluster_name: str, args, remote_workdir: str) -> None:
+    def sync_additional_outputs(
+        self, cluster_name: str, args, remote_workdir: str
+    ) -> None:
         """Sync Harbor trace_jobs directory (final sync after job completes)."""
         jobs_remote = f"{remote_workdir}/trace_jobs"
         jobs_local = str(Path(args.local_sync_dir) / "trace_jobs")

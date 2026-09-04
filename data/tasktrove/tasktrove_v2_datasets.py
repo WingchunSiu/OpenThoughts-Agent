@@ -36,9 +36,9 @@ MEDIUM = [
     "laion/swegym-tasks-patched-validated-v2",
     "laion/exp_rpt_stack-bash-v3",
     "laion/exp_rpt_methods2test-large-v2",
-    "laion/exp_rpt_codenet-python-v2",
+    "laion/exp_rpt_codenet-python-v3",
     "DCAgent/exp_rpt_curriculum-medium",
-    "DCAgent/exp_rpt_nemotron-cpp",
+    "laion/exp_rpt_nemotron-cpp-v2",
     "DCAgent/exp_rpt_pr",
     "DCAgent/exp_rpt_stack-pytest-large",
     "DCAgent/exp_rpt_stack-pytest-v2",
@@ -108,8 +108,14 @@ UNKNOWN = [
     "laion/exp_rpt_stack-rust-v2",
 ]
 
-ALL = [(r, "easy") for r in EASY] + [(r, "medium") for r in MEDIUM] + \
-      [(r, "hard") for r in HARD] + [(r, "unknown") for r in UNKNOWN]
+ALL = (
+    [(r, "easy") for r in EASY]
+    + [(r, "medium") for r in MEDIUM]
+    + [(r, "hard") for r in HARD]
+    + [(r, "unknown") for r in UNKNOWN]
+)
 
 if __name__ == "__main__":
-    print(f"EASY={len(EASY)} MEDIUM={len(MEDIUM)} HARD={len(HARD)} UNKNOWN={len(UNKNOWN)} TOTAL={len(ALL)}")
+    print(
+        f"EASY={len(EASY)} MEDIUM={len(MEDIUM)} HARD={len(HARD)} UNKNOWN={len(UNKNOWN)} TOTAL={len(ALL)}"
+    )

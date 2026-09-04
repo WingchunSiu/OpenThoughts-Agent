@@ -11,10 +11,9 @@ dataclass with all extracted values.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from data.generation.utils import (
     LoadedDatagenConfig,
@@ -26,7 +25,18 @@ from hpc.launch_utils import maybe_int
 
 
 # API-based engines that don't require local Ray/vLLM
-API_ENGINES = frozenset({"openai", "anthropic", "azure", "together", "fireworks", "groq", "google_gemini", "gemini_openai"})
+API_ENGINES = frozenset(
+    {
+        "openai",
+        "anthropic",
+        "azure",
+        "together",
+        "fireworks",
+        "groq",
+        "google_gemini",
+        "gemini_openai",
+    }
+)
 
 
 @dataclass

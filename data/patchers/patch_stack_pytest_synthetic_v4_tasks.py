@@ -75,6 +75,7 @@ Apply ON TOP of v3 or v2 — either works; the only mutation is the
 test.sh injection, which is fenced by the v4 marker. Target HF repo:
 ``laion/exp_rpt_stack-pytest-synthetic-gpt5nano-v4``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -100,23 +101,25 @@ from pathlib import Path
 
 STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-    # Conventional agent-provided entrypoint module: tests in this corpus
-    # almost universally do ``from solution import X`` to import what the
-    # agent produced at /app/solution.py. Treat these as always-allowed
-    # so we don't drop tasks that follow the convention.
-    "solution",
-    "app",
-    "src",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+        # Conventional agent-provided entrypoint module: tests in this corpus
+        # almost universally do ``from solution import X`` to import what the
+        # agent produced at /app/solution.py. Treat these as always-allowed
+        # so we don't drop tasks that follow the convention.
+        "solution",
+        "app",
+        "src",
+    }
+)
 
 # Mapping: PyPI distribution name -> the import names it exposes.
 # Used in TWO directions:
@@ -171,13 +174,32 @@ IMPORT_TO_PIP_PKG: dict[str, str] = {
 
 # Built-in pytest fixtures (pytest 7+/8+/9+). Any test param matching
 # one of these is fine; anything else needs a conftest.py.
-PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset({
-    "cache", "capfd", "capfdbinary", "caplog", "capsys", "capsysbinary",
-    "capteesys", "doctest_namespace", "monkeypatch", "pytestconfig",
-    "record_property", "record_testsuite_property", "record_xml_attribute",
-    "recwarn", "subtests", "tmp_path", "tmp_path_factory", "tmpdir",
-    "tmpdir_factory", "request", "testdir", "pytester",
-})
+PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset(
+    {
+        "cache",
+        "capfd",
+        "capfdbinary",
+        "caplog",
+        "capsys",
+        "capsysbinary",
+        "capteesys",
+        "doctest_namespace",
+        "monkeypatch",
+        "pytestconfig",
+        "record_property",
+        "record_testsuite_property",
+        "record_xml_attribute",
+        "recwarn",
+        "subtests",
+        "tmp_path",
+        "tmp_path_factory",
+        "tmpdir",
+        "tmpdir_factory",
+        "request",
+        "testdir",
+        "pytester",
+    }
+)
 
 # Idempotency marker for the injected test.sh block.
 V4_MARKER = "# --- laion v4 patch: install detected test imports ---"
@@ -224,11 +246,23 @@ def _conftest_fixtures(test_dir: Path) -> set[str]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for dec in node.decorator_list:
                 # @pytest.fixture or @fixture
-                if (isinstance(dec, ast.Attribute) and dec.attr == "fixture") or \
-                   (isinstance(dec, ast.Name) and dec.id == "fixture") or \
-                   (isinstance(dec, ast.Call) and (
-                       (isinstance(dec.func, ast.Attribute) and dec.func.attr == "fixture") or
-                       (isinstance(dec.func, ast.Name) and dec.func.id == "fixture"))):
+                if (
+                    (isinstance(dec, ast.Attribute) and dec.attr == "fixture")
+                    or (isinstance(dec, ast.Name) and dec.id == "fixture")
+                    or (
+                        isinstance(dec, ast.Call)
+                        and (
+                            (
+                                isinstance(dec.func, ast.Attribute)
+                                and dec.func.attr == "fixture"
+                            )
+                            or (
+                                isinstance(dec.func, ast.Name)
+                                and dec.func.id == "fixture"
+                            )
+                        )
+                    )
+                ):
                     fixtures.add(node.name)
                     break
     return fixtures
@@ -238,8 +272,9 @@ def _test_function_param_names(tree: ast.AST) -> dict[str, list[str]]:
     """Return ``{test_name: [param_names]}`` for top-level test_* functions."""
     out: dict[str, list[str]] = {}
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
-                node.name.startswith("test_"):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.name.startswith("test_"):
             params: list[str] = []
             args = node.args
             for a in args.posonlyargs + args.args + args.kwonlyargs:
@@ -279,6 +314,7 @@ def _top_level_imports(tree: ast.AST) -> tuple[list[str], bool]:
 # ---------------------------------------------------------------------------
 # Filter passes
 # ---------------------------------------------------------------------------
+
 
 def syntax_passes(test_solution: Path) -> tuple[bool, str]:
     try:
@@ -353,6 +389,7 @@ def relative_imports_pass(test_solution: Path) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Mutation: inject pip-installs into test.sh
 # ---------------------------------------------------------------------------
+
 
 def _detect_pip_packages(test_solution: Path) -> list[str]:
     """Return a deterministic, deduplicated list of PyPI package names that
@@ -442,6 +479,7 @@ def patch_test_sh(test_sh: Path, pkgs: list[str]) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+
 
 def filter_one_task(task_dir: Path) -> tuple[str, str]:
     """Run all four filter passes. Return ``(verdict, reason)``.
@@ -552,8 +590,16 @@ def main() -> int:
     print("=" * 60)
     yld = counts["keep"] / total * 100 if total else 0.0
     print(f"Total: {total}  Kept: {counts['keep']} ({yld:.1f}%)  Dry={args.dry_run}")
-    for k in ("keep", "drop_syntax", "drop_import", "drop_fixture",
-              "drop_relative", "drop_other", "patched", "patch_skipped"):
+    for k in (
+        "keep",
+        "drop_syntax",
+        "drop_import",
+        "drop_fixture",
+        "drop_relative",
+        "drop_other",
+        "patched",
+        "patch_skipped",
+    ):
         v = counts[k]
         print(f"  {k:<14}: {v:>5}")
         for ex in examples.get(k, [])[:5]:

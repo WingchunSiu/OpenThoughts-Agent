@@ -48,6 +48,22 @@ elif [ -n "${DCFT:-}" ]; then
 else
   WORKDIR="$PWD"
 fi
+
+# --- WORKDIR sanity guard (HARD FAIL — do not remove) ---
+# If WORKDIR does not point at the OpenThoughts-Agent repo root, every downstream
+# `source "$WORKDIR/hpc/..."` and `python -m hpc....` fails cryptically and the job
+# dies instantly. This happens when a job is submitted from outside the repo with
+# DCFT/DCFT_PRIVATE unset, so the fallback resolves WORKDIR=$PWD (the wrong dir).
+# Fail loudly and immediately instead of running from the wrong place.
+if [ ! -f "$WORKDIR/hpc/shell_utils/triton_cache.sh" ]; then
+  echo "FATAL: WORKDIR='$WORKDIR' is not the OpenThoughts-Agent repo root." >&2
+  echo "       (marker hpc/shell_utils/triton_cache.sh not found under it)." >&2
+  echo "       Submit the job FROM the repo dir with DCFT exported — on Jupiter:" >&2
+  echo "         cd /e/scratch/jureap59/feuer1/OpenThoughts-Agent && export DCFT=\$PWD" >&2
+  echo "       or pass --chdir <repo> to sbatch. Do NOT submit from \$HOME or a scratch subdir." >&2
+  echo "       See .agents/skills/datagen-launch for the correct launch procedure." >&2
+  exit 1
+fi
 cd "$WORKDIR"
 
 if [ -z "${DCFT:-}" ]; then
@@ -137,7 +153,7 @@ cleanup_ray_logs() {
   done
 
   # --- Worker node logs (clusters with intra-node SSH, e.g. Jupiter) ---
-  local WORKER_LOG_SCRIPT="$WORKDIR/scripts/ray/collect_worker_ray_logs.sh"
+  local WORKER_LOG_SCRIPT="$WORKDIR/hpc/ray/collect_worker_ray_logs.sh"
   if [[ -f "$WORKER_LOG_SCRIPT" ]]; then
     source "$WORKER_LOG_SCRIPT"
     collect_worker_ray_logs "{experiments_dir}/ray_logs"

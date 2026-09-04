@@ -66,13 +66,13 @@ CLI
 
 Idempotency: re-running is a no-op. Each output file is marker-gated.
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 from textwrap import dedent
-from typing import Optional
 
 import yaml
 
@@ -83,7 +83,9 @@ import yaml
 
 V3_DOCKERFILE_MARKER = "# --- laion v3 patch: ghactions unified base ---"
 V3_TEST_SH_MARKER = "# --- laion v3 patch: ghactions verifier ---"
-V3_INSTRUCTION_MARKER = "<!-- --- laion v3 patch: ghactions workflow-authoring task --- -->"
+V3_INSTRUCTION_MARKER = (
+    "<!-- --- laion v3 patch: ghactions workflow-authoring task --- -->"
+)
 V3_COMPARE_PY_MARKER = "# --- laion v3 patch: ghactions comparator ---"
 
 
@@ -341,6 +343,7 @@ if __name__ == "__main__":
 # The instruction is built from the reference YAML on a per-task basis,
 # so it lives as a function rather than a fixed string.
 
+
 def _summarize_step(step):
     """Return a short human description of a workflow step.
 
@@ -456,7 +459,9 @@ def _build_instruction(ref_yaml_text):
                 if len(summaries) > 12:
                     lines.append(f"    - ... ({len(summaries) - 12} more steps)")
     else:
-        lines.append("- (reference workflow has no `jobs:` block; produce any valid workflow with an `on:` trigger and at least one job)")
+        lines.append(
+            "- (reference workflow has no `jobs:` block; produce any valid workflow with an `on:` trigger and at least one job)"
+        )
 
     lines.append("")
     lines.append("## Notes")
@@ -495,7 +500,7 @@ REFERENCE_YAML_CANDIDATES = (
 _PY_PREAMBLE_LINES = (
     "import sys",
     "sys.path.insert(0, '/app')",
-    "sys.path.insert(0, \"/app\")",
+    'sys.path.insert(0, "/app")',
 )
 
 
@@ -595,25 +600,27 @@ def patch_task(task_dir, dry_run):
     # Find or use the existing reference YAML.
     ref_path = _find_reference_yaml(tests_dir)
     if ref_path is None:
-        return {"status": "missing_reference",
-                "reason": "no reference YAML file found"}
+        return {"status": "missing_reference", "reason": "no reference YAML file found"}
 
     try:
         raw = ref_path.read_text()
     except (OSError, UnicodeDecodeError) as exc:
-        return {"status": "error",
-                "reason": f"read error: {exc.__class__.__name__}"}
+        return {"status": "error", "reason": f"read error: {exc.__class__.__name__}"}
 
     cleaned = _strip_py_preamble(raw) if ref_path.suffix == ".py" else raw
     try:
         loaded = yaml.safe_load(cleaned)
     except yaml.YAMLError as exc:
-        return {"status": "dropped_invalid_yaml",
-                "reason": f"yaml.safe_load failed: {exc.__class__.__name__}"}
+        return {
+            "status": "dropped_invalid_yaml",
+            "reason": f"yaml.safe_load failed: {exc.__class__.__name__}",
+        }
 
     if loaded is None or not isinstance(loaded, dict):
-        return {"status": "dropped_invalid_yaml",
-                "reason": "YAML parsed to non-mapping / empty"}
+        return {
+            "status": "dropped_invalid_yaml",
+            "reason": "YAML parsed to non-mapping / empty",
+        }
 
     # All checks passed — apply patches.
     if not env_dir.is_dir() and not dry_run:
@@ -638,14 +645,18 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="v3 patch for DCAgent/exp_rpt_ghactions tasks.",
     )
-    p.add_argument("--root", required=True,
-                   help="Tasks dir (extracted parquet)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Report actions only; write nothing")
-    p.add_argument("--limit", type=int, default=0,
-                   help="Patch at most N tasks (0 = all)")
-    p.add_argument("--dropped-out", default=None,
-                   help="Optional path to write dropped task names + reason")
+    p.add_argument("--root", required=True, help="Tasks dir (extracted parquet)")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Report actions only; write nothing"
+    )
+    p.add_argument(
+        "--limit", type=int, default=0, help="Patch at most N tasks (0 = all)"
+    )
+    p.add_argument(
+        "--dropped-out",
+        default=None,
+        help="Optional path to write dropped task names + reason",
+    )
     return p.parse_args()
 
 
@@ -677,12 +688,14 @@ def main():
             dropped.append(f"{td.name}\tdropped_invalid_yaml\t{result['reason']}")
             if not args.dry_run:
                 import shutil
+
                 shutil.rmtree(td)
         elif status == "missing_reference":
             n_missing += 1
             dropped.append(f"{td.name}\tmissing_reference\t{result['reason']}")
             if not args.dry_run:
                 import shutil
+
                 shutil.rmtree(td)
         else:
             n_error += 1

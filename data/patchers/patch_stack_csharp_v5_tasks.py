@@ -52,6 +52,7 @@ Usage:
       --root /path/to/exp_rpt_stack-csharp-v5 \
       [--dry-run] [--limit N] [--drop-log path.tsv]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -215,7 +216,7 @@ def _rewrite_dotnet_add_line(line: str) -> tuple[str, bool]:
             + tail_match.group(1)
             + tail_match.group(2)
             + f' --version "{version_arg}"'
-            + rest[tail_match.end():]
+            + rest[tail_match.end() :]
         )
     else:
         new_rest = rest

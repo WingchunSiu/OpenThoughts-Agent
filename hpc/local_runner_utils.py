@@ -3,22 +3,23 @@
 It provides managed subprocess handling for Ray clusters and vLLM servers,
 datagen config parsing, Docker runtime setup, and Harbor command building.
 """
+
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import resource
 import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from hpc.vllm_utils import _build_vllm_cli_args, run_endpoint_health_check
-from hpc.launch_utils import generate_served_model_id, hosted_vllm_alias, maybe_int, PROJECT_ROOT
+from hpc.launch_utils import generate_served_model_id, hosted_vllm_alias, maybe_int
 from hpc.arg_groups import (
     add_harbor_args,
     add_model_compute_args,
@@ -30,8 +31,6 @@ from hpc.arg_groups import (
 from hpc.model_utils import (
     is_gpt_oss_model,
     setup_gpt_oss_tiktoken,
-    get_model_specific_env_vars,
-    GPT_OSS_TIKTOKEN_FILES,
 )
 
 # Re-export harbor utilities for backward compatibility
@@ -44,10 +43,10 @@ from hpc.harbor_utils import (
     serialize_agent_kwargs,
     default_job_name,
     build_harbor_command,
+    prune_refire_errored_trials,
     merge_agent_kwargs,
     collect_extra_agent_kwargs,
     resolve_jobs_dir_path,
-    build_endpoint_meta,
     load_endpoint_metadata,
 )
 
@@ -56,6 +55,58 @@ from scripts.harbor.job_config_utils import load_job_config
 
 # Re-export docker runtime utilities for backward compatibility
 from hpc.docker_runtime import setup_docker_runtime_if_needed
+
+# Harbor's OpenCode agent (AgentName.OPENCODE.value). Unlike the litellm-backed
+# agents (terminus-2 etc.) which want a ``hosted_vllm/<id>`` model alias, opencode
+# derives its provider from the ``provider/model`` split. We route it through a
+# ``vllm/<id>`` alias: harbor registers the ``vllm`` provider via
+# "@ai-sdk/openai-compatible" (POST /v1/chat/completions) and wires
+# baseURL/apiKey from OPENAI_BASE_URL/OPENAI_API_KEY — see harbor
+# OpenCode._build_register_config_command. The built-in ``openai`` provider id
+# would instead call the Responses API (POST /v1/responses), which vLLM 404s.
+OPENCODE_AGENT_NAME = "opencode"
+
+
+def opencode_model_routing(
+    agent_name: Optional[str],
+    served_model_id: Optional[str],
+    serving_meta: Optional[Dict[str, Any]],
+) -> Optional[Tuple[str, str]]:
+    """Return ``(harbor_model, openai_base_url)`` for opencode, else ``None``.
+
+    Harbor's OpenCode agent splits ``model_name`` into ``provider/model``. We hand
+    it ``vllm/<served_id>`` so harbor registers the ``vllm`` provider through the
+    "@ai-sdk/openai-compatible" npm package (which POSTs /v1/chat/completions) and
+    injects ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` from the env into
+    ``opencode.json`` (``_build_register_config_command``). Using the built-in
+    ``openai`` provider id instead makes opencode call the Responses API
+    (POST /v1/responses), which vLLM 404s (``AI_APICallError: Not Found``); the
+    default ``hosted_vllm/<id>`` alias — required by the litellm-backed agents like
+    terminus-2 — has no baseURL and dies (``undefined/chat/completions``).
+
+    For opencode we therefore hand harbor ``vllm/<served_id>`` (same served id,
+    only the provider prefix differs, so vLLM still serves the same model) and
+    export ``OPENAI_BASE_URL`` = the resolved ``api_base`` (the ingress
+    ``/proxy/otagent-<slug>/v1`` URL in controller mode, or the local vLLM
+    ``api_base`` otherwise). ``OPENAI_API_KEY`` is already set on the controller
+    path by ``inject_ingress_agent_key``.
+
+    Returns ``None`` for any non-opencode agent (or when there is no served id,
+    e.g. an API engine) so the caller keeps the hosted_vllm alias untouched.
+
+    Raises:
+        ValueError: opencode is selected but no ``api_base`` resolved — the
+            ``vllm`` provider has nowhere to point and would 404/undefined.
+    """
+    if agent_name != OPENCODE_AGENT_NAME or not served_model_id:
+        return None
+    api_base = (serving_meta or {}).get("api_base")
+    if not api_base:
+        raise ValueError(
+            "opencode requires a resolved api_base to export OPENAI_BASE_URL "
+            "(its `vllm` provider reads the base URL from the env); none resolved."
+        )
+    return f"vllm/{served_model_id}", api_base
 
 
 @dataclass
@@ -142,7 +193,7 @@ class FileDescriptorMonitor:
             percent_used = (current_fds / soft_limit * 100) if soft_limit > 0 else 0
 
             return current_fds, soft_limit, hard_limit, percent_used
-        except Exception as e:
+        except Exception:
             return -1, -1, -1, 0.0
 
     def _log_status(self) -> None:
@@ -172,7 +223,7 @@ class FileDescriptorMonitor:
 
         if percent >= 75:
             print(
-                f"[fd-monitor] Consider reducing --n_concurrent or increasing ulimit -n",
+                "[fd-monitor] Consider reducing --n_concurrent or increasing ulimit -n",
                 flush=True,
             )
 
@@ -207,6 +258,40 @@ class FileDescriptorMonitor:
         # Final status report
         self._log_status()
         print("[fd-monitor] Stopped", flush=True)
+
+
+def _cli_has_option(*flags: str) -> bool:
+    """Return whether the current command line provided any of ``flags``.
+
+    Argparse stores parsed values but not whether a value came from a default,
+    so a config-vs-CLI override decision needs this to tell an explicit
+    ``--n_attempts 1`` apart from the default 1.
+    """
+    for arg in sys.argv[1:]:
+        token = arg.split("=", 1)[0]
+        if token in flags:
+            return True
+    return False
+
+
+def _extract_injected_jobs_dir(harbor_extra_args: Optional[List[str]]) -> Optional[str]:
+    """Return the last ``--jobs-dir`` value injected via ``--harbor_extra_arg``.
+
+    The Iris eval launcher appends ``--harbor_extra_arg=--jobs-dir=<root>`` so
+    Harbor routes trace_jobs to a chosen root. The in-pod DB/HF upload must read
+    the same root. Accepts both the ``--jobs-dir=<v>`` and ``--jobs-dir <v>``
+    forms; the last occurrence wins (mirrors argparse's last-wins semantics).
+    """
+    if not harbor_extra_args:
+        return None
+    found: Optional[str] = None
+    tokens = list(harbor_extra_args)
+    for i, tok in enumerate(tokens):
+        if tok.startswith("--jobs-dir="):
+            found = tok.split("=", 1)[1]
+        elif tok == "--jobs-dir" and i + 1 < len(tokens):
+            found = tokens[i + 1]
+    return found or None
 
 
 def _open_log_file(log_path: Optional[Path]) -> tuple:
@@ -283,6 +368,13 @@ def start_ray(
     return process
 
 
+# vLLM's internal collective_rpc watchdog (VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS) is derived from our
+# serve-bringup healthcheck window times this ratio, so the OUTER healthcheck (run_endpoint_health_check)
+# always decides a slow/stuck bringup first — a clean "healthcheck exhausted" failure rather than vLLM
+# tripping EngineDeadError mid first-inference JIT. >1 guarantees the internal watchdog never pre-empts us.
+EXECUTE_MODEL_TIMEOUT_HEALTHCHECK_RATIO = 1.5
+
+
 def start_vllm_controller(
     model: str,
     host: str,
@@ -297,6 +389,7 @@ def start_vllm_controller(
     served_model_name: Optional[str] = None,
     extra_cli_args: Optional[List[str]] = None,
     extra_env_vars: Optional[dict] = None,
+    execute_model_timeout: Optional[int] = None,
 ) -> ManagedProcess:
     """Start a vLLM controller process.
 
@@ -324,6 +417,14 @@ def start_vllm_controller(
 
     if extra_env_vars:
         env.update(extra_env_vars)
+
+    # Couple the internal execute_model watchdog to our healthcheck window (see the ratio constant).
+    # setdefault so an explicit VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS (from the inherited env or the
+    # datagen config's env_vars) still wins.
+    if execute_model_timeout is not None:
+        env.setdefault(
+            "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", str(int(execute_model_timeout))
+        )
 
     cmd = [
         sys.executable,
@@ -377,6 +478,136 @@ def start_vllm_controller(
 
     process = ManagedProcess(name="vllm_controller", proc=popen, _log_handle=log_file)
     return process
+
+
+def _drop_tpu_unsupported_serve_flags(cli_args: List[str]) -> List[str]:
+    """Strip serve flags the tpu-inference api_server rejects, from a vLLM CLI arg list.
+
+    ``--swap-space`` (CPU KV offload) is a GPU-only vLLM concept. The tpu-inference
+    api_server (the iris/TPU serve path via ``start_vllm_iris_controller.py``) has no
+    such argument and exits with ``error: unrecognized arguments: --swap-space``,
+    tearing down the whole serve (vLLM never comes up → Ray torn down → job dead).
+
+    A ``swap_space`` reaches ``_vllm_cli_args`` from either a model_config entry
+    (``model_config/<org>/<slug>.yaml``) or a datagen config's ``vllm_server`` block,
+    regardless of accelerator; this drops it (and its value) ONLY on the TPU serve
+    path. GPU serves keep it. This mirrors the same-hazard guards elsewhere:
+    ``model_config/_patterns.yaml`` (the TPU qwen3.5 profile omits swap_space) and
+    ``eval/build_vllm_cmd.sh`` (probes ``--help`` before adding ``--swap-space``).
+    The build_vllm_cmd.sh guard does NOT cover this path — the iris TPU serve command
+    is built in Python here, not by sourcing that shell helper.
+    """
+    out: List[str] = []
+    i = 0
+    n = len(cli_args)
+    while i < n:
+        tok = cli_args[i]
+        if tok == "--swap-space":
+            # Skip the flag plus its value token (if present and not itself a flag).
+            if i + 1 < n and not str(cli_args[i + 1]).startswith("--"):
+                i += 2
+            else:
+                i += 1
+            continue
+        if isinstance(tok, str) and tok.startswith("--swap-space="):
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _add_tpu_serve_default_flags(
+    cli_args: List[str], default_flags: List[str]
+) -> List[str]:
+    """Append cluster-level default TPU-serve flags that aren't already present.
+
+    Cluster-wide defaults for the iris/TPU vLLM api_server (e.g.
+    ``--enable-prefix-caching`` on the agentic-eval path — see
+    ``EvalRunner.TPU_SERVE_DEFAULT_CLI_ARGS``). A default flag is only added when
+    neither it, its ``=value`` form, nor its ``--no-<flag>`` negation already
+    appears in ``cli_args`` — so an explicit model_config / datagen-config setting
+    (including an explicit opt-out) always wins over the cluster default.
+    """
+    if not default_flags:
+        return list(cli_args)
+
+    def _stem(tok: str) -> str:
+        # "--enable-prefix-caching=1" -> "enable-prefix-caching";
+        # "--no-enable-prefix-caching" -> "enable-prefix-caching".
+        name = str(tok).lstrip("-").split("=", 1)[0]
+        if name.startswith("no-"):
+            name = name[3:]
+        return name
+
+    present = {
+        _stem(tok) for tok in cli_args if isinstance(tok, str) and tok.startswith("--")
+    }
+    out = list(cli_args)
+    for flag in default_flags:
+        if _stem(flag) not in present:
+            out.append(flag)
+    return out
+
+
+def start_vllm_iris_controller(
+    model: str,
+    host: str,
+    ray_port: int,
+    api_port: int,
+    tensor_parallel_size: int,
+    pipeline_parallel_size: int,
+    data_parallel_size: int,
+    endpoint_path: Path,
+    controller_script: Path,
+    log_path: Optional[Path] = None,
+    served_model_name: Optional[str] = None,
+    extra_cli_args: Optional[List[str]] = None,
+    extra_env_vars: Optional[dict] = None,
+) -> ManagedProcess:
+    """Start the iris multi-host vLLM controller (start_vllm_iris_controller.py).
+
+    Unlike :func:`start_vllm_controller`, the iris controller bootstraps the
+    cross-host Ray cluster itself (head on IRIS_TASK_ID==0, workers elsewhere),
+    discovers the head IP at runtime, and takes ``--ray-port`` rather than a
+    caller-supplied ``--ray-address``. The rendezvous dir is read from
+    ``OT_AGENT_IRIS_RENDEZVOUS_DIR`` (set by the iris launcher). On worker ranks
+    this process blocks as a Ray node and never writes the endpoint JSON.
+    """
+    env = os.environ.copy()
+    env["VLLM_MODEL_PATH"] = model
+    env["PYTHONUNBUFFERED"] = "1"
+    if extra_env_vars:
+        env.update(extra_env_vars)
+
+    cmd = [
+        sys.executable,
+        str(controller_script),
+        "--host",
+        host,
+        "--port",
+        str(api_port),
+        "--model",
+        model,
+        "--ray-port",
+        str(ray_port),
+        "--tensor-parallel-size",
+        str(tensor_parallel_size),
+        "--pipeline-parallel-size",
+        str(pipeline_parallel_size),
+        "--data-parallel-size",
+        str(data_parallel_size),
+        "--endpoint-json",
+        str(endpoint_path),
+    ]
+    if served_model_name:
+        cmd.extend(["--served-model-name", served_model_name])
+    if extra_cli_args:
+        cmd.extend(extra_cli_args)
+
+    stdout, stderr, log_file = _open_log_file(log_path)
+    popen = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, env=env)
+    return ManagedProcess(name="vllm_iris_controller", proc=popen, _log_handle=log_file)
 
 
 def wait_for_endpoint(
@@ -484,6 +715,7 @@ def apply_datagen_defaults(args: argparse.Namespace) -> None:
     # Build CLI args and env vars from vllm_server config
     if parsed.vllm_server_config:
         from dataclasses import asdict
+
         vllm_dict = asdict(parsed.vllm_server_config)
         cli_args, env_vars = _build_vllm_cli_args(vllm_dict)
         args._vllm_cli_args = cli_args
@@ -532,6 +764,12 @@ class LocalHarborRunner:
     DEFAULT_N_CONCURRENT: int = 16
     DATAGEN_CONFIG_REQUIRED: bool = False
     DEFAULT_ENDPOINT_FILENAME: str = "vllm_endpoint.json"
+    # Cluster-level default vLLM CLI flags appended to the iris/TPU serve command
+    # (start_vllm_iris_controller.py -> tpu-inference api_server) for ALL models on
+    # that path, applied idempotently via _add_tpu_serve_default_flags (an explicit
+    # model_config / datagen-config flag, incl. an opt-out, always wins). Empty by
+    # default; overridden per-runner (e.g. EvalRunner enables prefix caching).
+    TPU_SERVE_DEFAULT_CLI_ARGS: List[str] = []
 
     def __init__(self, args: argparse.Namespace, repo_root: Path):
         """Initialize the runner.
@@ -591,9 +829,11 @@ class LocalHarborRunner:
             default=DEFAULT_FD_MONITOR_INTERVAL,
             metavar="SECONDS",
             help=f"Interval for file descriptor monitoring (default: {DEFAULT_FD_MONITOR_INTERVAL}s). "
-                 "Set to 0 to disable.",
+            "Set to 0 to disable.",
         )
-        parser.add_argument("--fd-monitor-interval", dest="fd_monitor_interval", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--fd-monitor-interval", dest="fd_monitor_interval", help=argparse.SUPPRESS
+        )
 
     def get_env_type(self) -> str:
         """Get the environment type from --harbor-env.
@@ -648,7 +888,9 @@ class LocalHarborRunner:
         print(f"=== Local {self.JOB_PREFIX.title()} Runner ===")
         print(f"  Model: {args.model}")
         if needs_local_vllm:
-            print(f"  TP/PP/DP: {args.tensor_parallel_size}/{args.pipeline_parallel_size}/{args.data_parallel_size}")
+            print(
+                f"  TP/PP/DP: {args.tensor_parallel_size}/{args.pipeline_parallel_size}/{args.data_parallel_size}"
+            )
             print(f"  GPUs: {args.gpus}")
         else:
             print(f"  Engine: {engine_type} (API)")
@@ -664,9 +906,39 @@ class LocalHarborRunner:
         # Set up Docker runtime if using docker backend
         setup_docker_runtime_if_needed(self.get_env_type())
 
+        # Resolve per-model serve config from model_config/ (the single source of
+        # truth), filling in anything the CLI / datagen config didn't specify.
+        # Runs AFTER apply_datagen_defaults (so datagen/CLI values win) and BEFORE
+        # the tp=1 defaults below (so a model_config tp is honored). On an iris
+        # worker (OT_AGENT_IRIS_SERVE=1) tp/pp/dp are left alone — iris derives
+        # tensor-parallel from the TPU chip count.
+        from hpc.model_config_apply import apply_to_runner
+
+        _iris_serve = os.environ.get("OT_AGENT_IRIS_SERVE") == "1"
+        apply_to_runner(
+            args,
+            log_prefix=f"[{self.JOB_PREFIX}-local]",
+            apply_parallelism_fields=not _iris_serve,
+            needs_local_vllm=getattr(args, "_needs_local_vllm", True),
+        )
+
         # Set parallelism defaults (only relevant for local vLLM)
         if args.tensor_parallel_size is None:
-            args.tensor_parallel_size = 1
+            # On the iris TPU serve path, derive TP from the TPU chip count (the
+            # launcher puts it in args.gpus: v6e-N -> gpus=N; see the "--gpus is
+            # the downstream knob for vLLM tensor_parallel_size" note in
+            # launch_eval_iris.py). Sharding across ALL chips is what lets the KV
+            # cache span their aggregate HBM. TP=1 on a v6e-4 strands the 8B model
+            # on ONE chip (15.3 GiB weights + ~13.5 GiB KV -> a 98k-token cache ->
+            # 2.39x concurrency), so under 32-way agentic concurrency prefixes
+            # evict before reuse -> ~5% prefix-cache hit -> slow prefill ->
+            # AgentTimeout / deflated scores. TP=chips (~7x KV tokens, ~17x
+            # concurrency on v6e-4) restores reuse. (diagnosed + fixed 2026-07-06;
+            # pairs with the EvalRunner --enable-prefix-caching default below.)
+            if _iris_serve and getattr(args, "gpus", None):
+                args.tensor_parallel_size = int(args.gpus)
+            else:
+                args.tensor_parallel_size = 1
         if args.pipeline_parallel_size is None:
             args.pipeline_parallel_size = 1
         if args.data_parallel_size is None:
@@ -675,11 +947,24 @@ class LocalHarborRunner:
         # Validate model - required for local vLLM, optional for API engines
         needs_local_vllm = getattr(args, "_needs_local_vllm", True)
         if args.model is None and needs_local_vllm:
-            raise ValueError("Provide --model or supply a datagen config with vllm_server.model_path.")
+            raise ValueError(
+                "Provide --model or supply a datagen config with vllm_server.model_path."
+            )
 
-        # Generate served model ID (only for local vLLM)
+        # Generate served model ID (only for local vLLM).
+        #
+        # Derive the ID deterministically from the harbor job_name so it is
+        # *stable across launches* of the same job. The served-model-name is
+        # baked into the materialized harbor config as
+        # ``agents[].model_name = hosted_vllm/<id>``; if it changes between the
+        # first run and a preempt-resume, harbor's _maybe_init_existing_job
+        # equality check sees a divergent ``agents[0].model_name`` and raises
+        # FileExistsError. Passing job_name selects the sha256-derived branch
+        # in generate_served_model_id (vs the time-based fallback, which mints
+        # a fresh ID every launch). Ad-hoc local runs without --job_name fall
+        # back to the timestamp ID; they are not resumed, so drift is harmless.
         if needs_local_vllm:
-            served_model_id = generate_served_model_id()
+            served_model_id = generate_served_model_id(job_name=args.job_name)
             args._served_model_id = served_model_id
             args._harbor_model_name = hosted_vllm_alias(served_model_id)
         else:
@@ -691,7 +976,9 @@ class LocalHarborRunner:
         if args.gpus is None:
             args.gpus = max(
                 1,
-                args.tensor_parallel_size * args.pipeline_parallel_size * args.data_parallel_size,
+                args.tensor_parallel_size
+                * args.pipeline_parallel_size
+                * args.data_parallel_size,
             )
         if args.cpus is None:
             args.cpus = os.cpu_count() or 16
@@ -707,8 +994,29 @@ class LocalHarborRunner:
 
         # Load Harbor config (raw dict for backward compat)
         harbor_config_data = load_harbor_config(args.harbor_config)
-        jobs_dir_value = harbor_config_data.get("jobs_dir") if isinstance(harbor_config_data, dict) else None
+        jobs_dir_value = (
+            harbor_config_data.get("jobs_dir")
+            if isinstance(harbor_config_data, dict)
+            else None
+        )
         args._jobs_dir_path = resolve_jobs_dir_path(jobs_dir_value, self.repo_root)
+        # If a --jobs-dir was injected on the CLI (the Iris GPU eval launcher does
+        # this to route Harbor's trace_jobs to a pod-local scratch root or durable
+        # R2), Harbor writes each job under <injected>/<job_name>/ — NOT the
+        # config-derived jobs_dir. Point the in-pod DB/HF upload
+        # (_maybe_upload_results reads <_jobs_dir_path>/<job_name>) at the same
+        # root so it finds the results. Only override for LOCAL filesystem paths;
+        # remote schemes (gs://, s3://) are not read back by Path.exists() in-pod.
+        injected_jobs_dir = _extract_injected_jobs_dir(
+            getattr(args, "harbor_extra_arg", None)
+        )
+        if injected_jobs_dir and "://" not in injected_jobs_dir:
+            args._jobs_dir_path = Path(injected_jobs_dir).expanduser()
+            print(
+                f"[{self.JOB_PREFIX}-local] jobs-dir override: in-pod upload will read "
+                f"{args._jobs_dir_path}/<job_name> (matches injected --jobs-dir)",
+                flush=True,
+            )
         args._harbor_config_data = harbor_config_data
 
         # Load structured JobConfig to extract defaults (same as HPC eval launcher)
@@ -719,17 +1027,26 @@ class LocalHarborRunner:
         # (CLI default is set in add_model_compute_args, check if it's still at that default)
         # Compat with both legacy Harbor (nested orchestrator) and unified Harbor (top-level field).
         from scripts.harbor._harbor_compat import get_orchestrator_field
+
         config_n_concurrent = get_orchestrator_field(harbor_job, "n_concurrent_trials")
         if config_n_concurrent is not None and config_n_concurrent > 0:
-            # Only override if args.n_concurrent is at the class default
-            if getattr(args, "n_concurrent", None) == self.DEFAULT_N_CONCURRENT:
+            # Only override if the CLI didn't pass it AND it's at the class default.
+            if (
+                not _cli_has_option("--n_concurrent", "--n-concurrent")
+                and getattr(args, "n_concurrent", None) == self.DEFAULT_N_CONCURRENT
+            ):
                 args.n_concurrent = int(config_n_concurrent)
 
         # Apply n_attempts from harbor config if CLI didn't override
         config_n_attempts = harbor_job.n_attempts
         if config_n_attempts is not None and config_n_attempts > 0:
-            # Only override if args.n_attempts is at the default of 1
-            if getattr(args, "n_attempts", 1) == 1:
+            # Only override if the CLI didn't pass it AND it's at the default of 1.
+            # Without the _cli_has_option guard, an explicit `--n_attempts 1` is
+            # indistinguishable from the default and gets clobbered by the config.
+            if (
+                not _cli_has_option("--n_attempts", "--n-attempts")
+                and getattr(args, "n_attempts", 1) == 1
+            ):
                 args.n_attempts = int(config_n_attempts)
 
         # Subclass-specific validation
@@ -767,21 +1084,135 @@ class LocalHarborRunner:
             self._fd_monitor = None
 
         terminate_processes(self.processes[::-1])
-        # Only stop Ray if we started it (local vLLM engines)
+        # Only stop Ray if we started it (local vLLM engines). In iris-serve
+        # mode the iris controller owns the Ray cluster and runs its own
+        # `ray stop` on shutdown, so we must not race it here.
         needs_local_vllm = getattr(self.args, "_needs_local_vllm", True)
-        if needs_local_vllm:
+        iris_serve = os.environ.get("OT_AGENT_IRIS_SERVE") == "1"
+        if needs_local_vllm and not iris_serve:
             subprocess.run(["ray", "stop", "--force"], check=False)
+
+    @contextmanager
+    def _serving_endpoint_meta(
+        self, experiments_dir: Path, job_name: str
+    ) -> Iterator[Optional[Dict[str, Any]]]:
+        """Yield the endpoint_meta harbor should use for this run.
+
+        When ``--record_literal`` / ``--ingress_mode controller`` are set, co-locate
+        harbor's RecordProxy in front of the advertised vLLM and/or register a
+        controller-ingress endpoint with the iris controller, mirroring the SLURM
+        ``TracegenJobRunner`` combined path. Inert otherwise: yields
+        ``self._endpoint_meta`` UNCHANGED and starts no server, so the eval path and
+        the default (pinggy) datagen path are byte-identical.
+        """
+        record_literal = getattr(self.args, "record_literal", False)
+        ingress_mode = getattr(self.args, "ingress_mode", "pinggy")
+        if not record_literal and ingress_mode != "controller":
+            yield self._endpoint_meta
+            return
+
+        # Reachability on the iris path comes ONLY from the controller registration
+        # (there is no pinggy tunnel wired here), so literal capture needs controller.
+        if record_literal and ingress_mode != "controller":
+            raise ValueError(
+                "--record_literal on the iris/local path requires --ingress_mode controller "
+                "(no pinggy tunnel here to expose the loopback RecordProxy)."
+            )
+
+        from hpc.literal_proxy_utils import (
+            maybe_serve_literal_proxy,
+            DEFAULT_LITERAL_PROXY_PORT,
+        )
+        from hpc.ingress_utils import (
+            controller_registration_plan,
+            register_controller_endpoint,
+            inject_ingress_agent_key,
+            build_controller_endpoint_meta,
+        )
+
+        ingress_host = getattr(self.args, "ingress_host", None)
+        if not ingress_host:
+            raise ValueError(
+                "--ingress_mode controller requires --ingress_host (the public "
+                "controller-ingress host)."
+            )
+        upstream = (self._endpoint_meta or {}).get("api_base")
+        if not upstream:
+            raise ValueError(
+                "controller ingress requires a local vLLM endpoint (api_base); none resolved."
+            )
+
+        endpoint_name, register_address = controller_registration_plan(
+            job_name,
+            record_literal=record_literal,
+            proxy_port=DEFAULT_LITERAL_PROXY_PORT,
+        )
+        # The RecordProxy binds 0.0.0.0 so the (remote) controller can reach it at
+        # IRIS_ADVERTISE_HOST; the disabled path yields `upstream` unchanged.
+        #
+        # Pass the RAW ``--experiments_dir`` arg (a ``gs://…`` URI on iris), NOT the
+        # ``experiments_dir`` Path — ``get_experiments_dir()`` runs
+        # ``Path(gs://…).expanduser().resolve()``, which mangles the URI into a local
+        # ``/app/gs:/…`` path and destroys the ``gs://`` scheme, so the literal log
+        # could never be detected as remote and never uploaded (it landed on the
+        # worker's ephemeral tmpfs and was lost). The raw arg keeps the scheme so
+        # ``literal_log_remote_uri`` resolves the durable ``gs://…/logs/…`` target.
+        literal_experiments_dir = getattr(self.args, "experiments_dir", None) or str(
+            experiments_dir
+        )
+        with maybe_serve_literal_proxy(
+            record_literal,
+            upstream,
+            experiments_dir=literal_experiments_dir,
+            job_name=job_name,
+            host="0.0.0.0",
+        ):
+            # The leased EndpointClient inside `registration` MUST stay alive for
+            # the whole harbor run (its background renewer keeps the controller
+            # serving the endpoint); harbor runs inside this `yield`, so hold the
+            # handle and close (stop renewal + unregister) on context exit.
+            registration = register_controller_endpoint(endpoint_name, register_address)
+            injected = inject_ingress_agent_key()
+            print(
+                f"[{self.JOB_PREFIX}-local] ingress_mode=controller "
+                f"record_literal={record_literal}: registered {endpoint_name} -> "
+                f"{register_address} (id={registration.endpoint_id}, access=LINK); harbor "
+                f"endpoint=/proxy/t/<token>/{endpoint_name}/v1 (dummy key injected={injected})",
+                flush=True,
+            )
+            try:
+                # Mint + build the capability api_base AFTER register (the mint
+                # resolves the just-registered endpoint).
+                yield build_controller_endpoint_meta(ingress_host, endpoint_name)
+            finally:
+                registration.close()
 
     def run(self) -> None:
         """Main entry point - start services and run Harbor."""
         args = self.args
         needs_local_vllm = getattr(args, "_needs_local_vllm", True)
 
+        # iris-serve mode: iris.launch sets OT_AGENT_IRIS_SERVE=1 and runs this
+        # entrypoint on EVERY VM of the slice (one task/VM, IRIS_TASK_ID per
+        # task). In this mode the engine is brought up by ONE cross-host Ray
+        # cluster via start_vllm_iris_controller.py (which manages Ray itself —
+        # so we must NOT call start_ray()), and harbor runs on the driver rank
+        # only. Non-iris (SLURM/local) paths are unchanged.
+        iris_serve = needs_local_vllm and os.environ.get("OT_AGENT_IRIS_SERVE") == "1"
+        # IRIS_TASK_ID is the full task path (e.g. "/user/job/0"); on retried
+        # tasks iris appends a ":N" retry suffix (e.g. "/user/job/0:2"). The
+        # rank is the trailing path segment with any retry suffix stripped.
+        iris_rank = int(
+            os.environ.get("IRIS_TASK_ID", "0").rsplit("/", 1)[-1].split(":", 1)[0]
+        )
+
         # Set up directories
         experiments_dir, logs_dir = self._setup_directories()
 
         # Set up endpoint JSON path (only used for local vLLM)
-        self._endpoint_json = Path(args.endpoint_json or (experiments_dir / self.DEFAULT_ENDPOINT_FILENAME))
+        self._endpoint_json = Path(
+            args.endpoint_json or (experiments_dir / self.DEFAULT_ENDPOINT_FILENAME)
+        )
         if self._endpoint_json.exists():
             self._endpoint_json.unlink()
 
@@ -790,8 +1221,14 @@ class LocalHarborRunner:
 
         # Set up log paths
         ray_log = Path(args.ray_log) if args.ray_log else logs_dir / "ray.log"
-        controller_log = Path(args.controller_log) if args.controller_log else logs_dir / "vllm_controller.log"
-        harbor_log = Path(args.harbor_log).expanduser().resolve() if args.harbor_log else None
+        controller_log = (
+            Path(args.controller_log)
+            if args.controller_log
+            else logs_dir / "vllm_controller.log"
+        )
+        harbor_log = (
+            Path(args.harbor_log).expanduser().resolve() if args.harbor_log else None
+        )
 
         # Set up signal handlers
         self._setup_signal_handlers()
@@ -809,17 +1246,82 @@ class LocalHarborRunner:
         # On GH200 (Jupiter), this ensures Ray/vLLM subprocesses inherit optimal
         # CPU-GPU locality. No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
         from hpc.numa_utils import apply_numa_affinity
+
         apply_numa_affinity(gpu_id=0)
 
         # Start Ray and vLLM only if needed (local vLLM engine)
-        if needs_local_vllm:
-            controller_script = self.repo_root / "scripts" / "vllm" / "start_vllm_ray_controller.py"
+        if iris_serve:
+            # iris path: start_vllm_iris_controller.py bootstraps ONE cross-host
+            # Ray cluster (head on rank 0, workers on ranks 1..N) and runs the
+            # api_server on the head. It manages Ray itself, so we do NOT call
+            # start_ray() here. On non-0 ranks the controller blocks as a Ray
+            # worker until SIGTERM and never writes the endpoint JSON.
+            # Offline serve path: when the launcher pre-cached the model to the
+            # region-local mirror it passes --vllm_model_uri (an s3://|gs:// dir
+            # runai_streamer reads). Serve from THAT while args.model stays the
+            # HF id already consumed by model_config resolution above.
+            _serve_model = getattr(args, "vllm_model_uri", None) or args.model
+            vllm_proc = start_vllm_iris_controller(
+                model=_serve_model,
+                host=args.host,
+                ray_port=args.ray_port,
+                api_port=args.api_port,
+                tensor_parallel_size=args.tensor_parallel_size,
+                pipeline_parallel_size=args.pipeline_parallel_size,
+                data_parallel_size=args.data_parallel_size,
+                endpoint_path=self._endpoint_json,
+                controller_script=self.repo_root
+                / "hpc"
+                / "vllm"
+                / "start_vllm_iris_controller.py",
+                log_path=controller_log,
+                served_model_name=getattr(args, "_served_model_id", None),
+                # TPU serve: strip --swap-space (GPU-only; tpu-inference api_server
+                # rejects it and exits, killing the serve; GPU serves keep it), then
+                # append this runner's cluster-level TPU-serve defaults. EvalRunner
+                # defaults --enable-prefix-caching here: without APC every agentic
+                # turn re-prefills the full growing conversation (~30x redundant
+                # prefill on the v6e-4 agentic-eval path -> AgentTimeout -> deflated
+                # scores), mirroring the GPU/SLURM harness's per-model
+                # --enable-prefix-caching. The GPU path proves it's a pure win.
+                #
+                # CAVEAT — VALIDATE ON THE NEXT REAL IRIS EVAL: the pinned TPU
+                # backend tpu-inference==0.23.0 (marin lib/marin/pyproject.toml)
+                # has NOT been confirmed to support APC. Two failure modes to watch
+                # on the next v6e-4 eval leg:
+                #   (1) the api_server rejects --enable-prefix-caching as an
+                #       unrecognized/unsupported arg and exits -> the serve never
+                #       boots -> job dies at startup (check vllm_controller.log). If
+                #       so, revert EvalRunner.TPU_SERVE_DEFAULT_CLI_ARGS to [] until
+                #       a TPU build with confirmed APC lands.
+                #   (2) the flag is accepted but silently no-ops -> confirm it
+                #       actually took effect by checking n_cache_tokens > 0 in the
+                #       eval result.json (it was 0 / all-redundant-prefill before).
+                # NOTE: we deliberately do NOT also raise max_num_batched_tokens
+                # (=512) here — larger prefill batches grow the TPU paged-attention
+                # VMEM scratch and can overflow at compile; leave that as a separate,
+                # measured option if APC alone proves insufficient.
+                extra_cli_args=_add_tpu_serve_default_flags(
+                    _drop_tpu_unsupported_serve_flags(
+                        getattr(args, "_vllm_cli_args", [])
+                    ),
+                    self.TPU_SERVE_DEFAULT_CLI_ARGS,
+                ),
+                extra_env_vars=getattr(args, "_vllm_env_vars", {}),
+            )
+            self.processes.append(vllm_proc)
+        elif needs_local_vllm:
+            controller_script = (
+                self.repo_root / "hpc" / "vllm" / "start_vllm_ray_controller.py"
+            )
 
             # Convert memory from GB to bytes if provided
             ray_memory = None
             if getattr(args, "ray_memory_gb", None) is not None:
                 ray_memory = int(args.ray_memory_gb * 1024 * 1024 * 1024)
-            ray_object_store = int(getattr(args, "ray_object_store_gb", 40.0) * 1024 * 1024 * 1024)
+            ray_object_store = int(
+                getattr(args, "ray_object_store_gb", 40.0) * 1024 * 1024 * 1024
+            )
 
             ray_proc = start_ray(
                 host=args.host,
@@ -834,7 +1336,7 @@ class LocalHarborRunner:
 
             # Start vLLM controller
             vllm_proc = start_vllm_controller(
-                model=args.model,
+                model=getattr(args, "vllm_model_uri", None) or args.model,
                 host=args.host,
                 ray_port=args.ray_port,
                 api_port=args.api_port,
@@ -847,16 +1349,46 @@ class LocalHarborRunner:
                 served_model_name=getattr(args, "_served_model_id", None),
                 extra_cli_args=getattr(args, "_vllm_cli_args", []),
                 extra_env_vars=getattr(args, "_vllm_env_vars", {}),
+                execute_model_timeout=int(
+                    args.health_max_attempts
+                    * args.health_retry_delay
+                    * EXECUTE_MODEL_TIMEOUT_HEALTHCHECK_RATIO
+                ),
             )
             self.processes.append(vllm_proc)
         else:
             engine_type = getattr(args, "_engine_type", "unknown")
-            print(f"[engine] Using {engine_type} API engine - skipping local Ray/vLLM startup")
+            print(
+                f"[engine] Using {engine_type} API engine - skipping local Ray/vLLM startup"
+            )
 
         try:
-            # Wait for endpoint and run health check (only for local vLLM)
+            # iris worker ranks (IRIS_TASK_ID != 0) are Ray worker nodes for
+            # the head's RayDistributedExecutor — the iris controller blocks
+            # them until SIGTERM. They must NOT wait for the endpoint or run
+            # harbor (only rank 0 serves the API and drives harbor). Block on
+            # the controller so the task stays alive while the head serves,
+            # then return.
+            if iris_serve and iris_rank != 0:
+                print(
+                    f"[iris] Worker rank {iris_rank}: acting as Ray worker node; "
+                    "skipping endpoint wait + harbor. Blocking on controller.",
+                    flush=True,
+                )
+                vllm_proc.proc.wait()
+                return
+
+            # Wait for endpoint and run health check (only for local vLLM).
+            # iris multi-host mode: the controller spends time on `wait_for_nodes`
+            # (all ranks must join the head's Ray cluster) BEFORE launching
+            # vllm serve and writing endpoint_json. On preempt-retry, the 4
+            # ranks rejoin staggered, so the default 300s easily times out.
+            # Match the controller's cluster_join_timeout (1200s) when iris_serve.
             if needs_local_vllm:
-                wait_for_endpoint(self._endpoint_json, vllm_proc)
+                endpoint_timeout = 1200 if iris_serve else 300
+                wait_for_endpoint(
+                    self._endpoint_json, vllm_proc, timeout=endpoint_timeout
+                )
                 run_endpoint_health_check(
                     self._endpoint_json,
                     args.health_max_attempts,
@@ -872,40 +1404,109 @@ class LocalHarborRunner:
             harbor_model = getattr(args, "_harbor_model_name", args.model)
             job_model_label = args.model or harbor_model or "model"
             dataset_label = self.get_dataset_label()
-            job_name = args.job_name or default_job_name(self.JOB_PREFIX, dataset_label, job_model_label)
+            job_name = args.job_name or default_job_name(
+                self.JOB_PREFIX, dataset_label, job_model_label
+            )
             self._harbor_job_name = job_name
             args._harbor_job_name = job_name
 
             # Get dataset info
             dataset_slug, dataset_path = self.get_dataset_for_harbor()
 
-            # Build Harbor command
-            harbor_cmd = build_harbor_command(
-                harbor_binary=args.harbor_binary,
-                harbor_config_path=args.harbor_config,
-                harbor_config_data=getattr(args, "_harbor_config_data", {}),
-                job_name=job_name,
-                agent_name=args.agent,
-                model_name=harbor_model,
-                env_type=self.get_env_type(),
-                n_concurrent=args.n_concurrent,
-                n_attempts=args.n_attempts,
-                endpoint_meta=self._endpoint_meta,
-                agent_kwarg_overrides=list(args.agent_kwarg or []),
-                harbor_extra_args=list(args.harbor_extra_arg or []),
-                dataset_slug=dataset_slug,
-                dataset_path=dataset_path,
-                extra_agent_kwargs=getattr(args, "_extra_agent_kwargs", None),
-            )
-            print("Harbor command:", " ".join(harbor_cmd))
+            # Resolve the serving endpoint. When --record_literal / --ingress_mode
+            # controller are set this co-locates harbor's RecordProxy in front of the
+            # advertised vLLM and/or registers a controller-ingress endpoint; harbor
+            # runs INSIDE the context so the proxy/registration outlive the whole job.
+            # Inert (serving_meta is self._endpoint_meta) on the default/eval path.
+            with self._serving_endpoint_meta(experiments_dir, job_name) as serving_meta:
+                # opencode needs `vllm/<served_id>` + OPENAI_BASE_URL (see
+                # opencode_model_routing); the litellm agents keep hosted_vllm/<id>.
+                opencode_route = opencode_model_routing(
+                    agent_name=args.agent,
+                    served_model_id=getattr(args, "_served_model_id", None),
+                    serving_meta=serving_meta,
+                )
+                if opencode_route is not None:
+                    harbor_model, opencode_base_url = opencode_route
+                    os.environ["OPENAI_BASE_URL"] = opencode_base_url
+                    print(
+                        f"[{self.JOB_PREFIX}-local] opencode routing: model={harbor_model} "
+                        f"OPENAI_BASE_URL={opencode_base_url}",
+                        flush=True,
+                    )
 
-            if not args.dry_run:
-                # Import here to avoid circular imports
-                from hpc.cli_utils import run_harbor_cli
-                run_harbor_cli(harbor_cmd, harbor_log)
-                self.post_harbor_hook()
-            else:
-                print(f"[dry-run] Would run Harbor {self.JOB_PREFIX} job.")
+                # --- RE-FIRE: prune infra-errored trials before auto-resume -----
+                # On a same-identity relaunch (same run dir / --resume-from), the
+                # `harbor jobs start` command below AUTO-RESUMES: it keeps EVERY
+                # existing trial dir and re-runs only truly-missing ones. An
+                # infra-errored trial (DaytonaAuthenticationError, etc.) still has
+                # a dir (exception_info, no reward), so auto-resume treats it as
+                # "done" and never re-runs it — making a warm-dir re-fire a NO-OP
+                # for infra flakes. When the eval launcher enabled a re-fire filter
+                # (args.refire_filter_error_types — datagen/other callers never set
+                # it, so this whole block is skipped there), DELETE the matching
+                # errored trial dirs FIRST so auto-resume sees them as missing and
+                # re-runs them against the live endpoint. This is the gs://-capable
+                # analog of the Jupiter/Leonardo sbatch's
+                # `harbor jobs resume --filter-error-type` (harbor's `resume` CLI
+                # uses plain pathlib.Path and cannot open the iris GCS run dir; see
+                # prune_refire_errored_trials). Fresh launch (no run dir) / empty
+                # filter -> no-op. Never prune on --dry_run (destructive).
+                refire_types = getattr(args, "refire_filter_error_types", None)
+                if refire_types and not args.dry_run:
+                    refire_root = _extract_injected_jobs_dir(
+                        getattr(args, "harbor_extra_arg", None)
+                    ) or (str(getattr(args, "_jobs_dir_path", "") or "") or None)
+                    if refire_root:
+                        refire_run_dir = f"{refire_root.rstrip('/')}/{job_name}"
+                        prune_refire_errored_trials(
+                            refire_run_dir,
+                            list(refire_types),
+                            log_prefix=f"[{self.JOB_PREFIX}-local] ",
+                        )
+                    else:
+                        print(
+                            f"[{self.JOB_PREFIX}-local][refire] no jobs-dir resolved; "
+                            "cannot locate the run dir to prune errored trials (skipping).",
+                            flush=True,
+                        )
+                elif refire_types and args.dry_run:
+                    print(
+                        f"[{self.JOB_PREFIX}-local][refire] --dry_run: would prune "
+                        f"trials with error types {sorted(set(refire_types))} before "
+                        "auto-resume (skipped under dry-run).",
+                        flush=True,
+                    )
+
+                # Build Harbor command
+                harbor_cmd = build_harbor_command(
+                    harbor_binary=args.harbor_binary,
+                    harbor_config_path=args.harbor_config,
+                    harbor_config_data=getattr(args, "_harbor_config_data", {}),
+                    job_name=job_name,
+                    agent_name=args.agent,
+                    model_name=harbor_model,
+                    env_type=self.get_env_type(),
+                    n_concurrent=args.n_concurrent,
+                    n_attempts=args.n_attempts,
+                    endpoint_meta=serving_meta,
+                    agent_kwarg_overrides=list(args.agent_kwarg or []),
+                    harbor_extra_args=list(args.harbor_extra_arg or []),
+                    dataset_slug=dataset_slug,
+                    dataset_path=dataset_path,
+                    extra_agent_kwargs=getattr(args, "_extra_agent_kwargs", None),
+                    export_hf_repo=getattr(args, "upload_hf_repo", None),
+                )
+                print("Harbor command:", " ".join(harbor_cmd))
+
+                if not args.dry_run:
+                    # Import here to avoid circular imports
+                    from hpc.cli_utils import run_harbor_cli
+
+                    run_harbor_cli(harbor_cmd, harbor_log)
+                    self.post_harbor_hook()
+                else:
+                    print(f"[dry-run] Would run Harbor {self.JOB_PREFIX} job.")
 
         finally:
             self.cleanup()
@@ -916,6 +1517,7 @@ __all__ = [
     "ManagedProcess",
     "start_ray",
     "start_vllm_controller",
+    "start_vllm_iris_controller",
     "wait_for_endpoint",
     "terminate_processes",
     # File descriptor monitoring
@@ -944,6 +1546,9 @@ __all__ = [
     # Model ID utilities (re-exported from launch_utils)
     "generate_served_model_id",
     "hosted_vllm_alias",
+    # opencode model routing
+    "OPENCODE_AGENT_NAME",
+    "opencode_model_routing",
     # Base runner class
     "LocalHarborRunner",
     # Re-exports

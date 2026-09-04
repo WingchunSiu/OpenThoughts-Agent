@@ -25,8 +25,8 @@ Target repos on HF (laion/), 316 and 1000 only this pass (per rollout plan):
   - Sera-4.6-Lite-T2-v4-316
   - Sera-4.6-Lite-T2-v4-1000
 """
+
 import argparse
-import copy
 import json
 import os
 import random
@@ -40,7 +40,9 @@ SRC_FILE = "sera-4.6-lite-t2_36083_string_enriched.jsonl"
 SOURCE_TAG = SRC_REPO
 TARGET_BASE = "laion/Sera-4.6-Lite-T2-v4"
 SUBSET_SIZES = [316, 1000]
-STAGING_DIR = Path("/Users/benjaminfeuer/Documents/scripts_dataset_build/_sera_v4_staging")
+STAGING_DIR = Path(
+    "/Users/benjaminfeuer/Documents/scripts_dataset_build/_sera_v4_staging"
+)
 SEED = 42
 
 
@@ -104,11 +106,13 @@ def transform_hermes(messages):
         role = m["role"]
         if role == "tool":
             text = _flatten_content(m["content"])
-            out.append({
-                "role": "user",
-                "content": _wrap_tool_response(text),
-                "train": False,
-            })
+            out.append(
+                {
+                    "role": "user",
+                    "content": _wrap_tool_response(text),
+                    "train": False,
+                }
+            )
             continue
 
         if role == "assistant":
@@ -136,7 +140,11 @@ def transform_hermes(messages):
             continue
 
         if role == "system":
-            content = _flatten_content(m["content"]) if not isinstance(m["content"], str) else m["content"]
+            content = (
+                _flatten_content(m["content"])
+                if not isinstance(m["content"], str)
+                else m["content"]
+            )
             out.append({"role": "system", "content": content, "train": False})
             continue
 
@@ -187,7 +195,10 @@ def write_subsets(jsonl_path, staging_dir, sizes, full_size, seed):
     with open(jsonl_path) as src:
         for i, line in enumerate(src):
             if i % 5000 == 0 and i > 0:
-                print(f"  streamed {i}/{full_size} (transformed={n_transformed}, skipped={n_skipped})", flush=True)
+                print(
+                    f"  streamed {i}/{full_size} (transformed={n_transformed}, skipped={n_skipped})",
+                    flush=True,
+                )
             row = json.loads(line)
             # messages is stored as a JSON-encoded string
             try:
@@ -196,13 +207,23 @@ def write_subsets(jsonl_path, staging_dir, sizes, full_size, seed):
             except Exception as e:
                 n_skipped += 1
                 if n_skipped <= 5:
-                    print(f"  [warn] line {i}: transform failed: {type(e).__name__}: {e}", flush=True)
+                    print(
+                        f"  [warn] line {i}: transform failed: {type(e).__name__}: {e}",
+                        flush=True,
+                    )
                 continue
-            row["messages"] = new_msgs   # axolotl reads a list, not a string
+            row["messages"] = new_msgs  # axolotl reads a list, not a string
             row["source"] = SOURCE_TAG
             # Trim upstream metadata fields that axolotl doesn't need and may confuse
             # schema inference (optional — all we NEED is `messages`).
-            for drop in ("thought", "action", "agent", "message_type", "tool_call_ids", "cache_control"):
+            for drop in (
+                "thought",
+                "action",
+                "agent",
+                "message_type",
+                "tool_call_ids",
+                "cache_control",
+            ):
                 row.pop(drop, None)
             n_transformed += 1
             out = json.dumps(row, ensure_ascii=False) + "\n"
@@ -278,7 +299,10 @@ def push_dataset(api, target_repo, jsonl_path, size, full_size):
     api.create_repo(repo_id=target_repo, repo_type="dataset", exist_ok=True)
     readme_tmp = jsonl_path.parent / f"README_{size}.md"
     readme_tmp.write_text(make_readme(target_repo, size, full_size))
-    print(f"[push] uploading {jsonl_path.name} ({jsonl_path.stat().st_size / 1e6:.1f} MB) -> {target_repo}", flush=True)
+    print(
+        f"[push] uploading {jsonl_path.name} ({jsonl_path.stat().st_size / 1e6:.1f} MB) -> {target_repo}",
+        flush=True,
+    )
     api.upload_file(
         path_or_fileobj=str(jsonl_path),
         path_in_repo=jsonl_path.name,
@@ -297,7 +321,11 @@ def push_dataset(api, target_repo, jsonl_path, size, full_size):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--build-only", action="store_true", help="Write JSONL files locally, skip HF uploads")
+    ap.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Write JSONL files locally, skip HF uploads",
+    )
     args = ap.parse_args()
 
     token = os.environ["HF_TOKEN"]

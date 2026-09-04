@@ -3,6 +3,7 @@ jobs_dir: trace_jobs
 n_attempts: 1
 timeout_multiplier: 1.0
 debug: false
+release_trial_payloads_in_memory: true
 orchestrator:
   type: local
   n_concurrent_trials: 64

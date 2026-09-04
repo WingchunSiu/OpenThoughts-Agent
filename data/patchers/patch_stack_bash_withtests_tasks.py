@@ -48,6 +48,7 @@ The reward floor + trap handle these by leaving reward=0 on exit.
 
 CLI: --root <dir> [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -97,12 +98,22 @@ DISPATCH_RE = re.compile(
 # Tokens we treat as "noise" inside a usage line and skip when extracting
 # positional defaults. The script name itself is always the first token.
 USAGE_NOISE = {
-    "$0", "\\$0", "$@", "\\$@",
-    "[options]", "[OPTIONS]",
-    "[flags]", "[FLAGS]",
-    "[args]", "[ARGS]",
-    "[--help]", "[-h]", "-h", "--help",
-    "[options...]", "[arguments...]",
+    "$0",
+    "\\$0",
+    "$@",
+    "\\$@",
+    "[options]",
+    "[OPTIONS]",
+    "[flags]",
+    "[FLAGS]",
+    "[args]",
+    "[ARGS]",
+    "[--help]",
+    "[-h]",
+    "-h",
+    "--help",
+    "[options...]",
+    "[arguments...]",
 }
 
 
@@ -199,16 +210,21 @@ def parse_usage_args(usage_rest: str) -> list[str] | None:
     def _strip_trailing_redir(s: str) -> str:
         depth_a = depth_c = depth_s = 0
         for i, ch in enumerate(s):
-            if ch == "<": depth_a += 1
+            if ch == "<":
+                depth_a += 1  # noqa: E701
             elif ch == ">":
                 if depth_a > 0:
                     depth_a -= 1
                 else:
                     return s[:i].rstrip()
-            elif ch == "{": depth_c += 1
-            elif ch == "}": depth_c -= 1
-            elif ch == "[": depth_s += 1
-            elif ch == "]": depth_s -= 1
+            elif ch == "{":
+                depth_c += 1  # noqa: E701
+            elif ch == "}":
+                depth_c -= 1  # noqa: E701
+            elif ch == "[":
+                depth_s += 1  # noqa: E701
+            elif ch == "]":
+                depth_s -= 1  # noqa: E701
             elif ch in "&;" and depth_a == 0 and depth_c == 0 and depth_s == 0:
                 return s[:i].rstrip()
         return s
@@ -306,15 +322,17 @@ def patch_test_sh(text: str) -> tuple[str, bool, bool]:
         _raw, defaults = detected
         # Build the `set -- "a" "b" ...` snippet. We use bash quoting.
         quoted = " ".join(f'"{d}"' for d in defaults)
+
         # Rewrite the dispatch line: pass the args to run_verifier.
         def _rewrite(match: re.Match[str]) -> str:
             indent = match.group("indent")
             return (
                 f"{indent}# laion v2: inject default positional args parsed from\n"
                 f"{indent}# the script's Usage:/usage: line so run_verifier doesn't\n"
-                f"{indent}# abort on `[ -z \"$1\" ]` before reward.txt is written.\n"
+                f'{indent}# abort on `[ -z "$1" ]` before reward.txt is written.\n'
                 f"{indent}if run_verifier {quoted}; then"
             )
+
         new_text2, n_subs = DISPATCH_RE.subn(_rewrite, new_text, count=1)
         if n_subs > 0:
             new_text = new_text2
@@ -324,7 +342,7 @@ def patch_test_sh(text: str) -> tuple[str, bool, bool]:
     # shebang (or at the very top if no shebang).
     m = SHEBANG_RE.match(new_text)
     if m:
-        new_text = m.group(1) + REWARD_FLOOR + new_text[m.end():]
+        new_text = m.group(1) + REWARD_FLOOR + new_text[m.end() :]
     else:
         new_text = "#!/bin/bash\n" + REWARD_FLOOR + new_text
 
@@ -409,6 +427,7 @@ def main() -> int:
         if args.dry_run:
             # In dry-run mode, do bash -n on a temp file instead.
             import tempfile
+
             with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as tf:
                 tf.write(patched)
                 tmp_path = Path(tf.name)

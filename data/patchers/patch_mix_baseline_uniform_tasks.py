@@ -68,6 +68,7 @@ Usage:
     python -m data.patchers.patch_mix_baseline_uniform_tasks \
         --root /tmp/mix_baseline_uniform_src --limit 50
 """
+
 from __future__ import annotations
 
 import argparse
@@ -121,9 +122,7 @@ def _load_solutions(verbose: bool = True) -> dict[str, bytes]:
             f"[patcher] Loading solution.py lookup from {SOURCE_DATASET}...",
             file=sys.stderr,
         )
-    parquet_path = hf_hub_download(
-        SOURCE_DATASET, "tasks.parquet", repo_type="dataset"
-    )
+    parquet_path = hf_hub_download(SOURCE_DATASET, "tasks.parquet", repo_type="dataset")
     df = pd.read_parquet(parquet_path)
     solutions: dict[str, bytes] = {}
     for idx in range(len(df)):
@@ -197,7 +196,10 @@ def patch_task(
 
     dockerfile = task_dir / "environment" / "Dockerfile"
     if not dockerfile.is_file():
-        return {"status": "skipped_no_dockerfile", "reason": "no environment/Dockerfile"}
+        return {
+            "status": "skipped_no_dockerfile",
+            "reason": "no environment/Dockerfile",
+        }
 
     instr_path = task_dir / "instruction.md"
     if not instr_path.is_file():
@@ -260,9 +262,7 @@ def main() -> None:
         raise SystemExit(f"[patcher] --root not a directory: {root}")
 
     task_dirs = sorted(
-        p
-        for p in root.iterdir()
-        if p.is_dir() and (p / "instruction.md").exists()
+        p for p in root.iterdir() if p.is_dir() and (p / "instruction.md").exists()
     )
     if args.limit is not None:
         task_dirs = task_dirs[: args.limit]

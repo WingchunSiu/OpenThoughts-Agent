@@ -58,6 +58,7 @@ Usage
     python -m data.patchers.patch_mix_h5_skill_diverse_tasks --root <dir> --dry-run
     python -m data.patchers.patch_mix_h5_skill_diverse_tasks --root <dir> --limit 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -112,7 +113,10 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict:
 
     dockerfile = task_dir / "environment" / "Dockerfile"
     if not dockerfile.is_file():
-        return {"status": "skipped_no_dockerfile", "reason": "no environment/Dockerfile"}
+        return {
+            "status": "skipped_no_dockerfile",
+            "reason": "no environment/Dockerfile",
+        }
 
     existing = dockerfile.read_text(encoding="utf-8", errors="replace")
     if PATCH_MARKER in existing:

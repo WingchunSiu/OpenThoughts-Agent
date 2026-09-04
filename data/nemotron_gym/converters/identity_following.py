@@ -106,8 +106,7 @@ def _build_persona_preamble(principle: str) -> str:
         )
 
     rubric_section = (
-        "Identity / response rubric you must satisfy:\n"
-        f"{principle.strip()}\n"
+        f"Identity / response rubric you must satisfy:\n{principle.strip()}\n"
     )
 
     return (
@@ -132,8 +131,12 @@ def convert_identity_following(row: dict, row_idx: int) -> HarborTask | None:
     principle = row.get("principle")
     if not isinstance(principle, str) or not principle.strip():
         return None
-    principle = sanitize_text(principle, field_name="principle", max_len=_MAX_PRINCIPLE_BYTES)
-    upstream_dataset = row.get("dataset") if isinstance(row.get("dataset"), str) else None
+    principle = sanitize_text(
+        principle, field_name="principle", max_len=_MAX_PRINCIPLE_BYTES
+    )
+    upstream_dataset = (
+        row.get("dataset") if isinstance(row.get("dataset"), str) else None
+    )
     preamble = _build_persona_preamble(principle)
     # Re-sanitize the rendered preamble (it embeds the rubric text, which was
     # already sanitized, but the wrapping language is new — sanitize_text is

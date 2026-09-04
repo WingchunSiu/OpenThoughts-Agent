@@ -79,6 +79,7 @@ Expected outcome (whole-dataset, post-v6):
     AgentSetupTimeoutErrors (not patcher-fixable, ~14% of trials in
     v5 QC).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -257,8 +258,10 @@ def main() -> int:
                         # Non-fatal: surviving task without marker is
                         # still semantically correct, but loses
                         # idempotency. Surface it.
-                        print(f"warn: marker write failed for {td.name}: {e}",
-                              file=sys.stderr)
+                        print(
+                            f"warn: marker write failed for {td.name}: {e}",
+                            file=sys.stderr,
+                        )
         else:
             if reason == "no-tests-dir":
                 key = "drop_no_tests_dir"

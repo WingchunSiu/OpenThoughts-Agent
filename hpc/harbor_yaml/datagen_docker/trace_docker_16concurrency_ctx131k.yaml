@@ -1,6 +1,3 @@
-# Harbor job configuration for trace generation with Docker backend.
-# Uses local Docker/Podman runtime instead of Daytona cloud service.
-# Suitable for: local development, SLURM with Podman, cloud instances with Docker.
 
 job_name: docker-trace-job
 jobs_dir: trace_jobs

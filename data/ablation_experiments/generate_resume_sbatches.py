@@ -6,8 +6,12 @@ import re
 from pathlib import Path
 
 SBATCH_DIR = Path(os.path.expandvars("${DCAGENT_DIR}/data/ablation_experiments/sbatch"))
-JOBS_DIR = Path(os.path.expandvars("${DCAGENT_DIR}/data/ablation_experiments/sbatch/jobs"))
-RESUME_SBATCH_DIR = Path(os.path.expandvars("${DCAGENT_DIR}/data/ablation_experiments/resume_sbatch"))
+JOBS_DIR = Path(
+    os.path.expandvars("${DCAGENT_DIR}/data/ablation_experiments/sbatch/jobs")
+)
+RESUME_SBATCH_DIR = Path(
+    os.path.expandvars("${DCAGENT_DIR}/data/ablation_experiments/resume_sbatch")
+)
 
 # Map experiment names to their job timestamps (updated 2025-12-28/29/30)
 EXPERIMENTS = {
@@ -63,13 +67,13 @@ def generate_resume_sbatch(exp_name: str, full_job_name: str) -> str | None:
         content = f.read()
 
     # Change job name in header
-    content = re.sub(r'#SBATCH --job-name=abl_', '#SBATCH --job-name=res_', content)
+    content = re.sub(r"#SBATCH --job-name=abl_", "#SBATCH --job-name=res_", content)
 
     # Change output log name
     content = re.sub(
-        rf'--output=(.+){re.escape(exp_name)}_%j\.out',
-        rf'--output=\g<1>{exp_name}_resume_%j.out',
-        content
+        rf"--output=(.+){re.escape(exp_name)}_%j\.out",
+        rf"--output=\g<1>{exp_name}_resume_%j.out",
+        content,
     )
 
     # Add job path variables after NODES_PER_SHARD line
@@ -85,12 +89,10 @@ JOB_PATH_SHARD6="{JOBS_DIR}/{full_job_name}_shard6"
 JOB_PATH_SHARD7="{JOBS_DIR}/{full_job_name}_shard7"
 '''
     content = re.sub(
-        r'(NUM_SHARDS=8\nNODES_PER_SHARD=4)',
-        rf'\1{job_paths_block}',
-        content
+        r"(NUM_SHARDS=8\nNODES_PER_SHARD=4)", rf"\1{job_paths_block}", content
     )
 
-    new_function = '''run_harbor_for_shard() {
+    new_function = """run_harbor_for_shard() {
     local shard_idx=$1
     local start_node_idx=$((shard_idx * NODES_PER_SHARD))
     local head_node=${ALL_NODES_ARRAY[$start_node_idx]}
@@ -121,10 +123,10 @@ JOB_PATH_SHARD7="{JOBS_DIR}/{full_job_name}_shard7"
 
     HARBOR_PIDS[$shard_idx]=$!
     echo "    PID: ${HARBOR_PIDS[$shard_idx]}, Log: $harbor_log"
-}'''
+}"""
 
     # Find and replace the function block, and remove dataset download/sharding steps
-    lines = content.split('\n')
+    lines = content.split("\n")
     new_lines = []
     i = 0
     skip_until_step = None  # Track which step we're skipping
@@ -133,36 +135,36 @@ JOB_PATH_SHARD7="{JOBS_DIR}/{full_job_name}_shard7"
         line = lines[i]
 
         # Skip Step 2: Downloading Dataset
-        if '=== Step 2: Downloading Dataset ===' in line:
-            skip_until_step = 'Step 3'
+        if "=== Step 2: Downloading Dataset ===" in line:
+            skip_until_step = "Step 3"
             i += 1
             continue
 
         # Skip Step 3: Sharding Dataset
-        if '=== Step 3: Sharding Dataset ===' in line:
-            skip_until_step = 'Step 4'
+        if "=== Step 3: Sharding Dataset ===" in line:
+            skip_until_step = "Step 4"
             i += 1
             continue
 
         # If we're skipping, check for the next step marker
         if skip_until_step:
-            if f'=== {skip_until_step}' in line:
+            if f"=== {skip_until_step}" in line:
                 skip_until_step = None
                 # Continue to process this line normally
             else:
                 i += 1
                 continue
 
-        if 'run_harbor_for_shard()' in line:
+        if "run_harbor_for_shard()" in line:
             brace_count = 0
             # Add the new function
             new_lines.append(new_function)
             # Skip until we find the closing brace
             while i < len(lines):
-                if '{' in lines[i]:
-                    brace_count += lines[i].count('{')
-                if '}' in lines[i]:
-                    brace_count -= lines[i].count('}')
+                if "{" in lines[i]:
+                    brace_count += lines[i].count("{")
+                if "}" in lines[i]:
+                    brace_count -= lines[i].count("}")
                     if brace_count == 0:
                         i += 1
                         break
@@ -172,7 +174,7 @@ JOB_PATH_SHARD7="{JOBS_DIR}/{full_job_name}_shard7"
         new_lines.append(line)
         i += 1
 
-    return '\n'.join(new_lines)
+    return "\n".join(new_lines)
 
 
 def main():
@@ -184,13 +186,13 @@ def main():
             continue
 
         sbatch_path = RESUME_SBATCH_DIR / f"{exp_name}_resume.sbatch"
-        with open(sbatch_path, 'w') as f:
+        with open(sbatch_path, "w") as f:
             f.write(content)
 
         print(f"Generated: {sbatch_path}")
 
     # Create run_all_resumes.sh
-    run_all_content = '''#!/bin/bash
+    run_all_content = """#!/bin/bash
 # Run all resume sbatch files
 cd ${DCAGENT_DIR}/data/ablation_experiments/resume_sbatch
 
@@ -201,10 +203,10 @@ for sbatch_file in *.sbatch; do
 done
 
 echo "All resume jobs submitted!"
-'''
+"""
 
     run_all_path = RESUME_SBATCH_DIR.parent / "run_all_resumes.sh"
-    with open(run_all_path, 'w') as f:
+    with open(run_all_path, "w") as f:
         f.write(run_all_content)
     os.chmod(run_all_path, 0o755)
     print(f"\nGenerated: {run_all_path}")

@@ -1,32 +1,3 @@
-# MiniMax-M2.7-AWQ-4bit — AWQ 4-bit quantized (~229B params)
-# https://huggingface.co/cyankiwi/MiniMax-M2.7-AWQ-4bit
-#
-# 32K context variant, Jupiter GH200 single-node — DP=2 / TP=2 variant.
-#
-# Hardware: 1 node × 4x GH200 96GB = 4 GPUs (~384GB VRAM total)
-#   - AWQ 4-bit weights ~115GB → per replica TP=2 → ~58GB/GPU
-#   - 96GB - 58GB ≈ 38GB per GPU for KV cache + activations
-#     (vs ~67GB at TP=4 in the dp=1 sibling — tighter but workable
-#      because MiniMax-M2.7 has only 32K context and we cap
-#      max_num_seqs=32)
-#   - DP=2 means 2 independent vLLM engine replicas on the same node
-#     sharing the head-port via vLLM's internal data-parallel router;
-#     no cross-node RPC, but does exercise the multi-replica path the
-#     dp=1 config explicitly avoided.
-#
-# Purpose: unblock + validate the data_parallel_size > 1 path for
-# MiniMax-M2.7. The dp=1 sibling exists as the "safe" variant we know
-# works end-to-end against the GLM-5.1-AWQ cross-node sample_tokens
-# RPC timeout class of bugs. This sibling tests whether dp>1 is
-# usable WITHOUT pulling in the cross-node coordination layer.
-#
-# Compared to the dp=1 sibling:
-#   - tensor_parallel_size: 4 -> 2
-#   - data_parallel_size: 1 -> 2
-#   - gpu_memory_utilization: 0.9 -> 0.85 (smaller KV budget per GPU)
-#   - Everything else (enforce-eager, no-deep-gemm, no-flashinfer-sampler,
-#     chat template, max_num_batched_tokens) kept identical to isolate
-#     the dp>1 axis as the only variable.
 
 engine:
   type: vllm_local
@@ -71,16 +42,3 @@ vllm_server:
   - string
   - --max-num-batched-tokens
   - '32768'
-  # NOTE on DP backend choice: we tried `--data-parallel-backend ray`
-  # first (job 476971) — vLLM's DPMoEEngineCoreActor failed at init
-  # with `RuntimeError: Ray returned no GPU ids for this actor` even
-  # though `RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES` was unset and
-  # Ray reported 4× GH200 in cluster resources. That's an upstream
-  # vLLM Ray-DP regression on this wheel/aarch64. Falling back to the
-  # default `mp` torch.distributed coordinator. The original c10d
-  # IPv6-on-"localhost" socket bind (errno 97) is avoided by
-  # vllm_utils.VLLMServer.start() auto-injecting
-  # `--data-parallel-address <ray_cluster.head_ip>` (a real IPv4) when
-  # data_parallel_size > 1, so c10d resolves to AF_INET cleanly.
-  # If `mp` also fails for a new reason, do NOT toggle ray back —
-  # diagnose the new failure and consider pinning a different vLLM.

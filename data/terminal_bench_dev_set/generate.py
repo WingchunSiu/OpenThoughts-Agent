@@ -12,21 +12,21 @@ This script creates tasks following the Terminal Bench task.yaml schema:
 """
 
 import argparse
-import json
-import os
-import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 import yaml
 
 # Optional imports for HuggingFace upload
 try:
-    from data.commons import upload_tasks_to_hf, finalize_dataset_output
+    from data.commons import upload_tasks_to_hf, finalize_dataset_output  # noqa: F401
+
     HF_UPLOAD_AVAILABLE = True
 except ImportError:
     HF_UPLOAD_AVAILABLE = False
-    print("Warning: HuggingFace upload not available. Install dependencies to enable upload.")
+    print(
+        "Warning: HuggingFace upload not available. Install dependencies to enable upload."
+    )
 
 
 # Standard Terminal Bench Dockerfile template
@@ -80,7 +80,7 @@ def create_terminal_bench_task(
 ) -> Path:
     """
     Create a Terminal Bench task directory with all required files.
-    
+
     Args:
         output_dir: Parent directory for tasks
         task_id: Unique task identifier (e.g., 'dev-log-error-extraction')
@@ -92,19 +92,19 @@ def create_terminal_bench_task(
         docker_compose_content: Custom docker-compose.yaml content (optional)
         test_files: Dict of {filename: content} for files in tests/ directory
         data_files: Dict of {filename: content} for files in data/ directory
-    
+
     Returns:
         Path to created task directory
     """
     task_dir = output_dir / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create subdirectories
     tests_dir = task_dir / "tests"
     data_dir = task_dir / "data"
     tests_dir.mkdir(exist_ok=True)
     data_dir.mkdir(exist_ok=True)
-    
+
     # Create task.yaml
     task_yaml = {
         "instruction": instruction,
@@ -116,33 +116,37 @@ def create_terminal_bench_task(
         "category": metadata.get("category", "software_engineering"),
         "tags": metadata.get("tags", []),
     }
-    
+
     # Add optional metadata fields
-    for field in ["estimated_duration_sec", "expert_time_estimate_min", "junior_time_estimate_min"]:
+    for field in [
+        "estimated_duration_sec",
+        "expert_time_estimate_min",
+        "junior_time_estimate_min",
+    ]:
         if field in metadata:
             task_yaml[field] = metadata[field]
-    
+
     with open(task_dir / "task.yaml", "w") as f:
         yaml.dump(task_yaml, f, default_flow_style=False, sort_keys=False)
-    
+
     # Create Dockerfile
     dockerfile_path = task_dir / "Dockerfile"
     dockerfile_path.write_text(dockerfile_content or DOCKERFILE_TEMPLATE)
-    
+
     # Create docker-compose.yaml
     compose_path = task_dir / "docker-compose.yaml"
     compose_path.write_text(docker_compose_content or DOCKER_COMPOSE_TEMPLATE)
-    
+
     # Create solution.sh
     solution_path = task_dir / "solution.sh"
     solution_path.write_text(solution_sh)
     solution_path.chmod(0o755)
-    
+
     # Create run-tests.sh
     run_tests_path = task_dir / "run-tests.sh"
     run_tests_path.write_text(run_tests_sh)
     run_tests_path.chmod(0o755)
-    
+
     # Create test files
     if test_files:
         for filename, content in test_files.items():
@@ -150,7 +154,7 @@ def create_terminal_bench_task(
             test_file_path.write_text(content)
             if filename.endswith(".sh") or filename.endswith(".py"):
                 test_file_path.chmod(0o755)
-    
+
     # Create data files
     if data_files:
         for filename, content in data_files.items():
@@ -162,11 +166,11 @@ def create_terminal_bench_task(
             else:
                 # Assume it's binary or needs special handling
                 data_file_path.write_bytes(content)
-    
+
     # Create .dummy file in data/ if empty (for Docker COPY)
     if not any(data_dir.iterdir()):
         (data_dir / ".dummy").touch()
-    
+
     return task_dir
 
 
@@ -380,12 +384,12 @@ exit $exit_code
 2024-01-15 12:10:00 FATAL: System shutdown required
 """,
     }
-    
+
     data_files = {}
     for rel_path, content in test_logs.items():
         full_path = f"logs/{rel_path}"
         data_files[full_path] = content
-    
+
     return create_terminal_bench_task(
         output_dir=output_dir,
         task_id="dev-log-error-extraction",
@@ -553,7 +557,7 @@ APP_ENV=${APP_ENV}
 LOG_LEVEL=$LOG_LEVEL
 """
     }
-    
+
     return create_terminal_bench_task(
         output_dir=output_dir,
         task_id="dev-env-config-generator",
@@ -805,7 +809,7 @@ RUN mkdir -p /app/data/repo && \\
 # Copy test utilities if needed
 COPY tests/ /tests/
 """
-    
+
     return create_terminal_bench_task(
         output_dir=output_dir,
         task_id="dev-git-branch-cleanup",
@@ -1003,7 +1007,9 @@ exit $exit_code
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate Terminal Bench dev-set tasks")
+    parser = argparse.ArgumentParser(
+        description="Generate Terminal Bench dev-set tasks"
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -1026,50 +1032,50 @@ def main():
         action="store_true",
         help="Create private HuggingFace repository",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Create output directory
     if args.out_dir:
         output_dir = Path(args.out_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
     else:
         output_dir = Path(tempfile.mkdtemp(prefix="terminal_bench_dev_set_"))
-    
+
     print(f"Generating Terminal Bench dev-set tasks in: {output_dir}")
-    
+
     # Generate tasks
     tasks_created = []
-    
+
     print("Creating Task 1: Log Analysis and Error Extraction...")
     task1_dir = create_task_1_log_error_extraction(output_dir)
     tasks_created.append(task1_dir)
     print(f"  ✓ Created {task1_dir.name}")
-    
+
     print("Creating Task 2: Environment Variable Configuration Generator...")
     task2_dir = create_task_2_env_config_generator(output_dir)
     tasks_created.append(task2_dir)
     print(f"  ✓ Created {task2_dir.name}")
-    
+
     print("Creating Task 3: Git Repository Branch Cleanup...")
     task3_dir = create_task_3_git_branch_cleanup(output_dir)
     tasks_created.append(task3_dir)
     print(f"  ✓ Created {task3_dir.name}")
-    
+
     print("Creating Task 4: Process Monitoring and Resource Reporting...")
     task4_dir = create_task_4_process_monitor_report(output_dir)
     tasks_created.append(task4_dir)
     print(f"  ✓ Created {task4_dir.name}")
-    
+
     # Note: Tasks 5-7 from proposal to be implemented in future PR
     # See TERMINAL_BENCH_DEV_SET_TASKS_PROPOSAL.md for remaining tasks:
     # - Task 5: File System Audit and Permission Fix
     # - Task 6: Configuration File Merging and Validation
     # - Task 7: Network Connection Diagnostics
-    
+
     print(f"\nGenerated {len(tasks_created)} tasks")
     print(f"Output directory: {output_dir}")
-    
+
     # Upload to HuggingFace if requested
     if not args.no_upload:
         if not HF_UPLOAD_AVAILABLE:
@@ -1087,6 +1093,7 @@ def main():
             except Exception as e:
                 print(f"✗ Upload failed: {e}")
                 import traceback
+
                 traceback.print_exc()
     else:
         print("\nSkipping upload (--no-upload specified)")
@@ -1094,4 +1101,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

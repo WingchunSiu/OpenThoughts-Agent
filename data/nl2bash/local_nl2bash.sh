@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CONDA_ENV="llama-factory"
-SECRETS_PATH="/Users/benjaminfeuer/Documents/secrets.env"
+SECRETS_PATH="${DC_AGENT_SECRET_ENV:?Set DC_AGENT_SECRET_ENV to your secrets.env (see .agents/secret.md)}"
 
 if [[ -f "$SECRETS_PATH" ]]; then
   # shellcheck disable=SC1090

@@ -35,13 +35,13 @@ Output cap: 8000 chars total per instruction.md to keep prompts manageable.
 Usage:
   python data/patchers/patch_stack_junit_v3_tasks.py --root <dir> [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Iterable
 
 # --------------------------------------------------------------------------- #
 # Java parsing helpers (regex-based; the test files are simple enough that a
@@ -106,52 +106,224 @@ _STDLIB_PREFIXES = (
 
 # Single-name primitives / builtins reserved by Java itself.
 _JAVA_RESERVED = {
-    "String", "Integer", "Long", "Double", "Float", "Boolean", "Byte",
-    "Short", "Character", "Object", "Number", "Math", "System", "Class",
-    "Throwable", "Exception", "RuntimeException", "Error", "Thread",
-    "Runnable", "Iterable", "Iterator", "Comparable", "Comparator",
-    "Override", "Deprecated", "SuppressWarnings", "FunctionalInterface",
-    "Test", "Before", "BeforeEach", "BeforeAll", "After", "AfterEach",
-    "AfterAll", "Rule", "ClassRule", "DisplayName", "Tag", "Disabled",
-    "Ignore", "ParameterizedTest", "ValueSource", "MethodSource",
-    "CsvSource", "Nested", "Mock", "InjectMocks", "Spy", "Captor",
-    "RunWith", "Parameterized", "Parameters", "Category", "TestRule",
-    "ExpectedException", "TemporaryFolder", "Timeout", "Mockito",
-    "ArgumentMatchers", "ArgumentCaptor", "Assert", "Assertions",
-    "Assume", "AssumptionViolatedException", "List", "ArrayList",
-    "LinkedList", "Map", "HashMap", "LinkedHashMap", "TreeMap",
-    "Set", "HashSet", "LinkedHashSet", "TreeSet", "Collection",
-    "Collections", "Arrays", "Optional", "Function", "Supplier",
-    "Consumer", "BiConsumer", "BiFunction", "Predicate", "Stream",
-    "Collectors", "IntStream", "LongStream", "DoubleStream",
-    "File", "Files", "Path", "Paths", "InputStream", "OutputStream",
-    "Reader", "Writer", "BufferedReader", "BufferedWriter",
-    "FileInputStream", "FileOutputStream", "FileReader", "FileWriter",
-    "IOException", "FileNotFoundException", "InterruptedException",
-    "IllegalArgumentException", "IllegalStateException", "NullPointerException",
-    "UnsupportedOperationException", "NumberFormatException",
-    "ConcurrentModificationException", "ClassCastException",
-    "Date", "Calendar", "TimeZone", "LocalDate", "LocalDateTime", "LocalTime",
-    "Instant", "Duration", "Period", "ZoneId", "ZonedDateTime", "OffsetDateTime",
-    "DateTimeFormatter", "Month", "Year", "DayOfWeek", "Random", "UUID",
-    "Pattern", "Matcher", "Locale", "Charset", "StandardCharsets",
-    "AtomicInteger", "AtomicLong", "AtomicBoolean", "AtomicReference",
-    "ConcurrentHashMap", "CopyOnWriteArrayList", "CountDownLatch",
-    "ExecutorService", "Executors", "Future", "TimeUnit", "Callable",
-    "Logger", "Level", "LoggerFactory", "BigDecimal", "BigInteger",
-    "Iterator", "Spliterator", "Comparator", "Comparable",
-    "True", "False", "Null", "True", "False",
+    "String",
+    "Integer",
+    "Long",
+    "Double",
+    "Float",
+    "Boolean",
+    "Byte",
+    "Short",
+    "Character",
+    "Object",
+    "Number",
+    "Math",
+    "System",
+    "Class",
+    "Throwable",
+    "Exception",
+    "RuntimeException",
+    "Error",
+    "Thread",
+    "Runnable",
+    "Iterable",
+    "Iterator",
+    "Comparable",
+    "Comparator",
+    "Override",
+    "Deprecated",
+    "SuppressWarnings",
+    "FunctionalInterface",
+    "Test",
+    "Before",
+    "BeforeEach",
+    "BeforeAll",
+    "After",
+    "AfterEach",
+    "AfterAll",
+    "Rule",
+    "ClassRule",
+    "DisplayName",
+    "Tag",
+    "Disabled",
+    "Ignore",
+    "ParameterizedTest",
+    "ValueSource",
+    "MethodSource",
+    "CsvSource",
+    "Nested",
+    "Mock",
+    "InjectMocks",
+    "Spy",
+    "Captor",
+    "RunWith",
+    "Parameterized",
+    "Parameters",
+    "Category",
+    "TestRule",
+    "ExpectedException",
+    "TemporaryFolder",
+    "Timeout",
+    "Mockito",
+    "ArgumentMatchers",
+    "ArgumentCaptor",
+    "Assert",
+    "Assertions",
+    "Assume",
+    "AssumptionViolatedException",
+    "List",
+    "ArrayList",
+    "LinkedList",
+    "Map",
+    "HashMap",
+    "LinkedHashMap",
+    "TreeMap",
+    "Set",
+    "HashSet",
+    "LinkedHashSet",
+    "TreeSet",
+    "Collection",
+    "Collections",
+    "Arrays",
+    "Optional",
+    "Function",
+    "Supplier",
+    "Consumer",
+    "BiConsumer",
+    "BiFunction",
+    "Predicate",
+    "Stream",
+    "Collectors",
+    "IntStream",
+    "LongStream",
+    "DoubleStream",
+    "File",
+    "Files",
+    "Path",
+    "Paths",
+    "InputStream",
+    "OutputStream",
+    "Reader",
+    "Writer",
+    "BufferedReader",
+    "BufferedWriter",
+    "FileInputStream",
+    "FileOutputStream",
+    "FileReader",
+    "FileWriter",
+    "IOException",
+    "FileNotFoundException",
+    "InterruptedException",
+    "IllegalArgumentException",
+    "IllegalStateException",
+    "NullPointerException",
+    "UnsupportedOperationException",
+    "NumberFormatException",
+    "ConcurrentModificationException",
+    "ClassCastException",
+    "Date",
+    "Calendar",
+    "TimeZone",
+    "LocalDate",
+    "LocalDateTime",
+    "LocalTime",
+    "Instant",
+    "Duration",
+    "Period",
+    "ZoneId",
+    "ZonedDateTime",
+    "OffsetDateTime",
+    "DateTimeFormatter",
+    "Month",
+    "Year",
+    "DayOfWeek",
+    "Random",
+    "UUID",
+    "Pattern",
+    "Matcher",
+    "Locale",
+    "Charset",
+    "StandardCharsets",
+    "AtomicInteger",
+    "AtomicLong",
+    "AtomicBoolean",
+    "AtomicReference",
+    "ConcurrentHashMap",
+    "CopyOnWriteArrayList",
+    "CountDownLatch",
+    "ExecutorService",
+    "Executors",
+    "Future",
+    "TimeUnit",
+    "Callable",
+    "Logger",
+    "Level",
+    "LoggerFactory",
+    "BigDecimal",
+    "BigInteger",
+    "Iterator",
+    "Spliterator",
+    "Comparator",
+    "Comparable",
+    "True",
+    "False",
+    "Null",
+    "True",
+    "False",
 }
 
 _JAVA_KEYWORDS_LOWER = {
-    "if", "else", "for", "while", "do", "switch", "case", "default",
-    "break", "continue", "return", "throw", "throws", "try", "catch",
-    "finally", "new", "this", "super", "void", "true", "false", "null",
-    "public", "private", "protected", "static", "final", "abstract",
-    "synchronized", "volatile", "transient", "native", "strictfp",
-    "class", "interface", "enum", "extends", "implements", "package",
-    "import", "instanceof", "var",
-    "int", "long", "short", "byte", "float", "double", "boolean", "char",
+    "if",
+    "else",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "case",
+    "default",
+    "break",
+    "continue",
+    "return",
+    "throw",
+    "throws",
+    "try",
+    "catch",
+    "finally",
+    "new",
+    "this",
+    "super",
+    "void",
+    "true",
+    "false",
+    "null",
+    "public",
+    "private",
+    "protected",
+    "static",
+    "final",
+    "abstract",
+    "synchronized",
+    "volatile",
+    "transient",
+    "native",
+    "strictfp",
+    "class",
+    "interface",
+    "enum",
+    "extends",
+    "implements",
+    "package",
+    "import",
+    "instanceof",
+    "var",
+    "int",
+    "long",
+    "short",
+    "byte",
+    "float",
+    "double",
+    "boolean",
+    "char",
     "assert",
 }
 
@@ -165,7 +337,10 @@ def _strip_comments_and_strings(src: str) -> str:
 
 
 def _is_stdlib(import_path: str) -> bool:
-    return any(import_path == p.rstrip(".") or import_path.startswith(p) for p in _STDLIB_PREFIXES)
+    return any(
+        import_path == p.rstrip(".") or import_path.startswith(p)
+        for p in _STDLIB_PREFIXES
+    )
 
 
 def _short_name(import_path: str) -> str:
@@ -216,7 +391,7 @@ def parse_test_java(src: str) -> dict | None:
     # generic types are matched as a single run of [\w.<>,\s?]+ but bounded
     # to a line so backtracking is cheap.
     _METHOD_HEADER_LINE = re.compile(
-        r"^\s*(?:@\w+(?:\([^\n]*\))?\s+)*"       # optional annotations on same line
+        r"^\s*(?:@\w+(?:\([^\n]*\))?\s+)*"  # optional annotations on same line
         r"(?:(?:public|private|protected|static|final|synchronized|abstract|default|native)\s+){0,5}"
         r"(?:[\w]+(?:\s*<[^<>\n]{0,200}>)?(?:\[\])?)\s+"  # return type (single token, no backtracking)
         r"([A-Za-z_]\w*)\s*\(",
@@ -245,7 +420,11 @@ def parse_test_java(src: str) -> dict | None:
     for m in _NEW_RE.finditer(clean_body):
         cls = m.group(1).split(".")[-1]
         args = m.group(2).strip()
-        arity = 0 if not args else len([a for a in _split_top_level(args, ",") if a.strip()])
+        arity = (
+            0
+            if not args
+            else len([a for a in _split_top_level(args, ",") if a.strip()])
+        )
         new_calls.setdefault(cls, set()).add(arity)
 
     # Build the import name set: simple-name -> (fqn, stdlib?)
@@ -253,7 +432,9 @@ def parse_test_java(src: str) -> dict | None:
     static_imports: list[str] = []
     well_known_imports: list[str] = []
     project_imports: list[str] = []
-    wildcard_imports: list[str] = []  # only NON-static wildcard imports of project packages
+    wildcard_imports: list[
+        str
+    ] = []  # only NON-static wildcard imports of project packages
     for is_static, fqn in imports:
         if is_static:
             static_imports.append(fqn)
@@ -297,12 +478,29 @@ def parse_test_java(src: str) -> dict | None:
     method_calls: dict[str, set[int]] = {}
     for m in re.finditer(r"\.([a-z]\w*)\s*\(([^)(]*)\)", clean_body):
         name = m.group(1)
-        if name in {"equals", "hashCode", "toString", "size", "length",
-                    "expect", "expectMessage", "andReturn", "thenReturn",
-                    "thenThrow", "when", "verify", "mock", "spy"}:
+        if name in {
+            "equals",
+            "hashCode",
+            "toString",
+            "size",
+            "length",
+            "expect",
+            "expectMessage",
+            "andReturn",
+            "thenReturn",
+            "thenThrow",
+            "when",
+            "verify",
+            "mock",
+            "spy",
+        }:
             continue
         args = m.group(2).strip()
-        arity = 0 if not args else len([a for a in _split_top_level(args, ",") if a.strip()])
+        arity = (
+            0
+            if not args
+            else len([a for a in _split_top_level(args, ",") if a.strip()])
+        )
         method_calls.setdefault(name, set()).add(arity)
 
     return {
@@ -358,7 +556,7 @@ def _format_test_contract(parsed: dict) -> str:
         "If the original task description above conflicts with this section, prefer this section."
     )
     lines.append("")
-    lines.append(f"**Language**: Java")
+    lines.append("**Language**: Java")
     if parsed["package"]:
         lines.append(f"**Test package**: `{parsed['package']}`")
     else:
@@ -381,7 +579,9 @@ def _format_test_contract(parsed: dict) -> str:
     if parsed["imports_well_known"]:
         sample = parsed["imports_well_known"][:25]
         more = len(parsed["imports_well_known"]) - len(sample)
-        lines.append("**Well-known imports** (JUnit, JDK, common libs — already on the classpath):")
+        lines.append(
+            "**Well-known imports** (JUnit, JDK, common libs — already on the classpath):"
+        )
         lines.append("")
         for imp in sample:
             lines.append(f"- `{imp}`")
@@ -414,7 +614,9 @@ def _format_test_contract(parsed: dict) -> str:
         lines.append("")
 
     if parsed["wildcard_imports"]:
-        lines.append("**Wildcard package imports** (implement classes from these packages as needed):")
+        lines.append(
+            "**Wildcard package imports** (implement classes from these packages as needed):"
+        )
         lines.append("")
         for imp in parsed["wildcard_imports"]:
             lines.append(f"- `{imp}`")
@@ -422,7 +624,8 @@ def _format_test_contract(parsed: dict) -> str:
 
     # SUT class candidates — classes referenced but not in stdlib
     sut = [
-        s for s in parsed["sut_candidates"]
+        s
+        for s in parsed["sut_candidates"]
         # Filter out things that look like exceptions or simple type params
         if len(s) > 1
     ]
@@ -438,7 +641,9 @@ def _format_test_contract(parsed: dict) -> str:
             ctor = parsed["constructors"].get(s)
             if ctor is not None:
                 arities = ", ".join(f"{a} arg{'s' if a != 1 else ''}" for a in ctor)
-                lines.append(f"- `{s}` — constructed via `new {s}(...)` with arities: {arities}")
+                lines.append(
+                    f"- `{s}` — constructed via `new {s}(...)` with arities: {arities}"
+                )
             else:
                 lines.append(f"- `{s}`")
         if more > 0:
@@ -447,8 +652,7 @@ def _format_test_contract(parsed: dict) -> str:
 
     # Method-call signature stubs
     methods = [
-        (n, a) for n, a in parsed["method_calls"].items()
-        if not n.startswith("_")
+        (n, a) for n, a in parsed["method_calls"].items() if not n.startswith("_")
     ]
     methods.sort()
     if methods:
@@ -504,14 +708,16 @@ def rewrite_instruction(original: str, parsed: dict) -> str:
         f"# {parsed['test_class'].replace('Tests', '').replace('Test', '')} — Java task\n\n"
         f"{_V3_MARKER}\n\n"
         "Implement Java sources under `/app/` so that the JUnit test file at "
-        "`/tests/TestSolution.java` compiles and passes. " + (
+        "`/tests/TestSolution.java` compiles and passes. "
+        + (
             f"The test is in package `{parsed['package']}` — your sources must be "
             "reachable via the same package layout (e.g. `/app/<package>/<Class>.java`)."
             if parsed["package"]
             else "The test uses the default (unnamed) package — your sources should also "
-                 "be in the default package (place files directly under `/app/` "
-                 "without a `package` declaration)."
-        ) + "\n\n"
+            "be in the default package (place files directly under `/app/` "
+            "without a `package` declaration)."
+        )
+        + "\n\n"
     )
 
     body = (
@@ -527,7 +733,10 @@ def rewrite_instruction(original: str, parsed: dict) -> str:
         keep = _PROMPT_CAP - len(header) - len(contract) - 200
         if keep < 500:
             keep = 500
-        truncated_orig = original.strip()[:keep] + "\n\n[... description truncated to fit prompt budget ...]\n"
+        truncated_orig = (
+            original.strip()[:keep]
+            + "\n\n[... description truncated to fit prompt budget ...]\n"
+        )
         body = (
             header
             + contract
@@ -542,6 +751,7 @@ def rewrite_instruction(original: str, parsed: dict) -> str:
 # Main
 # --------------------------------------------------------------------------- #
 
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True)
@@ -554,7 +764,9 @@ def main() -> int:
         print(f"Not a directory: {root}", file=sys.stderr)
         return 2
 
-    task_dirs = sorted(d for d in root.iterdir() if d.is_dir() and (d / "instruction.md").exists())
+    task_dirs = sorted(
+        d for d in root.iterdir() if d.is_dir() and (d / "instruction.md").exists()
+    )
     if not task_dirs:
         print(f"No task dirs (with instruction.md) under {root}", file=sys.stderr)
         return 2

@@ -12,7 +12,8 @@ allenai/SERA-32B
 ```
 
 The listener filters this list against:
-1. The baseline model config (`baseline_model_configs_minimal.yaml`)
+1. The shared model-config registry (`eval/configs/model_configs.yaml`, the
+   default; `--baseline-model-configs` is a deprecated override)
    — models without an entry use defaults.
 2. Already-evaluated jobs in Supabase (skipped unless `--force-reeval`).
 3. `--require-priority-list` — when set, only models in the file fire,

@@ -68,8 +68,12 @@ class Taskmaster2Generator(BaseDataGenerator):
         temp_tasks_dir = Path(generate_tasks_from_questions(questions, "taskmaster2"))
         sample_cap = getattr(args, "subsample_count", 10_000)
         subsample_count = min(sample_cap, len(questions)) if questions else sample_cap
-        subsampled_dataset_dir = subsample_tasks_directory(str(temp_tasks_dir), subsample_count)
-        output_path = finalize_dataset_output(subsampled_dataset_dir, getattr(args, "output_dir", None))
+        subsampled_dataset_dir = subsample_tasks_directory(
+            str(temp_tasks_dir), subsample_count
+        )
+        output_path = finalize_dataset_output(
+            subsampled_dataset_dir, getattr(args, "output_dir", None)
+        )
         dataset_path = str(output_path)
 
         shutil.rmtree(temp_tasks_dir, ignore_errors=True)
@@ -103,4 +107,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

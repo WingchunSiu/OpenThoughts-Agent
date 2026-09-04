@@ -71,8 +71,12 @@ def convert_competitive_coding(row: dict, row_idx: int) -> HarborTask | None:
     for i, (inp, out) in enumerate(zip(inputs, outputs)):
         if not isinstance(inp, str) or not isinstance(out, str):
             raise SanitizationError(f"test {i}: non-string input/output")
-        san_inputs.append(sanitize_text(inp, field_name=f"inputs[{i}]", max_len=_MAX_TEST_BYTES))
-        san_outputs.append(sanitize_text(out, field_name=f"outputs[{i}]", max_len=_MAX_TEST_BYTES))
+        san_inputs.append(
+            sanitize_text(inp, field_name=f"inputs[{i}]", max_len=_MAX_TEST_BYTES)
+        )
+        san_outputs.append(
+            sanitize_text(out, field_name=f"outputs[{i}]", max_len=_MAX_TEST_BYTES)
+        )
     instruction_md = _INSTRUCTION_HEADER + prompt
     dockerfile = render_dockerfile(base=_BASE_IMAGE)
     hid = row.get("hash_id") if isinstance(row.get("hash_id"), str) else None

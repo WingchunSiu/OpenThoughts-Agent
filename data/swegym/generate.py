@@ -45,7 +45,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def add_swegym_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument("--split", type=str, default="train", help="Dataset split to load.")
+    parser.add_argument(
+        "--split", type=str, default="train", help="Dataset split to load."
+    )
     parser.add_argument(
         "--limit",
         type=int,

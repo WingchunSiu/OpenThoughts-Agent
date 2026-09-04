@@ -58,7 +58,7 @@ Patcher contract
 ----------------
 Operates on an extracted task tree (one subdir per task with
 `instruction.md` marker). Removes broken task subdirs in place so the
-downstream `scripts/harbor/make_and_upload_task_dataset.py` re-packs
+downstream `scripts.harbor.tasks_parquet_converter` re-packs
 only the surviving tasks into the new parquet.
 
 Idempotent: detection re-runs cleanly because removal is the only
@@ -72,6 +72,7 @@ Usage
       --root /path/to/extracted/mix_h8_original_tests \
       [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse

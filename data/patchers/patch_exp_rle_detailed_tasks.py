@@ -112,7 +112,6 @@ from patch_rle_flat25_tasks import (  # noqa: E402
     STDLIB,
     _instruction_tokens,
     _top_level_imports,
-    evaluate_task as evaluate_task_v2,
 )
 
 
@@ -124,62 +123,85 @@ from patch_rle_flat25_tasks import (  # noqa: E402
 # (removed in modern versions, private namespace not shipped, etc.).
 # Match if the imported dotted path equals an entry or starts with
 # ``<entry>.``.
-KNOWN_BROKEN_SUBMODULES: frozenset[str] = frozenset({
-    # pandas
-    "pandas.util.testing",           # removed in pandas 2.x (→ pandas.testing)
-    "pandas.tests",                  # private — not shipped in wheels
-    "pandas.core.index",             # private
-    "pandas.compat",                 # mostly private; specific symbols vanish
-    "pandas.util._test_decorators",  # private — flaky across versions
-    "pandas._testing",               # private — symbols renamed/removed
-    # scikit-learn
-    "sklearn.utils.testing",         # removed (→ sklearn.utils._testing)
-    # tensorflow / keras
-    "tensorflow.python",             # private internals
-    "keras.utils.test_utils",        # removed in modern keras
-    "keras.utils.testing_utils",     # removed
-    # numpy
-    "numpy.core",                    # private (removed/relocated in numpy 2.x)
-    "numpy.compat",                  # removed in numpy 2.x
-    "numpy.lib.shape_base",          # private
-    "numpy.core._rational_tests",    # internal
-    "numpy.core._multiarray_tests",  # internal
-    # ddtrace
-    "ddtrace.compat",                # removed in ddtrace 1.x+
-    # pandas test test-decorators namespace variants
-    "test.utils",                    # ambiguous — usually agent-local; safe drop
-})
+KNOWN_BROKEN_SUBMODULES: frozenset[str] = frozenset(
+    {
+        # pandas
+        "pandas.util.testing",  # removed in pandas 2.x (→ pandas.testing)
+        "pandas.tests",  # private — not shipped in wheels
+        "pandas.core.index",  # private
+        "pandas.compat",  # mostly private; specific symbols vanish
+        "pandas.util._test_decorators",  # private — flaky across versions
+        "pandas._testing",  # private — symbols renamed/removed
+        # scikit-learn
+        "sklearn.utils.testing",  # removed (→ sklearn.utils._testing)
+        # tensorflow / keras
+        "tensorflow.python",  # private internals
+        "keras.utils.test_utils",  # removed in modern keras
+        "keras.utils.testing_utils",  # removed
+        # numpy
+        "numpy.core",  # private (removed/relocated in numpy 2.x)
+        "numpy.compat",  # removed in numpy 2.x
+        "numpy.lib.shape_base",  # private
+        "numpy.core._rational_tests",  # internal
+        "numpy.core._multiarray_tests",  # internal
+        # ddtrace
+        "ddtrace.compat",  # removed in ddtrace 1.x+
+        # pandas test test-decorators namespace variants
+        "test.utils",  # ambiguous — usually agent-local; safe drop
+    }
+)
 
 # Bare local-package names that override the instr-mentioned exemption.
 # Tests doing ``from <name> import X`` for these always need the agent to
 # materialize a /app/<name>.py, which rarely happens reliably. Even when
 # instruction.md mentions the word (e.g. "place your tests under tests/"),
 # the test-time import fails.
-LOCAL_NAME_BLOCKLIST: frozenset[str] = frozenset({
-    "tests", "test", "tests_helpers",
-    "helpers", "helper",
-    "utils", "util",
-    "models", "model",
-    "main",
-    "app", "apps",
-    "src", "source",
-    "rules", "rule",
-    "section", "sections",
-    "api", "apis",
-    "common", "core", "lib",
-    "config", "settings", "conf",
-    "view", "views",
-    "form", "forms",
-    "schema", "schemas",
-})
+LOCAL_NAME_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        "tests",
+        "test",
+        "tests_helpers",
+        "helpers",
+        "helper",
+        "utils",
+        "util",
+        "models",
+        "model",
+        "main",
+        "app",
+        "apps",
+        "src",
+        "source",
+        "rules",
+        "rule",
+        "section",
+        "sections",
+        "api",
+        "apis",
+        "common",
+        "core",
+        "lib",
+        "config",
+        "settings",
+        "conf",
+        "view",
+        "views",
+        "form",
+        "forms",
+        "schema",
+        "schemas",
+    }
+)
 
 # Top-level pypi modules the container does NOT pre-install (verified by
 # failure traces). Top-level imports of these are bad even if instr.md
 # mentions them (e.g. "google" appears in many tutorials).
-EXTRA_MISSING_TOPLEVEL: frozenset[str] = frozenset({
-    "tzdata",
-    "google",      # google.api_core, google.cloud, etc.
-})
+EXTRA_MISSING_TOPLEVEL: frozenset[str] = frozenset(
+    {
+        "tzdata",
+        "google",  # google.api_core, google.cloud, etc.
+    }
+)
 
 # pytest plugins whose decorators / fixtures appear in tests but aren't
 # installed in the container.
@@ -258,7 +280,11 @@ def evaluate_task_v3(task_dir: Path) -> dict:
     try:
         src = test_file.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
-        return {"kept": False, "reason": f"read_error:{type(exc).__name__}", "details": []}
+        return {
+            "kept": False,
+            "reason": f"read_error:{type(exc).__name__}",
+            "details": [],
+        }
 
     try:
         tree = ast.parse(src)
@@ -269,7 +295,8 @@ def evaluate_task_v3(task_dir: Path) -> dict:
     imports_deep = _deep_import_paths(tree)
     instr_text = (
         instr_file.read_text(encoding="utf-8", errors="replace")
-        if instr_file.exists() else ""
+        if instr_file.exists()
+        else ""
     )
     instr_toks = _instruction_tokens(instr_text)
 
@@ -312,7 +339,7 @@ def evaluate_task_v3(task_dir: Path) -> dict:
     # (4) pytest.importorskip("foo") with foo outside whitelist
     for m in _IMPORTORSKIP_RE.finditer(src):
         mod = m.group(1).split(".")[0]
-        if (mod in STDLIB or mod in PIP_WHITELIST or mod in ALWAYS_INSTALLED):
+        if mod in STDLIB or mod in PIP_WHITELIST or mod in ALWAYS_INSTALLED:
             continue
         bad.append(f"importorskip:{m.group(1)}")
         break  # one is enough
@@ -342,16 +369,32 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import samples.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad", type=int, default=20, help="Print the first N bad-import samples."
+    )
     return p.parse_args()
 
 
@@ -400,7 +443,7 @@ def main() -> None:
     print(f"[patch_exp_rle_detailed v3] no test file:   {no_test_dropped}")
     print(f"[patch_exp_rle_detailed v3] syntax errors:  {syntax_dropped}")
     if drop_counts:
-        print(f"[patch_exp_rle_detailed v3] drop reasons (by detail prefix):")
+        print("[patch_exp_rle_detailed v3] drop reasons (by detail prefix):")
         for k, v in sorted(drop_counts.items(), key=lambda kv: -kv[1]):
             print(f"    {v:5d}  {k}")
     print(f"[patch_exp_rle_detailed v3] kept:           {kept}")
@@ -413,7 +456,9 @@ def main() -> None:
 
     if args.report_json:
         args.report_json.write_text(json.dumps(verdicts, indent=2))
-        print(f"[patch_exp_rle_detailed v3] wrote per-task verdicts: {args.report_json}")
+        print(
+            f"[patch_exp_rle_detailed v3] wrote per-task verdicts: {args.report_json}"
+        )
 
     if args.dry_run:
         print("[patch_exp_rle_detailed v3] dry-run: not deleting dropped tasks.")

@@ -103,7 +103,9 @@ class BashTextbookGenerator(BaseDataGenerator):
         args = context.args
         limit = self._resolve_limit(request)
 
-        target_samples = limit if limit is not None else getattr(args, "target_samples", 10_000)
+        target_samples = (
+            limit if limit is not None else getattr(args, "target_samples", 10_000)
+        )
         if target_samples is None or target_samples <= 0:
             target_samples = 10_000
         target_samples = max(1, target_samples)
@@ -143,13 +145,21 @@ class BashTextbookGenerator(BaseDataGenerator):
 
         current_count = _count_task_directories(tasks_root)
         if current_count < target_samples:
-            upsampled = Path(upsample_tasks_directory(str(tasks_root), target_samples, dataset_prefix=prefix))
+            upsampled = Path(
+                upsample_tasks_directory(
+                    str(tasks_root), target_samples, dataset_prefix=prefix
+                )
+            )
             if upsampled != tasks_root:
                 temp_paths.add(upsampled)
                 tasks_root = upsampled
 
         if target_samples > 0:
-            subsampled = Path(subsample_tasks_directory(str(tasks_root), target_samples, dataset_prefix=prefix))
+            subsampled = Path(
+                subsample_tasks_directory(
+                    str(tasks_root), target_samples, dataset_prefix=prefix
+                )
+            )
             if subsampled != tasks_root:
                 temp_paths.add(subsampled)
                 tasks_root = subsampled

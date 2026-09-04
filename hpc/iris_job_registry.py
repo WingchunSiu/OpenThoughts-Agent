@@ -18,7 +18,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Iterator, Optional
 
 from hpc.local_paths import PATHS, ensure as ensure_local_paths
 
@@ -28,12 +28,12 @@ DB_PATH: Path = PATHS.state / "iris_jobs.db"
 
 # Possible status values written by the launcher / daemon. Strings (not
 # enums) so the SQLite column reads naturally in `sqlite3 ... .dump`.
-STATUS_SUBMITTED = "submitted"     # launcher INSERT, before daemon sees it
-STATUS_RUNNING = "running"         # daemon observed an active iris state
-STATUS_SUCCEEDED = "succeeded"     # iris terminal SUCCEEDED; fetch may not be done
-STATUS_FAILED = "failed"           # iris terminal FAILED/CANCELLED
-STATUS_FETCHING = "fetching"       # daemon is currently `gcloud storage cp`-ing
-STATUS_FETCHED = "fetched"         # outputs live at local_dest/
+STATUS_SUBMITTED = "submitted"  # launcher INSERT, before daemon sees it
+STATUS_RUNNING = "running"  # daemon observed an active iris state
+STATUS_SUCCEEDED = "succeeded"  # iris terminal SUCCEEDED; fetch may not be done
+STATUS_FAILED = "failed"  # iris terminal FAILED/CANCELLED
+STATUS_FETCHING = "fetching"  # daemon is currently `gcloud storage cp`-ing
+STATUS_FETCHED = "fetched"  # outputs live at local_dest/
 STATUS_FETCH_FAILED = "fetch_failed"  # gcloud cp errored; user can retry
 
 
@@ -141,8 +141,15 @@ def register_submission(
                 cluster_config=excluded.cluster_config,
                 status=excluded.status
             """,
-            (job_id, job_name, submitted_at_iso, gcs_output_dir, str(local_dest),
-             cluster_config, STATUS_SUBMITTED),
+            (
+                job_id,
+                job_name,
+                submitted_at_iso,
+                gcs_output_dir,
+                str(local_dest),
+                cluster_config,
+                STATUS_SUBMITTED,
+            ),
         )
         conn.execute("COMMIT")
 

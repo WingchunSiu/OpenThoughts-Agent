@@ -53,6 +53,7 @@ Usage::
         --root /tmp/stack-dockerfile-extracted \\
         [--dry-run] [--limit N] [--no-online-check]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -311,7 +312,9 @@ def _parse_image_ref(ref: str) -> tuple[str, str, str] | None:
     # If a registry path is present it'll have a "." or ":" before the
     # first "/". Docker treats these as non-Hub registries.
     parts = ref.split("/")
-    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
+    if len(parts) > 1 and (
+        "." in parts[0] or ":" in parts[0] or parts[0] == "localhost"
+    ):
         return None  # non-Hub registry
     # Now ref is either ``image[:tag]`` or ``namespace/image[:tag]``.
     if len(parts) == 1:
@@ -403,7 +406,9 @@ def check_image_exists(ref: str, cache: dict[str, str], timeout: float = 8.0) ->
         return "ambiguous"
     ns, repo, tag = parsed
     url = f"https://hub.docker.com/v2/repositories/{ns}/{repo}/tags/{tag}/"
-    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "patcher/1"})
+    req = urllib.request.Request(
+        url, method="HEAD", headers={"User-Agent": "patcher/1"}
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status = resp.status
@@ -453,6 +458,7 @@ def base_image_passes(
 # (10000 tasks × ~1s/task = 2.5h serial → ~2 min with 32 parallel workers and
 # only ~1500 unique image refs).
 # --------------------------------------------------------------------------- #
+
 
 def collect_unique_images(task_dirs: list[Path]) -> list[str]:
     seen: set[str] = set()
@@ -592,6 +598,7 @@ def apt_get_passes(task_dir: Path) -> tuple[bool, str]:
 # Driver
 # --------------------------------------------------------------------------- #
 
+
 def filter_one_task(
     task_dir: Path,
     cache: dict[str, str],
@@ -632,13 +639,14 @@ def filter_one_task(
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--root", required=True,
-                   help="Directory of extracted task folders")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Don't actually delete dropped task dirs")
+    p.add_argument("--root", required=True, help="Directory of extracted task folders")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Don't actually delete dropped task dirs"
+    )
     p.add_argument("--limit", type=int, default=0)
-    p.add_argument("--no-online-check", action="store_true",
-                   help="Skip Docker Hub HEAD checks")
+    p.add_argument(
+        "--no-online-check", action="store_true", help="Skip Docker Hub HEAD checks"
+    )
     p.add_argument("--examples", type=int, default=10)
     args = p.parse_args()
 
@@ -665,11 +673,16 @@ def main() -> int:
         print(f"[prewarm] discovered {len(all_images)} unique base-image refs")
         prewarm_image_cache(all_images, cache, workers=32, timeout=6.0)
 
-    counts: dict[str, int] = {"keep": 0, "drop_path_glob": 0,
-                              "drop_image_404": 0, "drop_apt_broken": 0}
+    counts: dict[str, int] = {
+        "keep": 0,
+        "drop_path_glob": 0,
+        "drop_image_404": 0,
+        "drop_apt_broken": 0,
+    }
     examples: dict[str, list[str]] = {}
     # Track base-image distribution for kept vs each drop bucket.
     from collections import Counter
+
     base_counter_keep: Counter = Counter()
     base_counter_drop: Counter = Counter()
 

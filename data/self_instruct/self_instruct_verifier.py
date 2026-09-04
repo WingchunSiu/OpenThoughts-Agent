@@ -4,7 +4,6 @@ Logic for authoring and injecting functional Python verifiers for Self-Instruct 
 
 import os
 import re
-import json
 from pathlib import Path
 from typing import List, Tuple
 
@@ -135,65 +134,81 @@ if __name__ == "__main__":
 {instruction}
 """
 
-def author_verifier_harness(instruction: str, task_name: str, model_name: str = "gpt-5-nano") -> Tuple[str, str]:
+
+def author_verifier_harness(
+    instruction: str, task_name: str, model_name: str = "gpt-5-nano"
+) -> Tuple[str, str]:
     """Calls the LLM to author both test.sh and test_state.py."""
     try:
         from openai import OpenAI
         from openai.types.chat import ChatCompletionUserMessageParam
+
         client = OpenAI()
-        
+
         prompt = AUTHORING_PROMPT_TEMPLATE.format(instruction=instruction)
-        
+
         messages: List[ChatCompletionUserMessageParam] = [
             {
                 "role": "user",
                 "content": prompt,
             }
         ]
-        
+
         response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=1.0
+            model=model_name, messages=messages, temperature=1.0
         )
-        
+
         content = response.choices[0].message.content
-        
+
         # Extract scripts
         bash_match = re.search(r"<bash_script>(.*?)</bash_script>", content, re.DOTALL)
         if not bash_match:
             print(f"ERROR [{task_name}]: Missing <bash_script>")
         bash_script = bash_match.group(1).strip() if bash_match else "# Error"
-        
-        python_match = re.search(r"<python_script>(.*?)</python_script>", content, re.DOTALL)
+
+        python_match = re.search(
+            r"<python_script>(.*?)</python_script>", content, re.DOTALL
+        )
         if not python_match:
             print(f"ERROR [{task_name}]: Missing <python_script>")
         python_script = python_match.group(1).strip() if python_match else "# Error"
-        
+
         return bash_script, python_script
-        
+
     except Exception as e:
         print(f"Error calling LLM for verifier authoring on {task_name}: {e}")
         return "#!/bin/bash\nexit 1", f"# Error: {str(e)}"
 
-def inject_self_instruct_verifier(dataset_dir: str, questions: List[str], model_name: str = "gpt-5-nano", max_workers: int = 30):
+
+def inject_self_instruct_verifier(
+    dataset_dir: str,
+    questions: List[str],
+    model_name: str = "gpt-5-nano",
+    max_workers: int = 30,
+):
     """Orchestrates the authoring and injection of verifiers into tasks."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     tasks_root = Path(dataset_dir)
-    task_dirs = sorted([d for d in tasks_root.iterdir() if d.is_dir()], key=lambda x: x.name)
+    task_dirs = sorted(
+        [d for d in tasks_root.iterdir() if d.is_dir()], key=lambda x: x.name
+    )
 
-    print(f"Authoring functional verifiers for {len(task_dirs)} tasks using {model_name}...")
+    print(
+        f"Authoring functional verifiers for {len(task_dirs)} tasks using {model_name}..."
+    )
 
     def process_task(task_dir, instruction):
         tests_dir = task_dir / "tests"
         tests_dir.mkdir(exist_ok=True)
-        
+
         if (tests_dir / "test_state.py").exists():
             print(f"[{task_dir.name}] Skipping - verifier already exists.")
             return
 
-        bash_code, python_code = author_verifier_harness(instruction, task_dir.name, model_name)
+        bash_code, python_code = author_verifier_harness(
+            instruction, task_dir.name, model_name
+        )
 
         with open(tests_dir / "test_state.py", "w") as f:
             f.write(python_code)
@@ -203,6 +218,9 @@ def inject_self_instruct_verifier(dataset_dir: str, questions: List[str], model_
         print(f"[{task_dir.name}] Verifier generated.")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_task, td, instr) for td, instr in zip(task_dirs, questions)]
+        futures = [
+            executor.submit(process_task, td, instr)
+            for td, instr in zip(task_dirs, questions)
+        ]
         for f in as_completed(futures):
             f.result()

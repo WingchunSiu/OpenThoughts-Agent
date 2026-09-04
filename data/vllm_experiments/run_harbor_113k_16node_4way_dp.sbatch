@@ -249,7 +249,7 @@ start_vllm_for_shard() {
             VLLM_ALL2ALL_BACKEND="pplx" \
             VLLM_ENABLE_EPLB="false" \
             SERVE_HTTP_PORT="$api_port" \
-        $PYTHON_BIN ${DCAGENT_DIR}/scripts/vllm/dp_debug.py \
+        $PYTHON_BIN ${DCAGENT_DIR}/hpc/vllm/dp_debug.py \
         >> "$vllm_log" 2>&1 &
 
     VLLM_PIDS[$shard_idx]=$!

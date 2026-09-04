@@ -1,4 +1,3 @@
-# Harbor job configuration for trace generation using Apptainer on TACC clusters.
 
 job_name: default-trace-job
 jobs_dir: trace_jobs
@@ -47,9 +46,8 @@ environment:
   override_memory_mb: 2048
   override_storage_mb: 2048
   kwargs:
-    # Apptainer-specific options
-    use_gpu: false         # Set to true for GPU workloads (--nv flag)
-    network_none: false    # Set to true for fully isolated containers
+    use_gpu: false
+    network_none: false
     image_cache_dir: trace_images
     image_manifest_path: trace_images/images_manifest.jsonl
     build_concurrency: 4

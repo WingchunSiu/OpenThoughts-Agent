@@ -5,13 +5,13 @@ Generate trace hints dataset in sandboxes style
 
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from collections import defaultdict
+from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
-    from bespokelabs import curator
+    from bespokelabs import curator  # noqa: F401
+
     CURATOR_AVAILABLE = True
 except ImportError:
     CURATOR_AVAILABLE = False
@@ -23,7 +23,7 @@ from data.commons import upload_traces_to_hf
 from data.trace_hints.augment_dataset import (
     group_episodes_by_trial,
     extract_hints_from_trials,
-    create_augmented_instructions
+    create_augmented_instructions,
 )
 
 
@@ -40,7 +40,7 @@ def generate_hints_dataset(
     batch_size: int = 100,
     max_requests_per_minute: int = 500,
     task_markers: List[str] = None,
-    max_trials: Optional[int] = None
+    max_trials: Optional[int] = None,
 ) -> List[tuple]:
     if not CURATOR_AVAILABLE:
         raise ImportError("curator required. Install: pip install bespokelabs-curator")
@@ -60,14 +60,12 @@ def generate_hints_dataset(
         model=model,
         batch_size=batch_size,
         max_requests_per_minute=max_requests_per_minute,
-        task_markers=task_markers
+        task_markers=task_markers,
     )
 
     print("\n[3/3] Creating augmented instructions...")
     augmented_instructions = create_augmented_instructions(
-        trials,
-        trial_hints,
-        task_markers=task_markers
+        trials, trial_hints, task_markers=task_markers
     )
 
     return augmented_instructions
@@ -81,13 +79,12 @@ def main() -> None:
         dataset_name=dataset_name,
         model="gpt-4o-mini",
         batch_size=100,
-        max_requests_per_minute=500
+        max_requests_per_minute=500,
     )
 
     dataset_prefix = f"{dataset_name.split('/')[-1]}-hints"
     final_dataset_dir = generate_tasks_from_questions(
-        augmented_instructions,
-        dataset_prefix=dataset_prefix
+        augmented_instructions, dataset_prefix=dataset_prefix
     )
 
     upload_tasks_to_hf(final_dataset_dir, repo_name)
@@ -97,14 +94,10 @@ def main() -> None:
         model_name="gpt-5-nano-2025-08-07",
         agent_name="terminus-2",
         n_concurrent=1024,
-        agent_kwargs={"max_episodes": 8}
+        agent_kwargs={"max_episodes": 8},
     )
 
-    upload_traces_to_hf(
-        hf_dataset,
-        f"{repo_name}-traces-terminus-2",
-        "SFT"
-    )
+    upload_traces_to_hf(hf_dataset, f"{repo_name}-traces-terminus-2", "SFT")
 
 
 if __name__ == "__main__":

@@ -52,7 +52,9 @@ def find_latest_checkpoint(checkpoints_dir: Path) -> Path:
         if match:
             step_dirs.append((int(match.group(1)), child))
     if not step_dirs:
-        raise FileNotFoundError(f"No checkpoint step directories found in {checkpoints_dir}")
+        raise FileNotFoundError(
+            f"No checkpoint step directories found in {checkpoints_dir}"
+        )
     step_dirs.sort(key=lambda x: x[0])
     return step_dirs[-1][1]
 
@@ -74,8 +76,11 @@ def flatten_checkpoint(
         work_dir = Path(tempfile.mkdtemp()) / repo_name
 
     print(f"Cloning {repo_url} (LFS pointers only)...")
-    run(["git", "clone", repo_url, str(work_dir)],
-        check=True, env={"GIT_LFS_SKIP_SMUDGE": "1"})
+    run(
+        ["git", "clone", repo_url, str(work_dir)],
+        check=True,
+        env={"GIT_LFS_SKIP_SMUDGE": "1"},
+    )
 
     # Set GIT_LFS_SKIP_SMUDGE for the clone, then pull selectively
     checkpoints_dir = work_dir / "checkpoints"
@@ -127,7 +132,9 @@ def flatten_checkpoint(
     run(["git", "add", "."], cwd=work_dir)
 
     # Commit
-    commit_msg = f"Flatten: move {target.name} checkpoint to repo root, remove checkpoints/"
+    commit_msg = (
+        f"Flatten: move {target.name} checkpoint to repo root, remove checkpoints/"
+    )
     run(["git", "commit", "-m", commit_msg], cwd=work_dir)
 
     if dry_run:
@@ -154,10 +161,26 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("repo_id", help="HuggingFace repo ID (e.g. laion/my-model)")
-    parser.add_argument("--step", type=int, default=None, help="Specific checkpoint step to use (default: latest)")
-    parser.add_argument("--keep-local", action="store_true", help="Don't delete the local clone after pushing")
-    parser.add_argument("--dry-run", action="store_true", help="Clone and flatten but don't push")
-    parser.add_argument("--clone-dir", type=str, default=None, help="Directory to clone into (default: temp dir)")
+    parser.add_argument(
+        "--step",
+        type=int,
+        default=None,
+        help="Specific checkpoint step to use (default: latest)",
+    )
+    parser.add_argument(
+        "--keep-local",
+        action="store_true",
+        help="Don't delete the local clone after pushing",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Clone and flatten but don't push"
+    )
+    parser.add_argument(
+        "--clone-dir",
+        type=str,
+        default=None,
+        help="Directory to clone into (default: temp dir)",
+    )
 
     args = parser.parse_args()
     clone_dir = Path(args.clone_dir) if args.clone_dir else None

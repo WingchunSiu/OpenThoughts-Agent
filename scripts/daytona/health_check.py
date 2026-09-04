@@ -146,7 +146,7 @@ def create_sandbox(
             print(f"  Snapshot '{snapshot_name}' failed: {e}")
             if dockerfile_path is None:
                 raise
-            print(f"  Falling back to Dockerfile build...")
+            print("  Falling back to Dockerfile build...")
 
     if dockerfile_path:
         image = Image.from_dockerfile(str(dockerfile_path))
@@ -164,7 +164,9 @@ def create_sandbox(
     raise ValueError("Either snapshot_name or dockerfile_path must be provided")
 
 
-def exec_command(sandbox: Any, command: str, timeout: float = 30) -> tuple[int, str, float]:
+def exec_command(
+    sandbox: Any, command: str, timeout: float = 30
+) -> tuple[int, str, float]:
     """Execute a command and return (exit_code, output, elapsed_sec)."""
     t0 = time.monotonic()
     result = sandbox.process.exec(command, timeout=timeout)
@@ -195,7 +197,11 @@ def run_single_health_check(
 
     # 1. Create sandbox
     if verbose:
-        src = f"snapshot={snapshot_name}" if snapshot_name else f"Dockerfile={dockerfile_path}"
+        src = (
+            f"snapshot={snapshot_name}"
+            if snapshot_name
+            else f"Dockerfile={dockerfile_path}"
+        )
         print(f"{prefix} Creating sandbox ({src})...")
     try:
         sandbox, create_time = create_sandbox(
@@ -225,11 +231,15 @@ def run_single_health_check(
                 turn_times.append(elapsed)
                 if verbose:
                     status = "OK" if exit_code == 0 else f"exit={exit_code}"
-                    print(f"{prefix} Turn {i+1}/{len(ORACLE_TURNS)} ({desc}): {elapsed:.2f}s [{status}]")
+                    print(
+                        f"{prefix} Turn {i + 1}/{len(ORACLE_TURNS)} ({desc}): {elapsed:.2f}s [{status}]"
+                    )
             except Exception as e:
                 turn_times.append(None)
                 if verbose:
-                    print(f"{prefix} Turn {i+1}/{len(ORACLE_TURNS)} ({desc}): FAILED ({e})")
+                    print(
+                        f"{prefix} Turn {i + 1}/{len(ORACLE_TURNS)} ({desc}): FAILED ({e})"
+                    )
 
         valid_times = [t for t in turn_times if t is not None]
         results["turn_times_sec"] = turn_times
@@ -249,7 +259,9 @@ def run_single_health_check(
             print(f"{prefix} Deleted in {dt:.1f}s")
 
         results["success"] = True
-        results["total_sec"] = results["create_sec"] + sum(valid_times) + results["delete_sec"]
+        results["total_sec"] = (
+            results["create_sec"] + sum(valid_times) + results["delete_sec"]
+        )
 
     except Exception as e:
         results["teardown_error"] = str(e)
@@ -275,9 +287,9 @@ def run_concurrent_stress_test(
     verbose: bool,
 ) -> list[dict[str, Any]]:
     """Run N health checks concurrently using threads."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"STRESS TEST: {concurrency} concurrent sandboxes")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     t0 = time.monotonic()
 
@@ -312,17 +324,23 @@ def run_concurrent_stress_test(
     delete_times = [r["delete_sec"] for r in results if "delete_sec" in r]
     turn_avgs = [r["turn_avg_sec"] for r in results if "turn_avg_sec" in r]
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"STRESS TEST RESULTS ({concurrency} sandboxes)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Succeeded:   {succeeded}/{concurrency}")
     print(f"  Wall time:   {wall_time:.1f}s")
     if create_times:
-        print(f"  Create time: min={min(create_times):.1f}s  avg={statistics.mean(create_times):.1f}s  max={max(create_times):.1f}s")
+        print(
+            f"  Create time: min={min(create_times):.1f}s  avg={statistics.mean(create_times):.1f}s  max={max(create_times):.1f}s"
+        )
     if turn_avgs:
-        print(f"  Turn latency: min={min(turn_avgs):.2f}s  avg={statistics.mean(turn_avgs):.2f}s  max={max(turn_avgs):.2f}s")
+        print(
+            f"  Turn latency: min={min(turn_avgs):.2f}s  avg={statistics.mean(turn_avgs):.2f}s  max={max(turn_avgs):.2f}s"
+        )
     if delete_times:
-        print(f"  Delete time: min={min(delete_times):.1f}s  avg={statistics.mean(delete_times):.1f}s  max={max(delete_times):.1f}s")
+        print(
+            f"  Delete time: min={min(delete_times):.1f}s  avg={statistics.mean(delete_times):.1f}s  max={max(delete_times):.1f}s"
+        )
     print()
 
     return results
@@ -333,15 +351,53 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--task-path", type=str, help="Path to a task directory with environment/Dockerfile")
-    parser.add_argument("--job-dir", type=str, help="Path to RL experiment directory (auto-detects task)")
-    parser.add_argument("--snapshot", type=str, help="Explicit Daytona snapshot name to use")
-    parser.add_argument("--concurrency", type=int, default=1, help="Number of concurrent sandboxes (stress test)")
-    parser.add_argument("--cpus", type=int, default=1, help="CPUs per sandbox (default: 1)")
-    parser.add_argument("--memory-mb", type=int, default=2048, help="Memory per sandbox in MB (default: 2048)")
-    parser.add_argument("--storage-mb", type=int, default=2048, help="Storage per sandbox in MB (default: 2048)")
-    parser.add_argument("--build-timeout", type=float, default=300, help="Sandbox build timeout in seconds (default: 300)")
-    parser.add_argument("--verbose", "-v", action="store_true", default=True, help="Verbose output (default: true)")
+    parser.add_argument(
+        "--task-path",
+        type=str,
+        help="Path to a task directory with environment/Dockerfile",
+    )
+    parser.add_argument(
+        "--job-dir",
+        type=str,
+        help="Path to RL experiment directory (auto-detects task)",
+    )
+    parser.add_argument(
+        "--snapshot", type=str, help="Explicit Daytona snapshot name to use"
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of concurrent sandboxes (stress test)",
+    )
+    parser.add_argument(
+        "--cpus", type=int, default=1, help="CPUs per sandbox (default: 1)"
+    )
+    parser.add_argument(
+        "--memory-mb",
+        type=int,
+        default=2048,
+        help="Memory per sandbox in MB (default: 2048)",
+    )
+    parser.add_argument(
+        "--storage-mb",
+        type=int,
+        default=2048,
+        help="Storage per sandbox in MB (default: 2048)",
+    )
+    parser.add_argument(
+        "--build-timeout",
+        type=float,
+        default=300,
+        help="Sandbox build timeout in seconds (default: 300)",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        default=True,
+        help="Verbose output (default: true)",
+    )
     parser.add_argument("--quiet", "-q", action="store_true", help="Minimal output")
     args = parser.parse_args()
 
@@ -401,7 +457,9 @@ def main():
                         break
 
     if not snapshot_name and not dockerfile_path:
-        print("Error: Must provide --snapshot, --task-path, or --job-dir", file=sys.stderr)
+        print(
+            "Error: Must provide --snapshot, --task-path, or --job-dir", file=sys.stderr
+        )
         sys.exit(1)
 
     # Resource settings
@@ -423,9 +481,9 @@ def main():
             verbose=args.verbose,
         )
     else:
-        print(f"\n{'='*60}")
-        print(f"DAYTONA HEALTH CHECK")
-        print(f"{'='*60}\n")
+        print(f"\n{'=' * 60}")
+        print("DAYTONA HEALTH CHECK")
+        print(f"{'=' * 60}\n")
 
         result = run_single_health_check(
             daytona=daytona,
@@ -438,18 +496,22 @@ def main():
             verbose=True,
         )
 
-        print(f"\n{'='*60}")
-        print(f"SUMMARY")
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print("SUMMARY")
+        print(f"{'=' * 60}")
         if result.get("success"):
-            print(f"  Status:      OK")
+            print("  Status:      OK")
             print(f"  Create:      {result['create_sec']:.1f}s")
-            print(f"  Turns:       {result.get('turns_succeeded', 0)}/{result.get('turns_total', 0)}")
-            print(f"  Turn latency: min={result.get('turn_min_sec', 0):.2f}s  avg={result.get('turn_avg_sec', 0):.2f}s  max={result.get('turn_max_sec', 0):.2f}s")
+            print(
+                f"  Turns:       {result.get('turns_succeeded', 0)}/{result.get('turns_total', 0)}"
+            )
+            print(
+                f"  Turn latency: min={result.get('turn_min_sec', 0):.2f}s  avg={result.get('turn_avg_sec', 0):.2f}s  max={result.get('turn_max_sec', 0):.2f}s"
+            )
             print(f"  Delete:      {result['delete_sec']:.1f}s")
             print(f"  Total:       {result['total_sec']:.1f}s")
         else:
-            print(f"  Status:      FAILED")
+            print("  Status:      FAILED")
             for k, v in result.items():
                 if "error" in k:
                     print(f"  {k}: {v}")

@@ -10,14 +10,21 @@ from datasets import load_dataset
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.models import get_model
 from minisweagent.environments.local import LocalEnvironment
-from data.commons import create_standard_dockerfile, create_task_from_dockerfiles_and_questions, upload_traces_to_hf, upload_tasks_to_hf 
+from data.commons import (
+    create_standard_dockerfile,
+    create_task_from_dockerfiles_and_questions,
+    upload_traces_to_hf,
+    upload_tasks_to_hf,
+)
 from scripts.harbor.run_and_export_traces import run_dataset_to_traces
 
 
 DEFAULT_MODEL_NAME = "claude-sonnet-4-20250514"
 
 
-def generate_dockerfile_with_agent(instruction: str, model_name: str = DEFAULT_MODEL_NAME) -> str:
+def generate_dockerfile_with_agent(
+    instruction: str, model_name: str = DEFAULT_MODEL_NAME
+) -> str:
     """Use mini-swe-agent to generate a Dockerfile for the given instruction."""
 
     standard_dockerfile = create_standard_dockerfile()
@@ -32,7 +39,7 @@ def generate_dockerfile_with_agent(instruction: str, model_name: str = DEFAULT_M
         dockerfile_path = temp_path / "Dockerfile"
         dockerfile_path.write_text(standard_dockerfile)
 
-        prompt = f"""Generate a Dockerfile for the task described in instruction.md.
+        prompt = """Generate a Dockerfile for the task described in instruction.md.
 
 Starting from the minimal standard template in Dockerfile, your task is to:
 1. Read instruction.md to understand what the task requires
@@ -83,19 +90,28 @@ def main() -> None:
     instructions = [row["instruction"].strip() for row in ds][:10000]
     dockerfiles = []
     for instruction in instructions:
-        dockerfile = generate_dockerfile_with_agent(instruction, model_name=DEFAULT_MODEL_NAME)
+        dockerfile = generate_dockerfile_with_agent(
+            instruction, model_name=DEFAULT_MODEL_NAME
+        )
         dockerfiles.append(dockerfile)
     output_dir = create_task_from_dockerfiles_and_questions(dockerfiles, instructions)
 
-    upload_tasks_to_hf(output_dir, "DCAgent/Magicoder-Evol-Instruct-110K-sandboxes-minisweagent-dockerfile")
-    hf_dataset = run_dataset_to_traces(
-        output_dir, 
-        model_name="gpt-5-nano-2025-08-07", 
-        agent_name="terminus-2", 
-        n_concurrent=256, 
-        agent_kwargs={"max_episodes": 8}
+    upload_tasks_to_hf(
+        output_dir,
+        "DCAgent/Magicoder-Evol-Instruct-110K-sandboxes-minisweagent-dockerfile",
     )
-    upload_traces_to_hf(hf_dataset, "DCAgent/Magicoder-Evol-Instruct-110K-sandboxes-minisweagent-dockerfile-traces", "SFT")
+    hf_dataset = run_dataset_to_traces(
+        output_dir,
+        model_name="gpt-5-nano-2025-08-07",
+        agent_name="terminus-2",
+        n_concurrent=256,
+        agent_kwargs={"max_episodes": 8},
+    )
+    upload_traces_to_hf(
+        hf_dataset,
+        "DCAgent/Magicoder-Evol-Instruct-110K-sandboxes-minisweagent-dockerfile-traces",
+        "SFT",
+    )
 
 
 if __name__ == "__main__":

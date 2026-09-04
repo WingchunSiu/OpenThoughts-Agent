@@ -47,6 +47,7 @@ Constraints (per upload spec):
   - v3 is cumulative on v2 (the v2 instruction.md rewrites are still
     in place; this patch is orthogonal).
 """
+
 from __future__ import annotations
 
 import argparse

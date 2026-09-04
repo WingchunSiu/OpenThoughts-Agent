@@ -76,7 +76,9 @@ def convert_openqa(row: dict, row_idx: int) -> HarborTask | None:
     expected: list[str] = []
     for i, v in enumerate(raw_expected):
         if isinstance(v, str) and v.strip():
-            expected.append(sanitize_text(v, field_name=f"expected_answers[{i}]", max_len=8 * 1024))
+            expected.append(
+                sanitize_text(v, field_name=f"expected_answers[{i}]", max_len=8 * 1024)
+            )
     if not expected:
         return None
     # Format the reference answers as a numbered list so the judge sees each
@@ -84,10 +86,7 @@ def convert_openqa(row: dict, row_idx: int) -> HarborTask | None:
     # the existing `_format_rubric` helper in llm_judge.py: list of
     # {id, criteria} dicts) so the default template formatter renders them
     # uniformly.
-    rubric = [
-        {"id": f"ref{i + 1}", "criteria": e}
-        for i, e in enumerate(expected)
-    ]
+    rubric = [{"id": f"ref{i + 1}", "criteria": e} for i, e in enumerate(expected)]
     uuid = row.get("uuid") if isinstance(row.get("uuid"), str) else None
     task_id = task_id_for(
         "openqa",

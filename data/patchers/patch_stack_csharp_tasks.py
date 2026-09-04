@@ -42,6 +42,7 @@ Usage:
   python data/patchers/patch_stack_csharp_tasks.py \
       --root <dir> [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -85,9 +86,9 @@ _BCL_PREFIXES = (
 # Test-framework namespaces — these are *the* test runner. xUnit comes
 # pre-installed via `dotnet new xunit`; NUnit / MSTest need explicit refs.
 _TEST_FRAMEWORKS = {
-    "Xunit": None,                                 # already present from `dotnet new xunit`
-    "Xunit.Abstractions": None,                    # already present
-    "NUnit": "NUnit",                              # also need NUnit3TestAdapter
+    "Xunit": None,  # already present from `dotnet new xunit`
+    "Xunit.Abstractions": None,  # already present
+    "NUnit": "NUnit",  # also need NUnit3TestAdapter
     "NUnit.Framework": "NUnit",
     "Microsoft.VisualStudio.TestTools.UnitTesting": "MSTest.TestFramework",
 }
@@ -113,15 +114,15 @@ _DROP_PREFIXES = (
     "UnityEngine.TestTools",
     "UnityEditor",
     "Unity.",
-    "System.Web.UI",                # ASP.NET classic — needs full framework
-    "System.Web.Mvc",               # ASP.NET classic
-    "System.Web.Http",              # ASP.NET classic
+    "System.Web.UI",  # ASP.NET classic — needs full framework
+    "System.Web.Mvc",  # ASP.NET classic
+    "System.Web.Http",  # ASP.NET classic
     "System.Web.Razor",
     "System.Web.WebPages",
-    "ManagedTests",                 # Internal Microsoft test infra
-    "Internal.Cryptography",        # Internal corefx test
-    "ScriptCs",                     # Discontinued
-    "Microsoft.AspNet.",            # ASP.NET classic (vs AspNetCore)
+    "ManagedTests",  # Internal Microsoft test infra
+    "Internal.Cryptography",  # Internal corefx test
+    "ScriptCs",  # Discontinued
+    "Microsoft.AspNet.",  # ASP.NET classic (vs AspNetCore)
 )
 
 # Explicit namespace -> NuGet mapping (longest-prefix match).
@@ -337,8 +338,13 @@ def _is_bcl(ns: str) -> bool:
 
 def _is_drop(ns: str) -> bool:
     """Is `ns` a known-unrecoverable namespace (drop the task)?"""
-    return any(ns == p or ns.startswith(p.rstrip(".") + ".") or ns.startswith(p) and p.endswith(".")
-               for p in _DROP_PREFIXES)
+    return any(
+        ns == p
+        or ns.startswith(p.rstrip(".") + ".")
+        or ns.startswith(p)
+        and p.endswith(".")
+        for p in _DROP_PREFIXES
+    )
 
 
 def map_using_to_package(ns: str) -> str | None:
@@ -434,7 +440,10 @@ def patch_test_sh(original: str, packages: list[str]) -> str | None:
         return None
 
     # Sanity check: the template we expect.
-    if "dotnet new xunit" not in original or "cp /tests/TestSolution.cs" not in original:
+    if (
+        "dotnet new xunit" not in original
+        or "cp /tests/TestSolution.cs" not in original
+    ):
         # Unfamiliar test.sh — bail.
         return None
 
@@ -445,14 +454,22 @@ def patch_test_sh(original: str, packages: list[str]) -> str | None:
     add_lines: list[str] = []
     add_lines.append("")
     add_lines.append(f"    {_TESTSH_MARKER}")
-    add_lines.append("    # NuGet packages required by tests/TestSolution.cs (auto-added by laion v2 patch).")
-    add_lines.append("    # If your sources reference additional packages, add them here too.")
+    add_lines.append(
+        "    # NuGet packages required by tests/TestSolution.cs (auto-added by laion v2 patch)."
+    )
+    add_lines.append(
+        "    # If your sources reference additional packages, add them here too."
+    )
     if not packages:
         add_lines.append("    # (no extra packages required for this task)")
     else:
         for pkg in packages:
-            add_lines.append(f'    dotnet add package {pkg} >/dev/null 2>&1 || dotnet add package {pkg}')
-    add_lines.append("    # Restore so the new refs land in obj/project.assets.json before build/test.")
+            add_lines.append(
+                f"    dotnet add package {pkg} >/dev/null 2>&1 || dotnet add package {pkg}"
+            )
+    add_lines.append(
+        "    # Restore so the new refs land in obj/project.assets.json before build/test."
+    )
     add_lines.append("    dotnet restore >/dev/null 2>&1 || true")
     add_lines.append(f"    {_TESTSH_END_MARKER}")
     add_lines.append("")
@@ -485,12 +502,16 @@ def _format_test_contract(parsed: dict, packages: list[str]) -> str:
     )
     lines.append("")
     lines.append("**Language**: C# (.NET 8 SDK)")
-    lines.append("**Test framework**: xUnit / NUnit / MSTest as indicated by the `using` list below; "
-                 "the verifier creates a `dotnet new xunit` project and runs `dotnet test`. "
-                 "If the test uses NUnit or MSTest, the verifier auto-adds the matching adapter so tests are discovered.")
+    lines.append(
+        "**Test framework**: xUnit / NUnit / MSTest as indicated by the `using` list below; "
+        "the verifier creates a `dotnet new xunit` project and runs `dotnet test`. "
+        "If the test uses NUnit or MSTest, the verifier auto-adds the matching adapter so tests are discovered."
+    )
     if parsed.get("namespace"):
-        lines.append(f"**Test namespace**: `{parsed['namespace']}` — your sources may live in any namespace, "
-                     "but the types referenced by the test must be reachable (either in the same namespace or via `using` in your source).")
+        lines.append(
+            f"**Test namespace**: `{parsed['namespace']}` — your sources may live in any namespace, "
+            "but the types referenced by the test must be reachable (either in the same namespace or via `using` in your source)."
+        )
     if parsed.get("test_class"):
         lines.append(f"**Test class**: `{parsed['test_class']}`")
     lines.append("")
@@ -498,7 +519,9 @@ def _format_test_contract(parsed: dict, packages: list[str]) -> str:
     if parsed["usings"]:
         sample = parsed["usings"][:40]
         more = len(parsed["usings"]) - len(sample)
-        lines.append("**`using` directives in the test file** (you must make every symbol referenced from these namespaces reachable):")
+        lines.append(
+            "**`using` directives in the test file** (you must make every symbol referenced from these namespaces reachable):"
+        )
         lines.append("")
         for u in sample:
             lines.append(f"- `using {u};`")
@@ -507,7 +530,9 @@ def _format_test_contract(parsed: dict, packages: list[str]) -> str:
         lines.append("")
 
     if packages:
-        lines.append("**NuGet packages auto-added by the verifier** (you do NOT need to add them yourself; they will be on the classpath when `dotnet test` runs):")
+        lines.append(
+            "**NuGet packages auto-added by the verifier** (you do NOT need to add them yourself; they will be on the classpath when `dotnet test` runs):"
+        )
         lines.append("")
         for p in packages:
             lines.append(f"- `{p}`")
@@ -519,8 +544,10 @@ def _format_test_contract(parsed: dict, packages: list[str]) -> str:
         )
         lines.append("")
     else:
-        lines.append("**NuGet packages**: none beyond the xUnit template defaults. "
-                     "Any non-BCL types referenced by the test are project-internal — define them under `/app/`.")
+        lines.append(
+            "**NuGet packages**: none beyond the xUnit template defaults. "
+            "Any non-BCL types referenced by the test are project-internal — define them under `/app/`."
+        )
         lines.append("")
 
     lines.append("## Build & test environment")
@@ -574,7 +601,10 @@ def rewrite_instruction(original: str, parsed: dict, packages: list[str]) -> str
         keep = _PROMPT_CAP - len(header) - len(contract) - 200
         if keep < 500:
             keep = 500
-        truncated_orig = original.strip()[:keep] + "\n\n[... description truncated to fit prompt budget ...]\n"
+        truncated_orig = (
+            original.strip()[:keep]
+            + "\n\n[... description truncated to fit prompt budget ...]\n"
+        )
         body = (
             header
             + contract
@@ -602,7 +632,9 @@ def main() -> int:
         print(f"Not a directory: {root}", file=sys.stderr)
         return 2
 
-    task_dirs = sorted(d for d in root.iterdir() if d.is_dir() and (d / "instruction.md").exists())
+    task_dirs = sorted(
+        d for d in root.iterdir() if d.is_dir() and (d / "instruction.md").exists()
+    )
     if not task_dirs:
         print(f"No task dirs (with instruction.md) under {root}", file=sys.stderr)
         return 2

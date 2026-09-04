@@ -34,6 +34,7 @@ importlib loaders, or the test file is missing), the task is skipped.
 This mirrors `patch_scaffold_tasks.py` but reads `tests/test_solution.py`
 instead of `tests/test_scaffold.py`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -173,7 +174,9 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True, help="Tasks dir (extracted parquet)")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--limit", type=int, default=0, help="Patch at most N tasks (0 = all)")
+    p.add_argument(
+        "--limit", type=int, default=0, help="Patch at most N tasks (0 = all)"
+    )
     p.add_argument(
         "--skiplist-out",
         default=None,

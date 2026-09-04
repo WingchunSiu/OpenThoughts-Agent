@@ -23,6 +23,7 @@ import argparse
 @dataclass
 class RequestMetrics:
     """Metrics for a single request."""
+
     prompt: str
     prompt_length: int
     output_length: int
@@ -37,6 +38,7 @@ class RequestMetrics:
 @dataclass
 class BenchmarkResults:
     """Aggregated benchmark results."""
+
     # Configuration
     config_hash: str
     num_requests: int
@@ -134,24 +136,28 @@ class BenchmarkRunner:
                     if not line:
                         continue
 
-                    line = line.decode('utf-8').strip()
-                    if not line.startswith('data: '):
+                    line = line.decode("utf-8").strip()
+                    if not line.startswith("data: "):
                         continue
 
-                    if line == 'data: [DONE]':
+                    if line == "data: [DONE]":
                         break
 
                     try:
                         data = json.loads(line[6:])  # Skip 'data: '
 
                         # Record TTFT on first token
-                        if ttft is None and 'choices' in data and len(data['choices']) > 0:
+                        if (
+                            ttft is None
+                            and "choices" in data
+                            and len(data["choices"]) > 0
+                        ):
                             ttft = time.time() - start_time
 
                         # Count tokens
-                        if 'choices' in data and len(data['choices']) > 0:
-                            choice = data['choices'][0]
-                            if 'text' in choice and choice['text']:
+                        if "choices" in data and len(data["choices"]) > 0:
+                            choice = data["choices"][0]
+                            if "text" in choice and choice["text"]:
                                 tokens_generated += 1
 
                     except json.JSONDecodeError:
@@ -173,7 +179,9 @@ class BenchmarkRunner:
                 ttft=ttft or 0.0,
                 end_to_end_latency=total_time,
                 success=True,
-                tokens_per_second=tokens_generated / total_time if total_time > 0 else 0.0,
+                tokens_per_second=tokens_generated / total_time
+                if total_time > 0
+                else 0.0,
                 inter_token_latency=itl,
             )
 
@@ -242,9 +250,11 @@ class BenchmarkRunner:
                         avg_time = elapsed / completed[0]
                         remaining = total_requests - completed[0]
                         eta = avg_time * remaining
-                        print(f"Progress: {completed[0]}/{total_requests} requests completed "
-                              f"({completed[0]*100/total_requests:.1f}%) - "
-                              f"ETA: {eta:.1f}s ({eta/60:.1f}min)")
+                        print(
+                            f"Progress: {completed[0]}/{total_requests} requests completed "
+                            f"({completed[0] * 100 / total_requests:.1f}%) - "
+                            f"ETA: {eta:.1f}s ({eta / 60:.1f}min)"
+                        )
 
                 for i, (prompt, max_tok) in enumerate(zip(prompts, max_tokens)):
                     task = asyncio.create_task(
@@ -261,7 +271,9 @@ class BenchmarkRunner:
                     if i < len(prompts) - 1:
                         await asyncio.sleep(delay)
 
-                print(f"All {total_requests} requests launched. Waiting for completion...")
+                print(
+                    f"All {total_requests} requests launched. Waiting for completion..."
+                )
                 # Wait for all requests to complete
                 results = await asyncio.gather(*tasks)
 
@@ -282,21 +294,23 @@ class BenchmarkRunner:
 
                     # Parse key metrics
                     metrics = {}
-                    for line in text.split('\n'):
-                        if line.startswith('#') or not line.strip():
+                    for line in text.split("\n"):
+                        if line.startswith("#") or not line.strip():
                             continue
 
                         # Simple parsing (not comprehensive)
-                        if 'vllm:num_requests_running' in line:
-                            metrics['num_requests_running'] = float(line.split()[-1])
-                        elif 'vllm:num_requests_waiting' in line:
-                            metrics['num_requests_waiting'] = float(line.split()[-1])
-                        elif 'vllm:num_preemptions_total' in line:
-                            metrics['num_preemptions_total'] = float(line.split()[-1])
-                        elif 'vllm:gpu_cache_usage_perc' in line:
-                            metrics['gpu_cache_usage_perc'] = float(line.split()[-1])
-                        elif 'vllm:num_generation_tokens_from_beam_sampler_total' in line:
-                            metrics['generation_tokens_total'] = float(line.split()[-1])
+                        if "vllm:num_requests_running" in line:
+                            metrics["num_requests_running"] = float(line.split()[-1])
+                        elif "vllm:num_requests_waiting" in line:
+                            metrics["num_requests_waiting"] = float(line.split()[-1])
+                        elif "vllm:num_preemptions_total" in line:
+                            metrics["num_preemptions_total"] = float(line.split()[-1])
+                        elif "vllm:gpu_cache_usage_perc" in line:
+                            metrics["gpu_cache_usage_perc"] = float(line.split()[-1])
+                        elif (
+                            "vllm:num_generation_tokens_from_beam_sampler_total" in line
+                        ):
+                            metrics["generation_tokens_total"] = float(line.split()[-1])
 
                     return metrics
 
@@ -364,8 +378,12 @@ class BenchmarkRunner:
             success_rate=len(successful) / len(request_metrics),
             total_tokens_generated=total_tokens,
             total_time=total_time,
-            throughput_tokens_per_sec=total_tokens / total_time if total_time > 0 else 0.0,
-            throughput_requests_per_sec=len(successful) / total_time if total_time > 0 else 0.0,
+            throughput_tokens_per_sec=total_tokens / total_time
+            if total_time > 0
+            else 0.0,
+            throughput_requests_per_sec=len(successful) / total_time
+            if total_time > 0
+            else 0.0,
             ttft_mean=float(np.mean(ttfts)) if ttfts else 0.0,
             ttft_p50=float(np.percentile(ttfts, 50)) if ttfts else 0.0,
             ttft_p95=float(np.percentile(ttfts, 95)) if ttfts else 0.0,
@@ -390,7 +408,7 @@ class BenchmarkRunner:
 
         output_path = self.output_dir / filename
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(asdict(results), f, indent=2)
 
         return output_path
@@ -403,38 +421,38 @@ class BenchmarkRunner:
         print(f"\nConfiguration: {results.config_hash}")
         print(f"Dataset: {results.dataset_name}")
         print(f"Timestamp: {results.timestamp}")
-        print(f"\nRequests:")
+        print("\nRequests:")
         print(f"  Total: {results.num_requests}")
         print(f"  Successful: {results.successful_requests}")
         print(f"  Failed: {results.failed_requests}")
         print(f"  Success Rate: {results.success_rate * 100:.2f}%")
 
-        print(f"\nThroughput:")
+        print("\nThroughput:")
         print(f"  Tokens/sec: {results.throughput_tokens_per_sec:.2f}")
         print(f"  Requests/sec: {results.throughput_requests_per_sec:.2f}")
         print(f"  Total tokens: {results.total_tokens_generated}")
         print(f"  Total time: {results.total_time:.2f}s")
 
-        print(f"\nTime to First Token (TTFT):")
+        print("\nTime to First Token (TTFT):")
         print(f"  Mean: {results.ttft_mean * 1000:.2f}ms")
         print(f"  P50: {results.ttft_p50 * 1000:.2f}ms")
         print(f"  P95: {results.ttft_p95 * 1000:.2f}ms")
         print(f"  P99: {results.ttft_p99 * 1000:.2f}ms")
 
-        print(f"\nEnd-to-End Latency:")
+        print("\nEnd-to-End Latency:")
         print(f"  Mean: {results.e2e_latency_mean * 1000:.2f}ms")
         print(f"  P50: {results.e2e_latency_p50 * 1000:.2f}ms")
         print(f"  P95: {results.e2e_latency_p95 * 1000:.2f}ms")
         print(f"  P99: {results.e2e_latency_p99 * 1000:.2f}ms")
 
-        print(f"\nInter-Token Latency (ITL):")
+        print("\nInter-Token Latency (ITL):")
         print(f"  Mean: {results.itl_mean * 1000:.2f}ms")
         print(f"  P50: {results.itl_p50 * 1000:.2f}ms")
         print(f"  P95: {results.itl_p95 * 1000:.2f}ms")
         print(f"  P99: {results.itl_p99 * 1000:.2f}ms")
 
         if results.prometheus_metrics:
-            print(f"\nPrometheus Metrics:")
+            print("\nPrometheus Metrics:")
             for key, value in results.prometheus_metrics.items():
                 print(f"  {key}: {value}")
 
@@ -444,14 +462,31 @@ class BenchmarkRunner:
 async def main():
     """Run benchmark from command line."""
     parser = argparse.ArgumentParser(description="Run vLLM benchmark")
-    parser.add_argument("--server-url", default="http://localhost:8000", help="vLLM server URL")
-    parser.add_argument("--prometheus-url", default="http://localhost:8001", help="Prometheus metrics URL")
+    parser.add_argument(
+        "--server-url", default="http://localhost:8000", help="vLLM server URL"
+    )
+    parser.add_argument(
+        "--prometheus-url",
+        default="http://localhost:8001",
+        help="Prometheus metrics URL",
+    )
     parser.add_argument("--dataset", required=True, help="Path to dataset JSONL file")
     parser.add_argument("--config-hash", default="unknown", help="Configuration hash")
-    parser.add_argument("--request-rate", type=float, default=None, help="Requests per second (unlimited if not set)")
-    parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
-    parser.add_argument("--output-dir", default="results", help="Output directory for results")
-    parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts")
+    parser.add_argument(
+        "--request-rate",
+        type=float,
+        default=None,
+        help="Requests per second (unlimited if not set)",
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.7, help="Sampling temperature"
+    )
+    parser.add_argument(
+        "--output-dir", default="results", help="Output directory for results"
+    )
+    parser.add_argument(
+        "--max-prompts", type=int, default=None, help="Limit number of prompts"
+    )
 
     args = parser.parse_args()
 
@@ -460,14 +495,14 @@ async def main():
     prompts = []
     max_tokens_list = []
 
-    with open(args.dataset, 'r') as f:
+    with open(args.dataset, "r") as f:
         for i, line in enumerate(f):
             if args.max_prompts and i >= args.max_prompts:
                 break
 
             record = json.loads(line)
-            prompts.append(record['prompt'])
-            max_tokens_list.append(record.get('expected_output_length', 512))
+            prompts.append(record["prompt"])
+            max_tokens_list.append(record.get("expected_output_length", 512))
 
     print(f"Loaded {len(prompts)} prompts")
 
@@ -478,11 +513,11 @@ async def main():
         output_dir=args.output_dir,
     )
 
-    print(f"\nRunning benchmark...")
+    print("\nRunning benchmark...")
     if args.request_rate:
         print(f"  Request rate: {args.request_rate} req/s")
     else:
-        print(f"  Request rate: unlimited")
+        print("  Request rate: unlimited")
 
     start_time = time.time()
     request_metrics = await runner.run_benchmark(

@@ -68,77 +68,77 @@ def _should_drop(repo_id: str) -> bool:
 
 _TEACHER_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"nemotron[-_]terminal[-_]scientific", re.I), "GLM-4.7"),
-    (re.compile(r"glm[-_]?5|glm5", re.I),                    "GLM-5.0"),
-    (re.compile(r"glm[-_]?4\.?7|glm47", re.I),               "GLM-4.7"),
-    (re.compile(r"glm[-_]?4\.?6|glm46", re.I),               "GLM-4.6"),
-    (re.compile(r"terminus[-_]?2", re.I),                     "GPT 5.1 Nano"),
-    (re.compile(r"gpt[-_]?5[-_]?nano", re.I),                "GPT-5-nano"),
-    (re.compile(r"gpt[-_]?5[-_]?mini", re.I),                "GPT-5-mini"),
-    (re.compile(r"gpt[-_]?5", re.I),                         "GPT-5"),
-    (re.compile(r"gpt[-_]?o3", re.I),                        "GPT-o3"),
-    (re.compile(r"gpt[-_]?4o", re.I),                        "GPT-4o"),
-    (re.compile(r"gpt[-_]?4", re.I),                         "GPT-4"),
-    (re.compile(r"kimi[-_]?k2", re.I),                        "Kimi K2.0 Thinking"),
-    (re.compile(r"minimax[-_]?m2", re.I),                     "MiniMax M2.0"),
-    (re.compile(r"kimi[-_]?2\.5|kimi[-_]?2_5", re.I),        "Kimi-2.5"),
-    (re.compile(r"qwen3[-_]?72b", re.I),                     "Qwen3-72B"),
-    (re.compile(r"qwen3[-_]?32b", re.I),                     "Qwen3-32B"),
-    (re.compile(r"qwen3[-_]?14b", re.I),                     "Qwen3-14B"),
-    (re.compile(r"qwen3[-_]?8b", re.I),                      "Qwen3-8B"),
-    (re.compile(r"qwen3[-_]?4b", re.I),                      "Qwen3-4B"),
-    (re.compile(r"qwen3[-_]?1\.7b|qwen3[-_]?1_7b", re.I),   "Qwen3-1.7B"),
-    (re.compile(r"qwen3[-_]?0\.6b|qwen3[-_]?0_6b", re.I),   "Qwen3-0.6B"),
-    (re.compile(r"qwen3", re.I),                             "Qwen3"),
-    (re.compile(r"gpt[-_]?oss[-_]?120b", re.I),             "GPT-OSS-120B"),
-    (re.compile(r"gemini[-_]?2\.?5[-_]?flash", re.I),       "Gemini-2.5-Flash"),
-    (re.compile(r"gemini[-_]?2\.?5[-_]?pro", re.I),         "Gemini-2.5-Pro"),
-    (re.compile(r"claude[-_]?3\.?7[-_]?sonnet", re.I),      "Claude-3.7-Sonnet"),
-    (re.compile(r"claude[-_]?3\.?5[-_]?sonnet", re.I),      "Claude-3.5-Sonnet"),
-    (re.compile(r"deepseek[-_]?r1", re.I),                   "DeepSeek-R1"),
-    (re.compile(r"\bo1[-_]mini\b", re.I),                    "o1-mini"),
+    (re.compile(r"glm[-_]?5|glm5", re.I), "GLM-5.0"),
+    (re.compile(r"glm[-_]?4\.?7|glm47", re.I), "GLM-4.7"),
+    (re.compile(r"glm[-_]?4\.?6|glm46", re.I), "GLM-4.6"),
+    (re.compile(r"terminus[-_]?2", re.I), "GPT 5.1 Nano"),
+    (re.compile(r"gpt[-_]?5[-_]?nano", re.I), "GPT-5-nano"),
+    (re.compile(r"gpt[-_]?5[-_]?mini", re.I), "GPT-5-mini"),
+    (re.compile(r"gpt[-_]?5", re.I), "GPT-5"),
+    (re.compile(r"gpt[-_]?o3", re.I), "GPT-o3"),
+    (re.compile(r"gpt[-_]?4o", re.I), "GPT-4o"),
+    (re.compile(r"gpt[-_]?4", re.I), "GPT-4"),
+    (re.compile(r"kimi[-_]?k2", re.I), "Kimi K2.0 Thinking"),
+    (re.compile(r"minimax[-_]?m2", re.I), "MiniMax M2.0"),
+    (re.compile(r"kimi[-_]?2\.5|kimi[-_]?2_5", re.I), "Kimi-2.5"),
+    (re.compile(r"qwen3[-_]?72b", re.I), "Qwen3-72B"),
+    (re.compile(r"qwen3[-_]?32b", re.I), "Qwen3-32B"),
+    (re.compile(r"qwen3[-_]?14b", re.I), "Qwen3-14B"),
+    (re.compile(r"qwen3[-_]?8b", re.I), "Qwen3-8B"),
+    (re.compile(r"qwen3[-_]?4b", re.I), "Qwen3-4B"),
+    (re.compile(r"qwen3[-_]?1\.7b|qwen3[-_]?1_7b", re.I), "Qwen3-1.7B"),
+    (re.compile(r"qwen3[-_]?0\.6b|qwen3[-_]?0_6b", re.I), "Qwen3-0.6B"),
+    (re.compile(r"qwen3", re.I), "Qwen3"),
+    (re.compile(r"gpt[-_]?oss[-_]?120b", re.I), "GPT-OSS-120B"),
+    (re.compile(r"gemini[-_]?2\.?5[-_]?flash", re.I), "Gemini-2.5-Flash"),
+    (re.compile(r"gemini[-_]?2\.?5[-_]?pro", re.I), "Gemini-2.5-Pro"),
+    (re.compile(r"claude[-_]?3\.?7[-_]?sonnet", re.I), "Claude-3.7-Sonnet"),
+    (re.compile(r"claude[-_]?3\.?5[-_]?sonnet", re.I), "Claude-3.5-Sonnet"),
+    (re.compile(r"deepseek[-_]?r1", re.I), "DeepSeek-R1"),
+    (re.compile(r"\bo1[-_]mini\b", re.I), "o1-mini"),
 ]
 
 _SOURCE_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"swesmith", re.I),                        "swesmith"),
-    (re.compile(r"swe[-_]?bench", re.I),                   "swebench"),
-    (re.compile(r"r2egym", re.I),                          "r2egym"),
-    (re.compile(r"codeforces", re.I),                      "codeforces"),
-    (re.compile(r"nl2bash", re.I),                         "nl2bash"),
-    (re.compile(r"code[-_]?contests", re.I),               "code_contests"),
-    (re.compile(r"codenet", re.I),                         "codenet"),
-    (re.compile(r"taskmaster", re.I),                      "taskmaster"),
-    (re.compile(r"staqc", re.I),                           "staqc"),
-    (re.compile(r"puzzles", re.I),                         "puzzles"),
-    (re.compile(r"stack[-_]?exchange", re.I),              "stack_exchange"),
-    (re.compile(r"stackoverflow", re.I),                   "stackoverflow"),
-    (re.compile(r"stack[-_]?ruby", re.I),                  "stack_ruby"),
-    (re.compile(r"stack[-_]?tezos", re.I),                 "stack_tezos"),
-    (re.compile(r"terminal[-_]bench", re.I),               "terminal_bench"),
-    (re.compile(r"gsm8k", re.I),                           "gsm8k"),
-    (re.compile(r"\bmath\b", re.I),                        "math"),
-    (re.compile(r"exp[-_]rpt", re.I),                      "exp_rpt"),
-    (re.compile(r"exp[-_]tas", re.I),                      "exp_tas"),
-    (re.compile(r"exp[-_]rle", re.I),                      "exp_rle"),
-    (re.compile(r"exp[-_]san", re.I),                      "exp_san"),
-    (re.compile(r"codeelo", re.I),                         "codeelo"),
-    (re.compile(r"freelancer[-_]", re.I),                  "freelancer"),
-    (re.compile(r"nemo[-_]?prism", re.I),                  "Nemotron Prism"),
-    (re.compile(r"swegym", re.I),                          "SWEGym"),
-    (re.compile(r"neulab[-_]", re.I),                      "neulab"),
-    (re.compile(r"inferredbugs", re.I),                    "Inferred Bugs"),
-    (re.compile(r"qasper", re.I),                          "Qasper"),
-    (re.compile(r"wikitable_format_conversion", re.I),     "WikiTable Format Conversion"),
-    (re.compile(r"bash[-_]textbook", re.I),                "bash textbook"),
-    (re.compile(r"[-_]stack[-_]overflow[-_]", re.I),       "StackExchange Overflow"),
-    (re.compile(r"multifile[-_]composition", re.I),        "multifile composition"),
-    (re.compile(r"repo[-_]scaffold", re.I),                "repo scaffold"),
-    (re.compile(r"defects4j", re.I),                       "defects 4j"),
-    (re.compile(r"magicoder[-_]evol[-_]instruct", re.I),   "MagiCoder Evol Instruct"),
-    (re.compile(r"glaive[-_]code[-_]assistant", re.I),     "Glaive Code Assistant"),
-    (re.compile(r"selfinstruct[-_]naive", re.I),           "Self-Instruct Naive"),
-    (re.compile(r"python[-_]scripts", re.I),               "python_scripts"),
-    (re.compile(r"ling[-_]coder", re.I),                   "ling_coder"),
-    (re.compile(r"open[-_]thoughts", re.I),                "open_thoughts"),
+    (re.compile(r"swesmith", re.I), "swesmith"),
+    (re.compile(r"swe[-_]?bench", re.I), "swebench"),
+    (re.compile(r"r2egym", re.I), "r2egym"),
+    (re.compile(r"codeforces", re.I), "codeforces"),
+    (re.compile(r"nl2bash", re.I), "nl2bash"),
+    (re.compile(r"code[-_]?contests", re.I), "code_contests"),
+    (re.compile(r"codenet", re.I), "codenet"),
+    (re.compile(r"taskmaster", re.I), "taskmaster"),
+    (re.compile(r"staqc", re.I), "staqc"),
+    (re.compile(r"puzzles", re.I), "puzzles"),
+    (re.compile(r"stack[-_]?exchange", re.I), "stack_exchange"),
+    (re.compile(r"stackoverflow", re.I), "stackoverflow"),
+    (re.compile(r"stack[-_]?ruby", re.I), "stack_ruby"),
+    (re.compile(r"stack[-_]?tezos", re.I), "stack_tezos"),
+    (re.compile(r"terminal[-_]bench", re.I), "terminal_bench"),
+    (re.compile(r"gsm8k", re.I), "gsm8k"),
+    (re.compile(r"\bmath\b", re.I), "math"),
+    (re.compile(r"exp[-_]rpt", re.I), "exp_rpt"),
+    (re.compile(r"exp[-_]tas", re.I), "exp_tas"),
+    (re.compile(r"exp[-_]rle", re.I), "exp_rle"),
+    (re.compile(r"exp[-_]san", re.I), "exp_san"),
+    (re.compile(r"codeelo", re.I), "codeelo"),
+    (re.compile(r"freelancer[-_]", re.I), "freelancer"),
+    (re.compile(r"nemo[-_]?prism", re.I), "Nemotron Prism"),
+    (re.compile(r"swegym", re.I), "SWEGym"),
+    (re.compile(r"neulab[-_]", re.I), "neulab"),
+    (re.compile(r"inferredbugs", re.I), "Inferred Bugs"),
+    (re.compile(r"qasper", re.I), "Qasper"),
+    (re.compile(r"wikitable_format_conversion", re.I), "WikiTable Format Conversion"),
+    (re.compile(r"bash[-_]textbook", re.I), "bash textbook"),
+    (re.compile(r"[-_]stack[-_]overflow[-_]", re.I), "StackExchange Overflow"),
+    (re.compile(r"multifile[-_]composition", re.I), "multifile composition"),
+    (re.compile(r"repo[-_]scaffold", re.I), "repo scaffold"),
+    (re.compile(r"defects4j", re.I), "defects 4j"),
+    (re.compile(r"magicoder[-_]evol[-_]instruct", re.I), "MagiCoder Evol Instruct"),
+    (re.compile(r"glaive[-_]code[-_]assistant", re.I), "Glaive Code Assistant"),
+    (re.compile(r"selfinstruct[-_]naive", re.I), "Self-Instruct Naive"),
+    (re.compile(r"python[-_]scripts", re.I), "python_scripts"),
+    (re.compile(r"ling[-_]coder", re.I), "ling_coder"),
+    (re.compile(r"open[-_]thoughts", re.I), "open_thoughts"),
 ]
 
 
@@ -162,12 +162,17 @@ def _extract_source(repo_id: str) -> str:
 
 # ── supabase ──────────────────────────────────────────────────────────────────
 
+
 def _get_client():
     from supabase import create_client
+
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set", file=sys.stderr)
+        print(
+            "Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return create_client(url, key)
 
@@ -210,6 +215,7 @@ def _fetch_all_dataset_refs() -> list[str]:
 
 # ── loading and per-shard writing ─────────────────────────────────────────────
 
+
 def _load_and_write_shard(repo_id: str, shard_path: Path) -> int:
     """Load one HF dataset, add meta columns, write to Parquet, return row count.
 
@@ -237,7 +243,7 @@ def _load_and_write_shard(repo_id: str, shard_path: Path) -> int:
 
 # ── streaming merge + upload (combined, no intermediate file) ─────────────────
 
-_BATCH_ROWS = 2_000           # rows per read batch — keeps per-batch RAM ~20 MB
+_BATCH_ROWS = 2_000  # rows per read batch — keeps per-batch RAM ~20 MB
 _MAX_SHARD_BYTES = 500 * 1024 * 1024  # 500 MB per upload shard
 
 
@@ -256,14 +262,18 @@ def _merge_and_upload(
     Peak disk : Pass-1 shards + one upload shard at a time (~500 MB extra).
     """
     api = HfApi(token=token)
-    create_repo(repo_id=target, repo_type="dataset", private=private, token=token, exist_ok=True)
+    create_repo(
+        repo_id=target, repo_type="dataset", private=private, token=token, exist_ok=True
+    )
 
     # Read only Parquet footer metadata — no row data loaded
     print(f"[concat] Unifying schema from {len(shard_paths)} shards ...")
     schemas = [pq.read_schema(str(p)) for p in shard_paths]
     unified_schema = pa.unify_schemas(schemas, promote_options="default")
 
-    arrow_ds = pad.dataset([str(p) for p in shard_paths], format="parquet", schema=unified_schema)
+    arrow_ds = pad.dataset(
+        [str(p) for p in shard_paths], format="parquet", schema=unified_schema
+    )
     total_rows = arrow_ds.count_rows()
 
     # Estimate upload-shard count from total on-disk bytes of Pass-1 shards
@@ -293,7 +303,9 @@ def _merge_and_upload(
         assert current_path is not None
         size_mb = current_path.stat().st_size / 1e6
         filename = f"data/train-{shard_idx + 1:05d}-of-{num_upload_shards:05d}.parquet"
-        print(f"[concat] Uploading shard {shard_idx + 1}/{num_upload_shards} ({size_mb:.0f} MB) ...")
+        print(
+            f"[concat] Uploading shard {shard_idx + 1}/{num_upload_shards} ({size_mb:.0f} MB) ..."
+        )
         api.upload_file(
             path_or_fileobj=str(current_path),
             path_in_repo=filename,
@@ -301,7 +313,7 @@ def _merge_and_upload(
             repo_type="dataset",
             commit_message=f"{commit_message} (shard {shard_idx + 1}/{num_upload_shards})",
         )
-        current_path.unlink()   # free disk immediately after upload
+        current_path.unlink()  # free disk immediately after upload
         current_path = None
         total_uploaded += 1
         shard_idx += 1
@@ -310,7 +322,9 @@ def _merge_and_upload(
     for batch in arrow_ds.scanner(batch_size=_BATCH_ROWS).to_batches():
         if writer is None:
             current_path = upload_dir / f"shard_{shard_idx:05d}.parquet"
-            writer = pq.ParquetWriter(str(current_path), unified_schema, compression="snappy")
+            writer = pq.ParquetWriter(
+                str(current_path), unified_schema, compression="snappy"
+            )
         writer.write_batch(batch)
         rows_in_shard += batch.num_rows
         if rows_in_shard >= rows_per_shard:
@@ -318,32 +332,61 @@ def _merge_and_upload(
 
     _flush()  # upload final partial shard
 
-    print(f"[concat] Done — {total_uploaded} shard(s) at https://huggingface.co/datasets/{target}")
+    print(
+        f"[concat] Done — {total_uploaded} shard(s) at https://huggingface.co/datasets/{target}"
+    )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Concatenate all HF training datasets referenced in Supabase models",
     )
     p.add_argument("--target", required=True, help="Target HF dataset repo (org/name)")
-    p.add_argument("--private", action="store_true", help="Create target repo as private")
-    p.add_argument("--token", default=None, help="HF token (defaults to HF_TOKEN env var)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print datasets and extracted metadata without loading or pushing")
-    p.add_argument("--unknown-only", action="store_true",
-                   help="During --dry-run, show only rows where source or teacher is 'unknown'")
-    p.add_argument("--skip-on-error", action="store_true",
-                   help="Skip datasets that fail to load instead of aborting")
-    p.add_argument("--commit-message", default="Concatenate all Supabase training datasets",
-                   help="Commit message for push_to_hub")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Load at most N datasets (useful for smoke-testing)")
-    p.add_argument("--temp-dir", default=None,
-                   help="Directory for Parquet shards (default: system temp, deleted on exit)")
-    p.add_argument("--keep-temp", action="store_true",
-                   help="Do not delete the temp shard directory after upload")
+    p.add_argument(
+        "--private", action="store_true", help="Create target repo as private"
+    )
+    p.add_argument(
+        "--token", default=None, help="HF token (defaults to HF_TOKEN env var)"
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print datasets and extracted metadata without loading or pushing",
+    )
+    p.add_argument(
+        "--unknown-only",
+        action="store_true",
+        help="During --dry-run, show only rows where source or teacher is 'unknown'",
+    )
+    p.add_argument(
+        "--skip-on-error",
+        action="store_true",
+        help="Skip datasets that fail to load instead of aborting",
+    )
+    p.add_argument(
+        "--commit-message",
+        default="Concatenate all Supabase training datasets",
+        help="Commit message for push_to_hub",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Load at most N datasets (useful for smoke-testing)",
+    )
+    p.add_argument(
+        "--temp-dir",
+        default=None,
+        help="Directory for Parquet shards (default: system temp, deleted on exit)",
+    )
+    p.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help="Do not delete the temp shard directory after upload",
+    )
     return p.parse_args()
 
 
@@ -371,7 +414,11 @@ def main() -> None:
 
     # Set up temp directory for Parquet shards
     managed_tmp = args.temp_dir is None
-    tmp_root = Path(args.temp_dir) if args.temp_dir else Path(tempfile.mkdtemp(prefix="concat_shards_"))
+    tmp_root = (
+        Path(args.temp_dir)
+        if args.temp_dir
+        else Path(tempfile.mkdtemp(prefix="concat_shards_"))
+    )
     tmp_root.mkdir(parents=True, exist_ok=True)
     print(f"[concat] Shard dir: {tmp_root}")
 
@@ -393,8 +440,10 @@ def main() -> None:
                 print(f"FAILED: {exc}")
                 failed.append(ref)
                 if not args.skip_on_error:
-                    print("[concat] Aborting. Use --skip-on-error to continue past failures.",
-                          file=sys.stderr)
+                    print(
+                        "[concat] Aborting. Use --skip-on-error to continue past failures.",
+                        file=sys.stderr,
+                    )
                     sys.exit(1)
 
         if not shard_paths:
@@ -402,7 +451,9 @@ def main() -> None:
             sys.exit(1)
 
         # ── Pass 2: stream-merge shards → upload shards → HF Hub ─────────────
-        print(f"\n[concat] Merging {len(shard_paths)} shards ({total_rows:,} rows) and uploading ...")
+        print(
+            f"\n[concat] Merging {len(shard_paths)} shards ({total_rows:,} rows) and uploading ..."
+        )
         _merge_and_upload(
             shard_paths, args.target, args.private, token, args.commit_message, tmp_root
         )

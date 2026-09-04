@@ -23,8 +23,6 @@ import gzip
 import hashlib
 import io
 import json
-import os
-import sys
 import tarfile
 import time
 from pathlib import Path
@@ -102,8 +100,12 @@ def write_shard(rows: list[dict], shard_idx: int, out_dir: Path) -> Path:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=None,
-                    help="Process at most N rows (smoke test). Default: all.")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process at most N rows (smoke test). Default: all.",
+    )
     ap.add_argument("--out_dir", type=Path, default=OUT_DIR)
     ap.add_argument("--shard_rows", type=int, default=SHARD_ROWS)
     ap.add_argument("--source", type=str, default=SOURCE_DATASET)
@@ -133,12 +135,14 @@ def main():
             new_md = render_instruction(label, paragraph)
             new_blob = rewrite_tarball(row["task_binary"], new_md)
 
-            rows_in_shard.append({
-                "path": path,
-                "task_binary": new_blob,
-                "bug_label": label,
-                "source_dataset": args.source,
-            })
+            rows_in_shard.append(
+                {
+                    "path": path,
+                    "task_binary": new_blob,
+                    "bug_label": label,
+                    "source_dataset": args.source,
+                }
+            )
             bug_label_counter[label] = bug_label_counter.get(label, 0) + 1
             meta_f.write(json.dumps({"path": path, "bug_label": label}) + "\n")
 
@@ -146,17 +150,23 @@ def main():
             if len(rows_in_shard) >= args.shard_rows:
                 p = write_shard(rows_in_shard, shard_idx, args.out_dir)
                 rate = n_total / (time.time() - t0 + 1e-9)
-                print(f"  wrote shard {shard_idx} -> {p.name}  ({n_total} total, {rate:.1f} rows/s)")
+                print(
+                    f"  wrote shard {shard_idx} -> {p.name}  ({n_total} total, {rate:.1f} rows/s)"
+                )
                 rows_in_shard = []
                 shard_idx += 1
 
         if rows_in_shard:
             p = write_shard(rows_in_shard, shard_idx, args.out_dir)
             rate = n_total / (time.time() - t0 + 1e-9)
-            print(f"  wrote shard {shard_idx} -> {p.name}  ({n_total} total, {rate:.1f} rows/s)")
+            print(
+                f"  wrote shard {shard_idx} -> {p.name}  ({n_total} total, {rate:.1f} rows/s)"
+            )
 
     # Summary
-    print(f"\nDone. {n_total} rows in {shard_idx + (1 if rows_in_shard else 0)} shards.")
+    print(
+        f"\nDone. {n_total} rows in {shard_idx + (1 if rows_in_shard else 0)} shards."
+    )
     print("Bug-label distribution (top 15):")
     for label, c in sorted(bug_label_counter.items(), key=lambda kv: -kv[1])[:15]:
         print(f"  {c:5}  {label}")

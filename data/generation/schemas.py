@@ -67,7 +67,13 @@ class GenerationContext:
 class GenerationError(Exception):
     """Base exception for generator failures."""
 
-    def __init__(self, message: str, *, stage: GenerationStage, cause: Optional[BaseException] = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: GenerationStage,
+        cause: Optional[BaseException] = None,
+    ):
         super().__init__(message)
         self.stage = stage
         self.cause = cause

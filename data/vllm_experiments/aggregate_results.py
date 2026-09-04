@@ -48,7 +48,7 @@ class ResultsAggregator:
     def load_result(self, result_file: Path) -> Optional[Dict[str, Any]]:
         """Load a single result file."""
         try:
-            with open(result_file, 'r') as f:
+            with open(result_file, "r") as f:
                 return json.load(f)
         except Exception as e:
             print(f"Warning: Failed to load {result_file}: {e}")
@@ -87,7 +87,9 @@ class ResultsAggregator:
 
         return pd.DataFrame(rows)
 
-    def load_config(self, config_hash: str, config_dir: str = "configs") -> Optional[Dict[str, Any]]:
+    def load_config(
+        self, config_hash: str, config_dir: str = "configs"
+    ) -> Optional[Dict[str, Any]]:
         """Load configuration by hash."""
         config_path = Path(config_dir)
 
@@ -98,16 +100,14 @@ class ResultsAggregator:
             return None
 
         try:
-            with open(config_files[0], 'r') as f:
+            with open(config_files[0], "r") as f:
                 return json.load(f)
         except Exception as e:
             print(f"Warning: Failed to load config {config_hash}: {e}")
             return None
 
     def enrich_with_configs(
-        self,
-        df: pd.DataFrame,
-        config_dir: str = "configs"
+        self, df: pd.DataFrame, config_dir: str = "configs"
     ) -> pd.DataFrame:
         """Add configuration parameters to results dataframe."""
         config_params = [
@@ -149,7 +149,7 @@ class ResultsAggregator:
         self,
         df: pd.DataFrame,
         metric: str = "throughput_tokens_per_sec",
-        top_n: int = 10
+        top_n: int = 10,
     ) -> pd.DataFrame:
         """Find best configurations for a given metric."""
         return df.nlargest(top_n, metric)
@@ -158,7 +158,7 @@ class ResultsAggregator:
         self,
         df: pd.DataFrame,
         metric: str = "throughput_tokens_per_sec",
-        bottom_n: int = 10
+        bottom_n: int = 10,
     ) -> pd.DataFrame:
         """Find worst configurations for a given metric."""
         return df.nsmallest(bottom_n, metric)
@@ -167,30 +167,34 @@ class ResultsAggregator:
         self,
         df: pd.DataFrame,
         parameter: str,
-        metric: str = "throughput_tokens_per_sec"
+        metric: str = "throughput_tokens_per_sec",
     ) -> pd.DataFrame:
         """Compare metric across different values of a parameter."""
         if parameter not in df.columns:
             print(f"Warning: Parameter '{parameter}' not found in results")
             return pd.DataFrame()
 
-        grouped = df.groupby(parameter)[metric].agg([
-            'count', 'mean', 'std', 'min', 'max',
-            ('p50', lambda x: np.percentile(x, 50)),
-            ('p95', lambda x: np.percentile(x, 95)),
-        ])
+        grouped = df.groupby(parameter)[metric].agg(
+            [
+                "count",
+                "mean",
+                "std",
+                "min",
+                "max",
+                ("p50", lambda x: np.percentile(x, 50)),
+                ("p95", lambda x: np.percentile(x, 95)),
+            ]
+        )
 
-        return grouped.sort_values('mean', ascending=False)
+        return grouped.sort_values("mean", ascending=False)
 
     def generate_report(
-        self,
-        df: pd.DataFrame,
-        output_file: str = "experiment_report.txt"
+        self, df: pd.DataFrame, output_file: str = "experiment_report.txt"
     ):
         """Generate a comprehensive text report."""
         output_path = self.results_dir / output_file
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             f.write("=" * 80 + "\n")
             f.write("vLLM EXPERIMENT RESULTS REPORT\n")
             f.write("=" * 80 + "\n")
@@ -230,14 +234,18 @@ class ResultsAggregator:
 
             for i, (idx, row) in enumerate(top_10.iterrows(), 1):
                 f.write(f"\n{i}. Config: {row['config_hash']}\n")
-                f.write(f"   Throughput: {row['throughput_tokens_per_sec']:.2f} tok/s\n")
+                f.write(
+                    f"   Throughput: {row['throughput_tokens_per_sec']:.2f} tok/s\n"
+                )
                 f.write(f"   TTFT P95: {row['ttft_p95'] * 1000:.2f}ms\n")
                 f.write(f"   ITL P95: {row['itl_p95'] * 1000:.2f}ms\n")
                 f.write(f"   Success Rate: {row['success_rate'] * 100:.1f}%\n")
 
                 # Add config params if available
                 if "max_num_batched_tokens" in row:
-                    f.write(f"   max_num_batched_tokens: {row['max_num_batched_tokens']}\n")
+                    f.write(
+                        f"   max_num_batched_tokens: {row['max_num_batched_tokens']}\n"
+                    )
                 if "max_num_seqs" in row:
                     f.write(f"   max_num_seqs: {row['max_num_seqs']}\n")
                 if "kv_cache_dtype" in row:
@@ -260,7 +268,9 @@ class ResultsAggregator:
             for param in important_params:
                 if param in df.columns and df[param].notna().any():
                     f.write(f"\n{param}:\n")
-                    comparison = self.compare_parameter(df, param, "throughput_tokens_per_sec")
+                    comparison = self.compare_parameter(
+                        df, param, "throughput_tokens_per_sec"
+                    )
                     f.write(comparison.to_string())
                     f.write("\n")
 
@@ -276,7 +286,9 @@ class ResultsAggregator:
         print(f"Results exported to: {output_path}")
         return output_path
 
-    def create_visualization_data(self, df: pd.DataFrame, output_file: str = "viz_data.json"):
+    def create_visualization_data(
+        self, df: pd.DataFrame, output_file: str = "viz_data.json"
+    ):
         """Create data file for visualization tools."""
         output_path = self.results_dir / output_file
 
@@ -299,7 +311,7 @@ class ResultsAggregator:
             "experiments": df.to_dict(orient="records"),
         }
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(viz_data, f, indent=2)
 
         print(f"Visualization data saved to: {output_path}")
@@ -311,11 +323,19 @@ def main():
     parser = argparse.ArgumentParser(description="Aggregate vLLM experiment results")
     parser.add_argument("--results-dir", default="results", help="Results directory")
     parser.add_argument("--config-dir", default="configs", help="Configs directory")
-    parser.add_argument("--output-csv", default="experiment_results.csv", help="Output CSV file")
-    parser.add_argument("--output-report", default="experiment_report.txt", help="Output report file")
-    parser.add_argument("--enrich-configs", action="store_true", help="Enrich with config parameters")
+    parser.add_argument(
+        "--output-csv", default="experiment_results.csv", help="Output CSV file"
+    )
+    parser.add_argument(
+        "--output-report", default="experiment_report.txt", help="Output report file"
+    )
+    parser.add_argument(
+        "--enrich-configs", action="store_true", help="Enrich with config parameters"
+    )
     parser.add_argument("--compare-param", help="Compare specific parameter")
-    parser.add_argument("--metric", default="throughput_tokens_per_sec", help="Metric for comparisons")
+    parser.add_argument(
+        "--metric", default="throughput_tokens_per_sec", help="Metric for comparisons"
+    )
 
     args = parser.parse_args()
 
@@ -360,12 +380,12 @@ def main():
     print(f"\nTotal experiments: {len(df)}")
     print(f"Successful experiments: {(df['success_rate'] > 0.95).sum()}")
 
-    print(f"\nThroughput (tokens/sec):")
+    print("\nThroughput (tokens/sec):")
     print(f"  Best: {df['throughput_tokens_per_sec'].max():.2f}")
     print(f"  Worst: {df['throughput_tokens_per_sec'].min():.2f}")
     print(f"  Mean: {df['throughput_tokens_per_sec'].mean():.2f}")
 
-    print(f"\nTTFT P95 (ms):")
+    print("\nTTFT P95 (ms):")
     print(f"  Best: {df['ttft_p95'].min() * 1000:.2f}")
     print(f"  Worst: {df['ttft_p95'].max() * 1000:.2f}")
     print(f"  Mean: {df['ttft_p95'].mean() * 1000:.2f}")

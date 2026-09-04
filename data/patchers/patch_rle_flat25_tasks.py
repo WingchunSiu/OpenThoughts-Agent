@@ -62,16 +62,18 @@ STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
 # Always-installed in the container (pytest is installed unconditionally,
 # plus pytest's own runtime helpers).
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",                # legacy pytest namespace
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",  # legacy pytest namespace
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+    }
+)
 
 # Whitelist of pip packages that ``tests/test.sh`` installs before pytest runs.
 # Source of truth: the WHITELIST loop in environment/test.sh of these datasets.
@@ -107,9 +109,7 @@ WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 
 PIP_WHITELIST: frozenset[str] = frozenset(
-    name
-    for imports in WHITELIST_PIP_TO_IMPORTS.values()
-    for name in imports
+    name for imports in WHITELIST_PIP_TO_IMPORTS.values() for name in imports
 )
 
 # Modules whose presence in instruction.md is sometimes only via dotted path
@@ -124,6 +124,7 @@ TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _top_level_imports(tree: ast.AST) -> set[str]:
     """Return the set of top-level package names imported by an AST module.
@@ -168,19 +169,29 @@ def evaluate_task(task_dir: Path) -> dict:
     # 1. py_compile
     try:
         with tempfile.NamedTemporaryFile(suffix=".pyc", delete=True) as tmp:
-            py_compile.compile(
-                str(test_file), cfile=tmp.name, doraise=True
-            )
+            py_compile.compile(str(test_file), cfile=tmp.name, doraise=True)
     except py_compile.PyCompileError as exc:
-        return {"kept": False, "reason": f"syntax_error: {exc.msg.splitlines()[0][:80]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"syntax_error: {exc.msg.splitlines()[0][:80]}",
+            "bad_imports": [],
+        }
     except Exception as exc:
-        return {"kept": False, "reason": f"compile_error: {type(exc).__name__}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"compile_error: {type(exc).__name__}",
+            "bad_imports": [],
+        }
 
     # 2. AST imports
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8", errors="replace"))
     except SyntaxError as exc:
-        return {"kept": False, "reason": f"ast_syntax: {exc.msg[:60]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"ast_syntax: {exc.msg[:60]}",
+            "bad_imports": [],
+        }
 
     imports = _top_level_imports(tree)
 
@@ -214,18 +225,37 @@ def evaluate_task(task_dir: Path) -> dict:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import samples.")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad", type=int, default=20, help="Print the first N bad-import samples."
+    )
     return p.parse_args()
 
 
@@ -257,7 +287,11 @@ def main() -> None:
             continue
         if v["reason"] == "no_test_file":
             no_test_dropped += 1
-        elif v["reason"].startswith("syntax_error") or v["reason"].startswith("ast_syntax") or v["reason"].startswith("compile_error"):
+        elif (
+            v["reason"].startswith("syntax_error")
+            or v["reason"].startswith("ast_syntax")
+            or v["reason"].startswith("compile_error")
+        ):
             syntax_dropped += 1
         elif v["reason"] == "missing_import":
             import_dropped += 1
@@ -279,7 +313,9 @@ def main() -> None:
 
     if bad_import_samples:
         print()
-        print(f"[patch_rle_flat25] sample bad-import drops (first {len(bad_import_samples)}):")
+        print(
+            f"[patch_rle_flat25] sample bad-import drops (first {len(bad_import_samples)}):"
+        )
         for tid, bad in bad_import_samples:
             print(f"  {tid}: {bad}")
 

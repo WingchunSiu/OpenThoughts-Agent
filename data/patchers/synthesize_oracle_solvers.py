@@ -72,13 +72,17 @@ Output ONLY the bash script, starting with #!/bin/bash.
 # Core generation logic
 # ---------------------------------------------------------------------------
 
+
 def _call_llm(instruction: str, model: str, client) -> str:
     """Call the OpenAI API and return the generated script text."""
     response = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_PROMPT_TEMPLATE.format(instruction=instruction)},
+            {
+                "role": "user",
+                "content": USER_PROMPT_TEMPLATE.format(instruction=instruction),
+            },
         ],
         max_completion_tokens=128000,
     )
@@ -147,7 +151,7 @@ def synthesize_one(
             return result
         except Exception as exc:
             last_error = exc
-            wait = 2 ** attempt
+            wait = 2**attempt
             time.sleep(wait)
 
     result["status"] = "error"
@@ -158,6 +162,7 @@ def synthesize_one(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -207,7 +212,8 @@ def main() -> None:
         raise SystemExit(f"Not a directory: {args.tasks_dir}")
 
     task_dirs = sorted(
-        d for d in args.tasks_dir.iterdir()
+        d
+        for d in args.tasks_dir.iterdir()
         if d.is_dir() and (d / "instruction.md").exists()
     )
     if not task_dirs:

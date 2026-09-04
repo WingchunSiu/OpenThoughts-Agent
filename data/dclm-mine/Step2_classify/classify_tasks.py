@@ -17,12 +17,14 @@ from pydantic import BaseModel
 
 class ShellSolution(BaseModel):
     """Shell-oriented solution if one exists."""
+
     description: str
     commands: Optional[str] = None
 
 
 class TaskExtraction(BaseModel):
     """Schema for extracted task information."""
+
     has_shell_task: bool
     task_description: Optional[str] = None
     shell_solution: Optional[ShellSolution] = None
@@ -56,7 +58,9 @@ Reject the input as "not a shell task" unless ALL of the following are true:
 """
 
 
-async def classify_sequence(client: AsyncOpenAI, text: str, model: str) -> TaskExtraction:
+async def classify_sequence(
+    client: AsyncOpenAI, text: str, model: str
+) -> TaskExtraction:
     """
     Classify a sequence using OpenAI structured output.
 
@@ -72,7 +76,7 @@ async def classify_sequence(client: AsyncOpenAI, text: str, model: str) -> TaskE
         model=model,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text}
+            {"role": "user", "content": text},
         ],
         response_format=TaskExtraction,
     )
@@ -80,7 +84,9 @@ async def classify_sequence(client: AsyncOpenAI, text: str, model: str) -> TaskE
     return completion.choices[0].message.parsed
 
 
-async def process_sequence(client: AsyncOpenAI, sequence: dict, idx: int, model: str) -> Optional[tuple]:
+async def process_sequence(
+    client: AsyncOpenAI, sequence: dict, idx: int, model: str
+) -> Optional[tuple]:
     """Process a single sequence. Returns (result, usage) tuple."""
     try:
         text = sequence.get("text", "")
@@ -93,7 +99,7 @@ async def process_sequence(client: AsyncOpenAI, sequence: dict, idx: int, model:
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text}
+                {"role": "user", "content": text},
             ],
             response_format=TaskExtraction,
         )
@@ -101,10 +107,7 @@ async def process_sequence(client: AsyncOpenAI, sequence: dict, idx: int, model:
         result_obj = completion.choices[0].message.parsed
 
         # Combine original data with classification
-        result = {
-            "original": sequence,
-            "classification": result_obj.model_dump()
-        }
+        result = {"original": sequence, "classification": result_obj.model_dump()}
 
         # Extract usage information
         usage = completion.usage
@@ -118,16 +121,27 @@ async def process_sequence(client: AsyncOpenAI, sequence: dict, idx: int, model:
 async def main():
     """Process sequences from HF dataset and extract task information."""
     parser = argparse.ArgumentParser(description="Classify tasks from HF dataset")
-    parser.add_argument("--input-dataset", type=str,
-                       default="DCAgent2/dclm-baseline-terminal-candidates-100k",
-                       help="Input HF dataset name")
-    parser.add_argument("--output-dataset", type=str,
-                       default="DCAgent2/dclm-baseline-terminal-candidates-classified",
-                       help="Output HF dataset name")
-    parser.add_argument("--model", type=str, default="gpt-5-nano-2025-08-07",
-                       help="OpenAI model to use")
-    parser.add_argument("--max-sequences", type=int, default=None,
-                       help="Maximum number of sequences to process (None for all)")
+    parser.add_argument(
+        "--input-dataset",
+        type=str,
+        default="DCAgent2/dclm-baseline-terminal-candidates-100k",
+        help="Input HF dataset name",
+    )
+    parser.add_argument(
+        "--output-dataset",
+        type=str,
+        default="DCAgent2/dclm-baseline-terminal-candidates-classified",
+        help="Output HF dataset name",
+    )
+    parser.add_argument(
+        "--model", type=str, default="gpt-5-nano-2025-08-07", help="OpenAI model to use"
+    )
+    parser.add_argument(
+        "--max-sequences",
+        type=int,
+        default=None,
+        help="Maximum number of sequences to process (None for all)",
+    )
 
     args = parser.parse_args()
 
@@ -163,7 +177,9 @@ async def main():
 
     # Process all sequences in parallel
     print(f"Processing with model {args.model}...")
-    results = await asyncio.gather(*[process_with_semaphore(seq_data) for seq_data in sequences])
+    results = await asyncio.gather(
+        *[process_with_semaphore(seq_data) for seq_data in sequences]
+    )
 
     # Filter out None results and collect token usage
     valid_results = []
@@ -175,21 +191,31 @@ async def main():
             result, usage = item
             valid_results.append(result)
             if usage:
-                total_input_tokens += getattr(usage, 'prompt_tokens', 0)
-                total_output_tokens += getattr(usage, 'completion_tokens', 0)
+                total_input_tokens += getattr(usage, "prompt_tokens", 0)
+                total_output_tokens += getattr(usage, "completion_tokens", 0)
 
     # Save first 200 for local inspection
     print(f"\nSaving first {min(200, len(valid_results))} results to {output_file}...")
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         for result in valid_results[:200]:
             f.write(json.dumps(result) + "\n")
 
     # Compute statistics
     processed = len(valid_results)
-    has_shell_task = sum(1 for r in valid_results if r.get("classification", {}).get("has_shell_task"))
-    has_task_description = sum(1 for r in valid_results if r.get("classification", {}).get("task_description") is not None)
-    has_shell_solution = sum(1 for r in valid_results if r.get("classification", {}).get("shell_solution") is not None)
+    has_shell_task = sum(
+        1 for r in valid_results if r.get("classification", {}).get("has_shell_task")
+    )
+    has_task_description = sum(
+        1
+        for r in valid_results
+        if r.get("classification", {}).get("task_description") is not None
+    )
+    has_shell_solution = sum(
+        1
+        for r in valid_results
+        if r.get("classification", {}).get("shell_solution") is not None
+    )
 
     print(f"\nCompleted! Processed {processed} sequences.")
 
@@ -198,14 +224,20 @@ async def main():
     pct_has_task_desc = (has_task_description / processed * 100) if processed > 0 else 0
     pct_has_shell_sol = (has_shell_solution / processed * 100) if processed > 0 else 0
 
-    print(f"\nStatistics:")
-    print(f"  has_shell_task:       {has_shell_task:4d} / {processed} ({pct_has_shell_task:5.1f}%)")
-    print(f"  has_task_description: {has_task_description:4d} / {processed} ({pct_has_task_desc:5.1f}%)")
-    print(f"  has_shell_solution:   {has_shell_solution:4d} / {processed} ({pct_has_shell_sol:5.1f}%)")
+    print("\nStatistics:")
+    print(
+        f"  has_shell_task:       {has_shell_task:4d} / {processed} ({pct_has_shell_task:5.1f}%)"
+    )
+    print(
+        f"  has_task_description: {has_task_description:4d} / {processed} ({pct_has_task_desc:5.1f}%)"
+    )
+    print(
+        f"  has_shell_solution:   {has_shell_solution:4d} / {processed} ({pct_has_shell_sol:5.1f}%)"
+    )
     print(f"  Tokens (in/out):      {total_input_tokens:,} / {total_output_tokens:,}")
 
     # Create HF dataset and upload
-    print(f"\nCreating HF dataset...")
+    print("\nCreating HF dataset...")
     output_hf_dataset = Dataset.from_list(valid_results)
 
     print(f"Uploading to {args.output_dataset}...")

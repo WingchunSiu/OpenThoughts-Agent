@@ -29,7 +29,9 @@ def limit_tasks_directory(
     if not source_path.exists():
         raise FileNotFoundError(f"Task directory does not exist: {source_path}")
 
-    task_dirs = sorted((d for d in source_path.iterdir() if d.is_dir()), key=lambda p: p.name)
+    task_dirs = sorted(
+        (d for d in source_path.iterdir() if d.is_dir()), key=lambda p: p.name
+    )
     if len(task_dirs) <= limit:
         return str(source_path)
 

@@ -110,12 +110,16 @@ class BaseDataGenerator(ABC):
         setattr(args, "_datagen_config_path", str(loaded.path))
         setattr(args, "_engine_runtime", runtime)
         setattr(args, "engine_request_params", dict(runtime.request_params))
-        extra_agent_kwargs = dict(getattr(loaded.config, "extra_agent_kwargs", {}) or {})
+        extra_agent_kwargs = dict(
+            getattr(loaded.config, "extra_agent_kwargs", {}) or {}
+        )
         setattr(args, "_datagen_extra_agent_kwargs", extra_agent_kwargs)
         if getattr(args, "trace_agent_kwargs", None) is None and extra_agent_kwargs:
             setattr(args, "trace_agent_kwargs", extra_agent_kwargs)
 
-        endpoint_override = getattr(args, "endpoint_json", None) or os.environ.get("TRACE_ENDPOINT_JSON")
+        endpoint_override = getattr(args, "endpoint_json", None) or os.environ.get(
+            "TRACE_ENDPOINT_JSON"
+        )
         if runtime:
             existing_endpoint = runtime.engine_kwargs.get("endpoint_json")
             if endpoint_override:
@@ -128,8 +132,12 @@ class BaseDataGenerator(ABC):
 
     def build_request(self, args: argparse.Namespace) -> GenerationRequest:
         metadata = self._build_request_metadata(args)
-        endpoint_json = getattr(args, "endpoint_json", None) or os.environ.get("TRACE_ENDPOINT_JSON")
-        runtime: Optional[RuntimeEngineSettings] = getattr(args, "_engine_runtime", None)
+        endpoint_json = getattr(args, "endpoint_json", None) or os.environ.get(
+            "TRACE_ENDPOINT_JSON"
+        )
+        runtime: Optional[RuntimeEngineSettings] = getattr(
+            args, "_engine_runtime", None
+        )
         if not endpoint_json and runtime:
             endpoint_json = runtime.engine_kwargs.get("endpoint_json")
         if endpoint_json:
@@ -148,7 +156,9 @@ class BaseDataGenerator(ABC):
         if runtime and runtime.request_params:
             metadata.setdefault("engine_request_params", dict(runtime.request_params))
 
-        config_path = getattr(args, "_datagen_config_path", getattr(args, "engine_config", None))
+        config_path = getattr(
+            args, "_datagen_config_path", getattr(args, "engine_config", None)
+        )
         if config_path:
             metadata.setdefault("engine_config_path", config_path)
         request = GenerationRequest(
@@ -292,7 +302,11 @@ class BaseDataGenerator(ABC):
                     if value:
                         candidates.append(value)
                 if isinstance(engine_cfg.request_params, dict):
-                    for key in ("max_input_tokens", "context_window", "max_context_tokens"):
+                    for key in (
+                        "max_input_tokens",
+                        "context_window",
+                        "max_context_tokens",
+                    ):
                         value = self._safe_int(engine_cfg.request_params.get(key))
                         if value:
                             candidates.append(value)
@@ -317,7 +331,9 @@ class BaseDataGenerator(ABC):
 
         datagen_config = getattr(args, "_datagen_config", None)
         if datagen_config and getattr(datagen_config, "engine", None):
-            value = self._safe_int(getattr(datagen_config.engine, "max_output_tokens", None))
+            value = self._safe_int(
+                getattr(datagen_config.engine, "max_output_tokens", None)
+            )
             if value:
                 return value
         return None
@@ -363,8 +379,8 @@ class BaseDataGenerator(ABC):
 
         if getattr(engine, "requires_initial_healthcheck", False):
             self.logger.info("Performing initial healthcheck for inference engine")
-            attempts = getattr(self, 'HEALTHCHECK_MAX_ATTEMPTS', 20)
-            delay = getattr(self, 'HEALTHCHECK_RETRY_DELAY', 30)
+            attempts = getattr(self, "HEALTHCHECK_MAX_ATTEMPTS", 20)
+            delay = getattr(self, "HEALTHCHECK_RETRY_DELAY", 30)
             last_exc = None
             for attempt in range(1, attempts + 1):
                 try:
@@ -450,9 +466,7 @@ class BaseDataGenerator(ABC):
                 task_result = results.get("tasks")
                 if task_result:
                     request.tasks_input = task_result.dataset_path
-                trace_result = self.run_trace_generation(
-                    request, context, task_result
-                )
+                trace_result = self.run_trace_generation(request, context, task_result)
                 results["traces"] = self._normalise_result(trace_result)
 
             if stage == "traces":
@@ -672,7 +686,9 @@ class BaseDataGenerator(ABC):
         metadata = request.metadata or {}
         engine = context.engine
         disable_verification = bool(getattr(args, "disable_verification", False))
-        trace_backend_raw = metadata.get("trace_backend") or getattr(args, "trace_backend", None)
+        trace_backend_raw = metadata.get("trace_backend") or getattr(
+            args, "trace_backend", None
+        )
         trace_backend = (
             str(trace_backend_raw).strip().lower()
             if trace_backend_raw not in (None, "")
@@ -686,7 +702,9 @@ class BaseDataGenerator(ABC):
             )
 
         tasks_path = Path(tasks_input)
-        tasks_path = self._maybe_limit_tasks_path(request, tasks_path, prefix="trace_tasks")
+        tasks_path = self._maybe_limit_tasks_path(
+            request, tasks_path, prefix="trace_tasks"
+        )
         request.tasks_input = str(tasks_path)
         if not tasks_path.exists():
             raise InputValidationError(
@@ -703,9 +721,8 @@ class BaseDataGenerator(ABC):
         if trace_output_dir:
             trace_output_dir = Path(trace_output_dir)
 
-        trace_config_path_raw = (
-            metadata.get("trace_harbor_config")
-            or getattr(args, "trace_harbor_config", None)
+        trace_config_path_raw = metadata.get("trace_harbor_config") or getattr(
+            args, "trace_harbor_config", None
         )
         if not trace_config_path_raw:
             raise InputValidationError(
@@ -801,9 +818,14 @@ class BaseDataGenerator(ABC):
                 or getattr(args, "vllm_model_path", None)
                 or getattr(args, "model", None)
             )
-            if trace_model and str(trace_model).strip().lower() == TRACE_MODEL_PLACEHOLDER:
+            if (
+                trace_model
+                and str(trace_model).strip().lower() == TRACE_MODEL_PLACEHOLDER
+            ):
                 trace_model = ""
-            if not trace_model and isinstance(engine, (GenericOpenAIEngine, GeminiOpenAIEngine)):
+            if not trace_model and isinstance(
+                engine, (GenericOpenAIEngine, GeminiOpenAIEngine)
+            ):
                 trace_model = getattr(engine, "model_name", None)
 
             if isinstance(engine, GenericOpenAIEngine):
@@ -830,11 +852,15 @@ class BaseDataGenerator(ABC):
             trace_model = ""
 
         if not trace_model:
-            raise InputValidationError("Trace generation requires a model (e.g., --trace-model)")
+            raise InputValidationError(
+                "Trace generation requires a model (e.g., --trace-model)"
+            )
 
         trace_model_for_dispatch = trace_model
 
-        def _normalize_model_for_provider(model_value: str, provider: str | None) -> str:
+        def _normalize_model_for_provider(
+            model_value: str, provider: str | None
+        ) -> str:
             if not model_value:
                 return ""
             candidate = str(model_value).strip()
@@ -847,10 +873,10 @@ class BaseDataGenerator(ABC):
                 "google_gemini/",
             ):
                 if candidate.lower().startswith(prefix):
-                    candidate = candidate[len(prefix):]
+                    candidate = candidate[len(prefix) :]
                     break
             if candidate.lower().startswith("models/"):
-                candidate = candidate[len("models/"):]
+                candidate = candidate[len("models/") :]
             candidate = candidate.lstrip("/")
             if provider:
                 if not candidate:
@@ -872,7 +898,9 @@ class BaseDataGenerator(ABC):
             if isinstance(engine, GeminiOpenAIEngine):
                 provider_prefix = "gemini"
                 api_base = None
-            trace_model_for_dispatch = _normalize_model_for_provider(trace_model, provider_prefix)
+            trace_model_for_dispatch = _normalize_model_for_provider(
+                trace_model, provider_prefix
+            )
             if not trace_model_for_dispatch:
                 raise InputValidationError(
                     "Unable to derive trace model for provider. Check trace_model/engine configuration."
@@ -895,7 +923,9 @@ class BaseDataGenerator(ABC):
             or "terminus-2"
         )
 
-        jobs_dir_override_raw = metadata.get("trace_jobs_dir") or getattr(args, "trace_jobs_dir", None)
+        jobs_dir_override_raw = metadata.get("trace_jobs_dir") or getattr(
+            args, "trace_jobs_dir", None
+        )
         if jobs_dir_override_raw:
             trace_jobs_dir = Path(jobs_dir_override_raw).expanduser().resolve()
         else:
@@ -913,12 +943,11 @@ class BaseDataGenerator(ABC):
         if trace_eval_only_requested:
             self.logger.warning(
                 "trace_eval_only is deprecated. Launch eval workloads via "
-                "`python -m hpc.launch --job_type eval` instead."
+                "`python -m hpc.launch --job_type eval_listener` instead."
             )
 
-        trace_n_concurrent = (
-            metadata.get("trace_n_concurrent")
-            or getattr(args, "trace_n_concurrent", None)
+        trace_n_concurrent = metadata.get("trace_n_concurrent") or getattr(
+            args, "trace_n_concurrent", None
         )
         if trace_n_concurrent is None:
             trace_n_concurrent = get_orchestrator_field(
@@ -927,7 +956,9 @@ class BaseDataGenerator(ABC):
         if trace_n_concurrent is None:
             trace_n_concurrent = 8
             if isinstance(engine, GenericOpenAIEngine):
-                print("[traces] defaulting trace_n_concurrent to 8 for vLLM local engine")
+                print(
+                    "[traces] defaulting trace_n_concurrent to 8 for vLLM local engine"
+                )
 
         raw_agent_kwargs = metadata.get("trace_agent_kwargs")
         if raw_agent_kwargs is None:
@@ -943,7 +974,9 @@ class BaseDataGenerator(ABC):
                 try:
                     parsed_agent_kwargs = json.loads(raw_agent_kwargs)
                 except json.JSONDecodeError as exc:
-                    raise InputValidationError("Invalid JSON for --trace-agent-kwargs", cause=exc)
+                    raise InputValidationError(
+                        "Invalid JSON for --trace-agent-kwargs", cause=exc
+                    )
             elif isinstance(raw_agent_kwargs, dict):
                 parsed_agent_kwargs = raw_agent_kwargs
             else:
@@ -998,19 +1031,33 @@ class BaseDataGenerator(ABC):
             or getattr(args, "trace_env", None)
             or trace_config_template.environment.type
         )
-        trace_episodes = metadata.get("trace_episodes") or getattr(args, "trace_episodes", None) or "last"
-        trace_export_filter = metadata.get("trace_export_filter") or getattr(args, "trace_export_filter", None) or "none"
+        trace_episodes = (
+            metadata.get("trace_episodes")
+            or getattr(args, "trace_episodes", None)
+            or "last"
+        )
+        trace_export_filter = (
+            metadata.get("trace_export_filter")
+            or getattr(args, "trace_export_filter", None)
+            or "none"
+        )
         if trace_export_filter == "none":
             trace_export_filter = None
 
-        trace_dataset_type = metadata.get("trace_dataset_type") or getattr(args, "trace_dataset_type", None) or "SFT"
+        trace_dataset_type = (
+            metadata.get("trace_dataset_type")
+            or getattr(args, "trace_dataset_type", None)
+            or "SFT"
+        )
         try:
             agent_enum = AgentName(trace_agent_name)
         except ValueError:
             try:
                 agent_enum = AgentName(trace_agent_name.replace("-", "_").upper())
             except ValueError as exc:
-                raise InputValidationError(f"Invalid trace agent name: {trace_agent_name}", cause=exc)
+                raise InputValidationError(
+                    f"Invalid trace agent name: {trace_agent_name}", cause=exc
+                )
 
         if isinstance(trace_env, EnvironmentType):
             env_enum = trace_env
@@ -1044,17 +1091,24 @@ class BaseDataGenerator(ABC):
         job_config_for_run = update_agent_kwargs(job_config_for_run, agent_kwargs)
         if derived_metrics_endpoint:
             ac = get_orchestrator_field(job_config_for_run, "adaptive_concurrency")
-            if ac and ac.enabled and (
-                not ac.metrics_endpoint
-                or "replace-with" in str(ac.metrics_endpoint)
-                or str(ac.metrics_endpoint).rstrip("/") != derived_metrics_endpoint.rstrip("/")
+            if (
+                ac
+                and ac.enabled
+                and (
+                    not ac.metrics_endpoint
+                    or "replace-with" in str(ac.metrics_endpoint)
+                    or str(ac.metrics_endpoint).rstrip("/")
+                    != derived_metrics_endpoint.rstrip("/")
+                )
             ):
                 ac.metrics_endpoint = derived_metrics_endpoint
         job_config_for_run.environment.type = env_enum
         set_orchestrator_field(
             job_config_for_run, "n_concurrent_trials", int(trace_n_concurrent)
         )
-        agent_preview = job_config_for_run.agents[0] if job_config_for_run.agents else None
+        agent_preview = (
+            job_config_for_run.agents[0] if job_config_for_run.agents else None
+        )
         if agent_preview is not None:
             self.logger.info(
                 "[traces] prepared agent config name=%s model=%s kwargs=%s",
@@ -1071,7 +1125,9 @@ class BaseDataGenerator(ABC):
         if sandbox_mem is not None:
             job_config_for_run.environment.override_memory_mb = int(sandbox_mem) * 1024
         if sandbox_disk is not None:
-            job_config_for_run.environment.override_storage_mb = int(sandbox_disk) * 1024
+            job_config_for_run.environment.override_storage_mb = (
+                int(sandbox_disk) * 1024
+            )
 
         job_dir = trace_jobs_dir / job_config_for_run.job_name
         if requires_endpoint:
@@ -1083,8 +1139,12 @@ class BaseDataGenerator(ABC):
                     existing_agent = ((existing_payload.get("agents") or [{}])[0]) or {}
                     existing_kwargs = existing_agent.get("kwargs") or {}
                     existing_values = {
-                        "api_base": (existing_kwargs.get("api_base") or "").strip() or None,
-                        "metrics_endpoint": (existing_kwargs.get("metrics_endpoint") or "").strip() or None,
+                        "api_base": (existing_kwargs.get("api_base") or "").strip()
+                        or None,
+                        "metrics_endpoint": (
+                            existing_kwargs.get("metrics_endpoint") or ""
+                        ).strip()
+                        or None,
                     }
                 except Exception as exc:  # pragma: no cover - defensive
                     self.logger.warning(
@@ -1093,13 +1153,14 @@ class BaseDataGenerator(ABC):
                         exc,
                     )
             desired_api_base = (agent_kwargs.get("api_base") or "").strip() or None
-            desired_metrics = (agent_kwargs.get("metrics_endpoint") or "").strip() or None
+            desired_metrics = (
+                agent_kwargs.get("metrics_endpoint") or ""
+            ).strip() or None
             if existing_values and desired_api_base:
                 old_api = existing_values.get("api_base")
                 old_metrics = existing_values.get("metrics_endpoint")
                 mismatch_api = bool(
-                    old_api
-                    and old_api.rstrip("/") != desired_api_base.rstrip("/")
+                    old_api and old_api.rstrip("/") != desired_api_base.rstrip("/")
                 )
                 mismatch_metrics = bool(
                     old_metrics

@@ -21,7 +21,7 @@ from data.commons import upload_tasks_to_hf, subsample_tasks_directory
 from data.self_instruct_naive.utils import (
     extract_json_from_response,
     get_few_shot_example,
-    calculate_request_cost
+    calculate_request_cost,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -96,17 +96,12 @@ def generate_task_files(
     seed_idx: Optional[int] = None,
     show_logs: bool = False,
 ) -> Tuple[str, str, float]:
-    prompt = build_naive_setup_prompt(
-        few_shot_example,
-        seed_text
-    )
+    prompt = build_naive_setup_prompt(few_shot_example, seed_text)
     response = llm(prompt)
     request_cost = calculate_request_cost(response)
     if show_logs:
         if seed_idx is not None:
-            print(
-                f"[seed {seed_idx}] Setup generation cost: ${request_cost:.6f}"
-            )
+            print(f"[seed {seed_idx}] Setup generation cost: ${request_cost:.6f}")
         else:
             print(f"[setup generation] request cost: ${request_cost:.6f}")
     text = response.choices[0].text if response.choices else ""
@@ -133,7 +128,9 @@ def create_task_directory(
     env_dir = task_dir / "environment"
 
     env_dir.mkdir(parents=True, exist_ok=True)
-    (task_dir / "instruction.md").write_text(instruction_md.rstrip() + "\n", encoding="utf-8")
+    (task_dir / "instruction.md").write_text(
+        instruction_md.rstrip() + "\n", encoding="utf-8"
+    )
     (task_dir / "task.toml").write_text(task_toml + "\n", encoding="utf-8")
     (env_dir / "Dockerfile").write_text(DOCKERFILE, encoding="utf-8")
 
@@ -149,7 +146,7 @@ def create_sandboxed_tasks(
     out_root = Path(tempfile.mkdtemp(prefix="selfinstruct_naive_"))
     out_root.mkdir(parents=True, exist_ok=True)
 
-    dataset = pd.read_csv(seed_dataset_path, encoding='latin-1')
+    dataset = pd.read_csv(seed_dataset_path, encoding="latin-1")
     dataset = dataset.sample(frac=1).reset_index(drop=True)
 
     llm = partial(litellm.text_completion, model=model_name)
@@ -230,11 +227,11 @@ def create_sandboxed_tasks(
                     )
                     produced += 1
                     if show_logs:
-                        print(
-                            f"(cost=${cost:.6f})"
-                        )
+                        print(f"(cost=${cost:.6f})")
                 else:
-                    reason = result.get("error") or result.get("reason") or "unknown failure"
+                    reason = (
+                        result.get("error") or result.get("reason") or "unknown failure"
+                    )
                     if show_logs:
                         print(
                             f"[seed {seed_idx}] Skipped task: {reason} "
@@ -264,7 +261,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate self-instruct naive tasks with a single LLM."
     )
-    parser.add_argument("--limit", type=int, default=10000, help="Number of tasks to produce.")
+    parser.add_argument(
+        "--limit", type=int, default=10000, help="Number of tasks to produce."
+    )
     parser.add_argument("--offset", type=int, default=0, help="Seed offset.")
     parser.add_argument(
         "--model-name",
@@ -344,15 +343,15 @@ def main() -> None:
 
     # print(f"[3/3] Running agents and uploading traces")
     # hf_dataset = run_dataset_to_traces(
-    #     final_dataset_dir, 
-    #     model_name="gpt-5-nano-2025-08-07", 
-    #     agent_name="terminus-2", 
-    #     n_concurrent=1024, 
+    #     final_dataset_dir,
+    #     model_name="gpt-5-nano-2025-08-07",
+    #     agent_name="terminus-2",
+    #     n_concurrent=1024,
     #     agent_kwargs={"max_episodes": 8}
     # )
     # upload_traces_to_hf(
-    #     hf_dataset, 
-    #     f"{args.repo_id}-traces-terminus-2", 
+    #     hf_dataset,
+    #     f"{args.repo_id}-traces-terminus-2",
     #     "SFT"
     # )
 

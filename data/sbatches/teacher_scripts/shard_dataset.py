@@ -11,7 +11,10 @@ from tasks_parquet_converter import from_hf_dataset
 
 def main():
     if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <hf_repo_id> <num_shards> <output_file>", file=sys.stderr)
+        print(
+            f"Usage: {sys.argv[0]} <hf_repo_id> <num_shards> <output_file>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     hf_repo_id = sys.argv[1]
@@ -26,7 +29,11 @@ def main():
     print(f"Fingerprint: {fingerprint}")
 
     # Determine shard directory based on fingerprint
-    shard_dir = Path(tempfile.gettempdir()) / "hf_datasets_shards" / f"{fingerprint}_{num_shards}shards"
+    shard_dir = (
+        Path(tempfile.gettempdir())
+        / "hf_datasets_shards"
+        / f"{fingerprint}_{num_shards}shards"
+    )
     shard_marker = shard_dir / ".sharding_complete"
 
     if shard_dir.exists() and shard_marker.exists():
@@ -53,7 +60,7 @@ def main():
         print("Dataset sharding complete!")
 
     # Write output to file for bash to source
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         f.write(f"SHARD_DIR={shard_dir}\n")
         f.write(f"DATASET_FINGERPRINT={fingerprint}\n")
 

@@ -8,12 +8,14 @@ import json
 import random
 from pathlib import Path
 from datasets import Dataset
-from huggingface_hub import HfApi
 
 # Configuration
-INPUT_DIR = Path("/data/horse/ws/rehe951g-dcagent/dclm-terminal-like/results_all_20251117_155756")
+INPUT_DIR = Path(
+    "/data/horse/ws/rehe951g-dcagent/dclm-terminal-like/results_all_20251117_155756"
+)
 SAMPLE_PROBABILITY = 0.05
 HF_DATASET_NAME = "DCAgent2/dclm-baseline-terminal-candidates-100k"
+
 
 def main():
     # Set random seed for reproducibility
@@ -29,14 +31,16 @@ def main():
 
     for shard_file in shard_files:
         print(f"Processing {shard_file.name}...")
-        with open(shard_file, 'r') as f:
+        with open(shard_file, "r") as f:
             for line in f:
                 total_count += 1
                 if random.random() < SAMPLE_PROBABILITY:
                     sampled_sequences.append(json.loads(line))
 
         if total_count % 100000 == 0:
-            print(f"  Processed {total_count} sequences, sampled {len(sampled_sequences)}")
+            print(
+                f"  Processed {total_count} sequences, sampled {len(sampled_sequences)}"
+            )
 
     print(f"\nTotal sequences processed: {total_count}")
     print(f"Sampled sequences: {len(sampled_sequences)}")
@@ -51,6 +55,7 @@ def main():
     print(f"\nUploading to {HF_DATASET_NAME}...")
     dataset.push_to_hub(HF_DATASET_NAME, private=False)
     print("Upload complete!")
+
 
 if __name__ == "__main__":
     main()

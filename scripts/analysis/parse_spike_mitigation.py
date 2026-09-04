@@ -120,7 +120,16 @@ def print_trajectory(
         extra_keys = ()
         extra_fmts = ()
 
-    base_hdr = ("step", "job", "reward", "p@8", "grad", "entropy", "lr_max", "stale_mean")
+    base_hdr = (
+        "step",
+        "job",
+        "reward",
+        "p@8",
+        "grad",
+        "entropy",
+        "lr_max",
+        "stale_mean",
+    )
     base_keys = (
         None,  # step
         None,  # job
@@ -163,12 +172,16 @@ def engagement_summary(
         return
 
     trig_key = f"policy/{mechanism}/triggered"
-    triggered = [(s, m) for s in steps for _, m in [step_data[s]] if m.get(trig_key, 0) > 0]
+    triggered = [
+        (s, m) for s in steps for _, m in [step_data[s]] if m.get(trig_key, 0) > 0
+    ]
 
     print()
     print(f"== {mechanism} ENGAGEMENT SUMMARY ==")
     print(f"steps covered: {steps[0]} -> {steps[-1]}  (n={len(steps)})")
-    print(f"triggered>0:   {len(triggered)} of {len(steps)}  ({100*len(triggered)/len(steps):.1f}%)")
+    print(
+        f"triggered>0:   {len(triggered)} of {len(steps)}  ({100 * len(triggered) / len(steps):.1f}%)"
+    )
 
     if mechanism == "stale_clip":
         scale_key = "policy/stale_clip/scale"
@@ -194,15 +207,19 @@ def engagement_summary(
         else:
             last_warm = step_data[steps[-1]][1].get(warm_key)
             if last_warm is not None:
-                print(f"warmup NOT YET COMPLETE — warmup_remaining={last_warm:.0f} at latest step {steps[-1]}")
+                print(
+                    f"warmup NOT YET COMPLETE — warmup_remaining={last_warm:.0f} at latest step {steps[-1]}"
+                )
         eff_max_key = "policy/z_clip/effective_max"
         clipped = [
-            s for s in steps
-            if (step_data[s][1].get(eff_max_key) or 1e9) < (
-                step_data[s][1].get("policy/raw_grad_norm") or 0
-            )
+            s
+            for s in steps
+            if (step_data[s][1].get(eff_max_key) or 1e9)
+            < (step_data[s][1].get("policy/raw_grad_norm") or 0)
         ]
-        print(f"steps where effective_max < raw_grad_norm (clipping active): {len(clipped)}")
+        print(
+            f"steps where effective_max < raw_grad_norm (clipping active): {len(clipped)}"
+        )
 
 
 def collapse_signals(step_data: dict[int, tuple[str, dict[str, Any]]]) -> None:
@@ -221,7 +238,6 @@ def collapse_signals(step_data: dict[int, tuple[str, dict[str, Any]]]) -> None:
     print()
     print("== CLAUDE.md COLLAPSE-SIGNAL SCAN ==")
     sustained_grad = 0
-    last_grad = 0.0
     flags = []
     for s in steps:
         m = step_data[s][1]
@@ -271,11 +287,13 @@ def write_csv(
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument(
         "log_dir",
         help="Directory containing the experiment's logs. Searches recursively for "
-             "<dir>/**/logs/*.out (excludes anything under ray_logs/). Accepts a single .out file too.",
+        "<dir>/**/logs/*.out (excludes anything under ray_logs/). Accepts a single .out file too.",
     )
     p.add_argument(
         "--mechanism",
@@ -297,13 +315,15 @@ def main() -> int:
         log_files = [str(src)]
     elif src.is_dir():
         log_files = [
-            f for f in glob(str(src / "**" / "logs" / "*.out"), recursive=True)
+            f
+            for f in glob(str(src / "**" / "logs" / "*.out"), recursive=True)
             if "/ray_logs/" not in f
         ]
         if not log_files:
             # Fall back: any .out under the dir (excluding ray_logs).
             log_files = [
-                f for f in glob(str(src / "**" / "*.out"), recursive=True)
+                f
+                for f in glob(str(src / "**" / "*.out"), recursive=True)
                 if "/ray_logs/" not in f
             ]
     else:

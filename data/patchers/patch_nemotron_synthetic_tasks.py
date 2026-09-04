@@ -38,7 +38,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import io
 import re
 import shutil
 import tarfile
@@ -72,6 +71,7 @@ ALREADY_PATCHED_MARKER = "Data files for this task have been pre-loaded into"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def patch_dockerfile(content: str) -> tuple[str, bool]:
     """Remove COPY files/ /app/ line and fix WORKDIR to /app.
@@ -122,6 +122,7 @@ def patch_task_toml(content: str) -> tuple[str, bool]:
 # ---------------------------------------------------------------------------
 # Per-task patching
 # ---------------------------------------------------------------------------
+
 
 def patch_task(
     task_dir: Path,
@@ -217,6 +218,7 @@ def patch_task(
 # HuggingFace download + extraction helpers
 # ---------------------------------------------------------------------------
 
+
 def _iter_tasks_from_tar(tar_path: Path, out_dir: Path) -> list[Path]:
     """Extract tasks from a .tar.gz file, flattening the category subdirectory.
 
@@ -236,7 +238,9 @@ def _iter_tasks_from_tar(tar_path: Path, out_dir: Path) -> list[Path]:
         }
 
         for instr_path in instruction_paths:
-            task_rel = instr_path[: -len("/instruction.md")]  # e.g. ./easy_5000/data_science/task_1766
+            task_rel = instr_path[
+                : -len("/instruction.md")
+            ]  # e.g. ./easy_5000/data_science/task_1766
             task_name = Path(task_rel).name  # e.g. task_1766
 
             task_out = out_dir / task_name
@@ -248,7 +252,7 @@ def _iter_tasks_from_tar(tar_path: Path, out_dir: Path) -> list[Path]:
                 if not (member.name == task_rel or member.name.startswith(prefix)):
                     continue
                 # Compute relative path within the task
-                rel = member.name[len(task_rel):].lstrip("/")
+                rel = member.name[len(task_rel) :].lstrip("/")
                 if not rel:
                     continue
 
@@ -274,7 +278,9 @@ def download_and_extract_from_hf(dataset_name: str, out_dir: Path) -> list[Path]
     try:
         from huggingface_hub import HfApi
     except ImportError:
-        raise SystemExit("huggingface_hub is required. Run: pip install huggingface_hub")
+        raise SystemExit(
+            "huggingface_hub is required. Run: pip install huggingface_hub"
+        )
 
     api = HfApi()
     all_files = list(api.list_repo_files(dataset_name, repo_type="dataset"))
@@ -307,6 +313,7 @@ def download_and_extract_from_hf(dataset_name: str, out_dir: Path) -> list[Path]
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -349,7 +356,8 @@ def main() -> None:
         if not tasks_root.is_dir():
             raise SystemExit(f"Not a directory: {tasks_root}")
         task_dirs = sorted(
-            d for d in tasks_root.iterdir()
+            d
+            for d in tasks_root.iterdir()
             if d.is_dir() and (d / "instruction.md").exists()
         )
 
@@ -396,7 +404,9 @@ def main() -> None:
         if len(dockerfiles) <= 10:
             print("✓ Within Daytona's snapshot limit (≤10)")
         else:
-            print(f"⚠ Exceeds recommended limit of 10 — consider consolidating Dockerfiles")
+            print(
+                "⚠ Exceeds recommended limit of 10 — consider consolidating Dockerfiles"
+            )
 
 
 if __name__ == "__main__":

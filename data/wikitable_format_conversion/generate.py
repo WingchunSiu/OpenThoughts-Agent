@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, List, Sequence, Tuple
+from typing import Callable, Iterator, List, Tuple
 
 try:
     from data.commons import (
@@ -25,6 +25,7 @@ try:
         subsample_tasks_directory,
         upload_tasks_to_hf,
     )
+
     COMMONS_IMPORT_ERROR = None
 except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency fallback
     finalize_dataset_output = None  # type: ignore[assignment]
@@ -488,8 +489,13 @@ TASK_BLUEPRINTS: Tuple[Tuple[str, str], ...] = (
 )
 
 
-if finalize_dataset_output is None:  # pragma: no cover - fallback for optional dependency
-    def finalize_dataset_output(source_dir: str | Path, output_dir: str | Path | None) -> Path:
+if (
+    finalize_dataset_output is None
+):  # pragma: no cover - fallback for optional dependency
+
+    def finalize_dataset_output(
+        source_dir: str | Path, output_dir: str | Path | None
+    ) -> Path:
         source_path = Path(source_dir)
         if output_dir is None:
             return source_path
@@ -505,7 +511,10 @@ if finalize_dataset_output is None:  # pragma: no cover - fallback for optional 
         return target_path
 
 
-if subsample_tasks_directory is None:  # pragma: no cover - fallback for optional dependency
+if (
+    subsample_tasks_directory is None
+):  # pragma: no cover - fallback for optional dependency
+
     def subsample_tasks_directory(
         source_dir: str | Path,
         num_samples: int,
@@ -528,6 +537,7 @@ if subsample_tasks_directory is None:  # pragma: no cover - fallback for optiona
 
 
 if upload_tasks_to_hf is None:  # pragma: no cover - fallback for optional dependency
+
     def upload_tasks_to_hf(*_args, **_kwargs) -> None:
         raise RuntimeError(
             "Uploading requires additional dependencies (e.g., supabase). "

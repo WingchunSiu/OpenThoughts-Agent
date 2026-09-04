@@ -18,7 +18,6 @@ from data.commons import (
     GenerationResult,
     GenerationStatus,
 )
-from scripts.harbor.run_and_export_traces import run_dataset_to_traces
 
 
 METADATA = """version = "1.0"
@@ -119,7 +118,6 @@ EOF
     return datasets, num_produced - offset
 
 
-
 class DataAblationGenerator(BaseDataGenerator):
     parser_description = "Generate data ablation sandboxes"
     default_target_repo = "mlfoundations-dev/data_ablation_full59K-sandboxes-1"
@@ -158,12 +156,16 @@ class DataAblationGenerator(BaseDataGenerator):
 
         effective_limit = self._resolve_limit(request) or args.limit
         print(f"Generating tasks (limit={effective_limit}, offset={args.offset})...")
-        datasets, num_produced = extract_dataset_components(limit=effective_limit, offset=args.offset)
+        datasets, num_produced = extract_dataset_components(
+            limit=effective_limit, offset=args.offset
+        )
         if num_produced == 0:
             raise RuntimeError("No tasks produced")
         print(f"Processed tasks {args.offset} to {args.offset + num_produced - 1}")
         temp_dir = generate_tasks_from_questions(datasets, "data_ablation_full59K")
-        output_path = finalize_dataset_output(temp_dir, getattr(args, "output_dir", None))
+        output_path = finalize_dataset_output(
+            temp_dir, getattr(args, "output_dir", None)
+        )
         dataset_path = str(output_path)
 
         uploaded_repo: Optional[str] = None

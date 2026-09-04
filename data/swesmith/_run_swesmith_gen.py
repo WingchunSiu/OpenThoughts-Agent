@@ -3,6 +3,7 @@
 Avoids importing data.commons (heavy transitive deps) by calling
 create_sandboxed_tasks directly and writing to a user-specified output dir.
 """
+
 import json
 import sys
 from pathlib import Path
@@ -50,7 +51,8 @@ def create_sandboxed_task(datum: dict, out_root: Path, idx: int) -> None:
         (d / "solution" / "solve.sh").write_text(solve_script, encoding="utf-8")
 
     (d / "tests" / "config.json").write_text(
-        json.dumps(datum, indent=2), encoding="utf-8",
+        json.dumps(datum, indent=2),
+        encoding="utf-8",
     )
 
     instance_id = datum["instance_id"]
@@ -92,7 +94,10 @@ def main():
         try:
             create_sandboxed_task(row, out_root, num_produced)
         except Exception as e:
-            print(f"  WARN: skipping row {i} ({row.get('instance_id', '?')}): {e}", file=sys.stderr)
+            print(
+                f"  WARN: skipping row {i} ({row.get('instance_id', '?')}): {e}",
+                file=sys.stderr,
+            )
             num_skipped += 1
             continue
 

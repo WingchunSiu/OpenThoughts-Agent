@@ -1,12 +1,3 @@
-# GLM-5-FP8 - FP8 quantized model with MTP speculative decoding
-# https://huggingface.co/zai-org/GLM-5-FP8
-#
-# 131K context variant
-#
-# Hardware: 4 nodes × 4x GH200 96GB (shared memory) = 16 GPUs (~1.5TB total)
-#   - FP8 weights → very memory efficient, ample room for KV cache
-#   - TP=4 within node (shared memory), PP=4 across nodes, DP=1 (more memory per stage)
-#
 engine:
   type: vllm_local
   model: zai-org/GLM-5-FP8
@@ -39,7 +30,6 @@ vllm_server:
   reasoning_parser: glm45
   trust_remote_code: true
   extra_args:
-  # Prefill/caching optimizations
   - --enable-prefix-caching
   - --max-num-batched-tokens
   - '16384'

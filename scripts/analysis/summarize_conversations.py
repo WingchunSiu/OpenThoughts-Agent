@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 import os
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from typing import Dict, Iterable, Iterator
+from typing import Dict, Iterable  # noqa: E402
 
 # Make tokenizers robust on HPC nodes with strict thread limits
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -23,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - import guard for informative error message
     AutoTokenizer = None  # type: ignore[assignment]
 
-from scripts.analysis.utils import (
+from scripts.analysis.utils import (  # noqa: E402
     extract_conversation_text,
     count_turns,
     iter_jsonl,
@@ -57,9 +57,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def compute_stats(
-    records: Iterable[Dict], tokenizer
-) -> dict:
+def compute_stats(records: Iterable[Dict], tokenizer) -> dict:
     stats = {
         "count": 0,
         "total_tokens": 0,
@@ -143,13 +141,13 @@ if __name__ == "__main__":
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(
-           args.tokenizer_id, trust_remote_code=True
+            args.tokenizer_id, trust_remote_code=True
         )
     except Exception:
         # Fallback to slow tokenizer if fast/Rust backend cannot init thread pool
         os.environ["TRANSFORMERS_NO_FAST_TOKENIZER"] = "1"
         tokenizer = AutoTokenizer.from_pretrained(
-           args.tokenizer_id, trust_remote_code=True, use_fast=False
+            args.tokenizer_id, trust_remote_code=True, use_fast=False
         )
 
     stats = compute_stats(iter_jsonl(path), tokenizer)
@@ -168,21 +166,13 @@ if __name__ == "__main__":
         print(f"Max turns: {stats['max_turns']}")
         print(f"Min turns: {stats['min_turns']}")
         print(f"Average turns: {average_turns:.2f}")
-        print(
-            f"Contains '{EXTRA_TEXT_MARKER}': {stats['count_extra_text']}"
-        )
-        print(
-            "Contains '<think>' or '</think>': "
-            f"{stats['count_think']}"
-        )
+        print(f"Contains '{EXTRA_TEXT_MARKER}': {stats['count_extra_text']}")
+        print(f"Contains '<think>' or '</think>': {stats['count_think']}")
         print(
             f"Contains '{TECHNICAL_DIFFICULTIES_MARKER}': "
             f"{stats['count_technical_difficulties']}"
         )
-        print(
-            f"Contains '{ACTION_DENIED_MARKER}': "
-            f"{stats['count_action_denied']}"
-        )
+        print(f"Contains '{ACTION_DENIED_MARKER}': {stats['count_action_denied']}")
         print(
             f"Trials with reward: {stats['reward_count']} (missing: {stats['count'] - stats['reward_count']})"
         )

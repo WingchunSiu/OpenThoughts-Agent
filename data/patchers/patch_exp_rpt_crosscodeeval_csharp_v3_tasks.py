@@ -100,19 +100,15 @@ Usage
       --root /path/to/extracted/tasks/dir \
       [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
-import gzip
 import io
-import json
-import os
 import re
 import sys
 import tarfile
-import tempfile
 from pathlib import Path
-from typing import Optional
 
 # --------------------------------------------------------------------------- #
 # Markers (idempotency)

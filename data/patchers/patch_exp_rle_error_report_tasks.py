@@ -79,16 +79,32 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import samples.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad", type=int, default=20, help="Print the first N bad-import samples."
+    )
     return p.parse_args()
 
 
@@ -102,7 +118,9 @@ def main() -> None:
     if args.limit:
         task_dirs = task_dirs[: args.limit]
 
-    print(f"[patch_exp_rle_error_report] inspecting {len(task_dirs)} tasks under {root}")
+    print(
+        f"[patch_exp_rle_error_report] inspecting {len(task_dirs)} tasks under {root}"
+    )
 
     syntax_dropped = 0
     no_test_dropped = 0
@@ -121,9 +139,11 @@ def main() -> None:
         reason = v["reason"]
         if reason == "no_test_file":
             no_test_dropped += 1
-        elif (reason.startswith("syntax_error")
-              or reason.startswith("ast_syntax")
-              or reason.startswith("compile_error")):
+        elif (
+            reason.startswith("syntax_error")
+            or reason.startswith("ast_syntax")
+            or reason.startswith("compile_error")
+        ):
             syntax_dropped += 1
         elif reason == "missing_import":
             import_dropped += 1
@@ -141,13 +161,17 @@ def main() -> None:
 
     if bad_import_samples:
         print()
-        print(f"[patch_exp_rle_error_report] sample bad-import drops (first {len(bad_import_samples)}):")
+        print(
+            f"[patch_exp_rle_error_report] sample bad-import drops (first {len(bad_import_samples)}):"
+        )
         for tid, bad in bad_import_samples:
             print(f"  {tid}: {bad}")
 
     if args.report_json:
         args.report_json.write_text(json.dumps(verdicts, indent=2))
-        print(f"[patch_exp_rle_error_report] wrote per-task verdicts: {args.report_json}")
+        print(
+            f"[patch_exp_rle_error_report] wrote per-task verdicts: {args.report_json}"
+        )
 
     if args.dry_run:
         print("[patch_exp_rle_error_report] dry-run: not deleting dropped tasks.")

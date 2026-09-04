@@ -24,6 +24,8 @@ from typing import Iterable, List, Sequence
 from huggingface_hub import snapshot_download
 from openai import OpenAI
 
+from scripts.analysis.failure_mode_judge import batched, request_json_array
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,10 +42,15 @@ class TrialContext:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Batch failure-mode analysis via GPT-5 judge")
+    parser = argparse.ArgumentParser(
+        description="Batch failure-mode analysis via GPT-5 judge"
+    )
     parser.add_argument("repo_id", help="HuggingFace repo id containing eval traces")
     parser.add_argument(
-        "--repo-type", default="dataset", choices=["dataset", "model"], help="Repo type for snapshot download"
+        "--repo-type",
+        default="dataset",
+        choices=["dataset", "model"],
+        help="Repo type for snapshot download",
     )
     parser.add_argument("--revision", default=None, help="Optional HF revision")
     parser.add_argument(
@@ -80,6 +87,12 @@ def parse_args() -> argparse.Namespace:
         help="Sampling temperature for the judge model",
     )
     parser.add_argument(
+        "--judge-max-attempts",
+        type=int,
+        default=3,
+        help="Maximum attempts for a transient judge request failure (default: 3)",
+    )
+    parser.add_argument(
         "--openai-api-key",
         default=None,
         help="Optional OpenAI API key (falls back to OPENAI_API_KEY env var)",
@@ -87,7 +100,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def snapshot_repo(repo_id: str, repo_type: str, revision: str | None, cache_dir: str | None) -> Path:
+def snapshot_repo(
+    repo_id: str, repo_type: str, revision: str | None, cache_dir: str | None
+) -> Path:
     target_dir = snapshot_download(
         repo_id,
         repo_type=repo_type,
@@ -155,7 +170,11 @@ def gather_trial_context(trial_dir: Path) -> TrialContext | None:
     else:
         agent_excerpt = "[missing agent transcript]"
 
-    verifier_excerpt = read_text(verifier_dir / "test-stdout.txt") if verifier_dir.exists() else "[no verifier output]"
+    verifier_excerpt = (
+        read_text(verifier_dir / "test-stdout.txt")
+        if verifier_dir.exists()
+        else "[no verifier output]"
+    )
     status = None
     if result_json:
         agent_result = result_json.get("verifier_result") or {}
@@ -172,11 +191,6 @@ def gather_trial_context(trial_dir: Path) -> TrialContext | None:
         verifier_excerpt=verifier_excerpt,
         status=status,
     )
-
-
-def batched(seq: Sequence[TrialContext], batch_size: int) -> Iterable[Sequence[TrialContext]]:
-    for idx in range(0, len(seq), batch_size):
-        yield seq[idx : idx + batch_size]
 
 
 SYSTEM_PROMPT = (
@@ -198,7 +212,7 @@ def build_user_prompt(batch: Sequence[TrialContext]) -> str:
             f"""
             ### Trial ID: {trial.trial_id}
             Task Name: {trial.task_name}
-            Additional Status: {trial.status or 'n/a'}
+            Additional Status: {trial.status or "n/a"}
 
             Task Prompt (excerpt):
             {trial.prompt_excerpt}
@@ -219,51 +233,31 @@ def build_user_prompt(batch: Sequence[TrialContext]) -> str:
     return f"{instructions}\n\n{'\n\n'.join(sections)}"
 
 
-def strip_code_fence(payload: str) -> str:
-    text = payload.strip()
-    if text.startswith("```"):
-        parts = text.split("```", 2)
-        if len(parts) >= 2:
-            # parts[1] may include 'json\n'
-            content = parts[1]
-            if "\n" in content:
-                content = content.split("\n", 1)[1]
-            return content.strip()
-    return text
-
-
 def judge_batch(
-    client: OpenAI, batch: Sequence[TrialContext], model: str, temperature: float
+    client: OpenAI,
+    batch: Sequence[TrialContext],
+    model: str,
+    temperature: float,
+    max_attempts: int = 3,
 ) -> List[dict]:
-    prompt = build_user_prompt(batch)
-    response = client.chat.completions.create(
+    return request_json_array(
+        client,
         model=model,
         temperature=temperature,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
+        system_prompt=SYSTEM_PROMPT,
+        user_prompt=build_user_prompt(batch),
+        max_attempts=max_attempts,
+        on_retry=lambda attempt, exc: logger.warning(
+            "Judge request failed on attempt %d/%d: %s", attempt, max_attempts, exc
+        ),
     )
-    content = response.choices[0].message.content or "[]"
-    content = strip_code_fence(content)
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse judge output as JSON: %s\nPayload: %s", exc, content)
-        raise
-
-    # Ensure mapping back to trial IDs in current batch order.
-    records = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        records.append(entry)
-    return records
 
 
-def write_markdown_report(repo_id: str, output_path: Path, analyses: List[dict]) -> None:
+def write_markdown_report(
+    repo_id: str, output_path: Path, analyses: List[dict]
+) -> None:
     lines = [
-        f"# Failure Mode Analysis",
+        "# Failure Mode Analysis",
         "",
         f"- **Source repo**: `{repo_id}`",
         f"- **Trials analyzed**: {len(analyses)}",
@@ -293,9 +287,13 @@ def write_markdown_report(repo_id: str, output_path: Path, analyses: List[dict])
 
 def main() -> None:
     args = parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
-    snapshot_path = snapshot_repo(args.repo_id, args.repo_type, args.revision, args.cache_dir)
+    snapshot_path = snapshot_repo(
+        args.repo_id, args.repo_type, args.revision, args.cache_dir
+    )
     trial_dirs = [path for path in iter_trial_dirs(snapshot_path)]
     if not trial_dirs:
         raise RuntimeError(f"No trial directories discovered under {snapshot_path}")
@@ -315,14 +313,22 @@ def main() -> None:
 
     api_key = args.openai_api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OpenAI API key not provided. Use --openai-api-key or set OPENAI_API_KEY.")
+        raise RuntimeError(
+            "OpenAI API key not provided. Use --openai-api-key or set OPENAI_API_KEY."
+        )
 
     client = OpenAI(api_key=api_key)
     analyses: List[dict] = []
 
     for batch in batched(contexts, args.batch_size):
         logger.info("Judging batch of %d trials...", len(batch))
-        batch_results = judge_batch(client, batch, model=args.model, temperature=args.temperature)
+        batch_results = judge_batch(
+            client,
+            batch,
+            model=args.model,
+            temperature=args.temperature,
+            max_attempts=args.judge_max_attempts,
+        )
         if len(batch_results) != len(batch):
             logger.warning(
                 "Judge returned %d entries for a batch of %d trials; check alignment.",

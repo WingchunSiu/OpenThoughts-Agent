@@ -143,7 +143,9 @@ class TeacherHint(ProcessRewardModel):
     # Hint generation
     # ------------------------------------------------------------------
 
-    def _record_drop(self, reason: str, turn: int, *, exc: Exception | None = None) -> None:
+    def _record_drop(
+        self, reason: str, turn: int, *, exc: Exception | None = None
+    ) -> None:
         """Increment the drop counter and emit a structured warning.
 
         Reason taxonomy (keep stable — analysis scripts grep these):
@@ -164,11 +166,16 @@ class TeacherHint(ProcessRewardModel):
         if exc is not None:
             logger.warning(
                 "teacher_hint dropped (reason=%s) at turn %d: %s",
-                reason, turn, exc, exc_info=True,
+                reason,
+                turn,
+                exc,
+                exc_info=True,
             )
         else:
             logger.warning(
-                "teacher_hint dropped (reason=%s) at turn %d", reason, turn,
+                "teacher_hint dropped (reason=%s) at turn %d",
+                reason,
+                turn,
             )
 
     def drop_stats(self) -> dict[str, int]:
@@ -216,8 +223,7 @@ class TeacherHint(ProcessRewardModel):
             k=self.k,
         )
         full_prompt = (
-            f"### System\n{self.teacher_system_prompt}\n\n"
-            f"### User\n{user_prompt}"
+            f"### System\n{self.teacher_system_prompt}\n\n### User\n{user_prompt}"
         )
 
         try:

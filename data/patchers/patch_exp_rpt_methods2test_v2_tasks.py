@@ -39,6 +39,7 @@ Constraints (per upload spec):
   - Only `tests/test.sh` is touched. instruction.md, TestSolution.java,
     solution/, environment/Dockerfile, pom.xml are preserved verbatim.
 """
+
 from __future__ import annotations
 
 import argparse

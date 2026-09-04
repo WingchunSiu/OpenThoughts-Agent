@@ -102,23 +102,33 @@ for min_p in [0.01, 0.05, 0.1]:
 for rep_pen in [1.05, 1.1, 1.2]:
     config = get_base_config()
     config["agent"]["kwargs"]["extra_body"]["repetition_penalty"] = rep_pen
-    write_config(f"repetition_penalty_{rep_pen}", f"Repetition penalty = {rep_pen}", config)
+    write_config(
+        f"repetition_penalty_{rep_pen}", f"Repetition penalty = {rep_pen}", config
+    )
 
 # =============================================================================
 # PRESENCE PENALTY
 # =============================================================================
 for pres_pen in [0.25, 0.5, 1.0]:
     config = get_base_config()
-    config["agent"]["kwargs"]["extra_completion_params"] = {"presence_penalty": pres_pen}
-    write_config(f"presence_penalty_{pres_pen}", f"Presence penalty = {pres_pen}", config)
+    config["agent"]["kwargs"]["extra_completion_params"] = {
+        "presence_penalty": pres_pen
+    }
+    write_config(
+        f"presence_penalty_{pres_pen}", f"Presence penalty = {pres_pen}", config
+    )
 
 # =============================================================================
 # FREQUENCY PENALTY
 # =============================================================================
 for freq_pen in [0.25, 0.5, 1.0]:
     config = get_base_config()
-    config["agent"]["kwargs"]["extra_completion_params"] = {"frequency_penalty": freq_pen}
-    write_config(f"frequency_penalty_{freq_pen}", f"Frequency penalty = {freq_pen}", config)
+    config["agent"]["kwargs"]["extra_completion_params"] = {
+        "frequency_penalty": freq_pen
+    }
+    write_config(
+        f"frequency_penalty_{freq_pen}", f"Frequency penalty = {freq_pen}", config
+    )
 
 # =============================================================================
 # MAX TOKENS (2x increments)
@@ -176,7 +186,9 @@ write_config("raw_content_off", "Raw content disabled (parsed tool_calls)", conf
 
 config = get_base_config()
 config["agent"]["kwargs"]["trajectory_config"]["linear_history"] = False
-write_config("linear_history_off", "Linear history disabled (single trajectory file)", config)
+write_config(
+    "linear_history_off", "Linear history disabled (single trajectory file)", config
+)
 
 config = get_base_config()
 config["agent"]["kwargs"]["enable_summarize"] = False
@@ -206,7 +218,9 @@ write_config(
 
 config = get_base_config()
 config["agent"]["kwargs"]["interleaved_thinking"] = True
-config["agent"]["kwargs"]["extra_body"]["chat_template_kwargs"]["enable_thinking"] = True
+config["agent"]["kwargs"]["extra_body"]["chat_template_kwargs"]["enable_thinking"] = (
+    True
+)
 write_config(
     "full_thinking",
     "Full thinking: interleaved_thinking=true, enable_thinking=true",

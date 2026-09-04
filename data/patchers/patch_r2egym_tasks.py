@@ -840,10 +840,17 @@ def build_upstream_index(cache_path: Path | None = None) -> dict[str, dict]:
             cached = json.loads(cache_path.read_text())
         except ValueError:
             cached = None
-        if isinstance(cached, dict) and cached.get("__schema__") == INDEX_SCHEMA_VERSION:
-            print(f"[upstream] Loading cached index (schema v{INDEX_SCHEMA_VERSION}) from {cache_path}")
+        if (
+            isinstance(cached, dict)
+            and cached.get("__schema__") == INDEX_SCHEMA_VERSION
+        ):
+            print(
+                f"[upstream] Loading cached index (schema v{INDEX_SCHEMA_VERSION}) from {cache_path}"
+            )
             return cached["index"]
-        print(f"[upstream] Cache at {cache_path} is stale (expected schema v{INDEX_SCHEMA_VERSION}); rebuilding")
+        print(
+            f"[upstream] Cache at {cache_path} is stale (expected schema v{INDEX_SCHEMA_VERSION}); rebuilding"
+        )
 
     try:
         import pandas as pd
@@ -853,7 +860,9 @@ def build_upstream_index(cache_path: Path | None = None) -> dict[str, dict]:
     print(f"[upstream] Building index from {FULL_UPSTREAM_DATASET} (13 shards)...")
     idx: dict[str, dict] = {}
     for i in range(13):
-        url = f"hf://datasets/{FULL_UPSTREAM_DATASET}/data/train-{i:05d}-of-00013.parquet"
+        url = (
+            f"hf://datasets/{FULL_UPSTREAM_DATASET}/data/train-{i:05d}-of-00013.parquet"
+        )
         df = pd.read_parquet(
             url,
             columns=[
@@ -880,14 +889,22 @@ def build_upstream_index(cache_path: Path | None = None) -> dict[str, dict]:
                 "expected_output_json": r["expected_output_json"] or "{}",
                 "test_file_names": list(erc.get("test_file_names", []) or []),
                 "test_file_codes": list(erc.get("test_file_codes", []) or []),
-                "file_diffs_min": _extract_file_diffs_min(r["parsed_commit_content"] or ""),
+                "file_diffs_min": _extract_file_diffs_min(
+                    r["parsed_commit_content"] or ""
+                ),
             }
-        print(f"[upstream]   shard {i+1}/13: {len(df)} rows (running total: {len(idx)})")
+        print(
+            f"[upstream]   shard {i + 1}/13: {len(df)} rows (running total: {len(idx)})"
+        )
 
     if cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"__schema__": INDEX_SCHEMA_VERSION, "index": idx}))
-        print(f"[upstream] Cached index (schema v{INDEX_SCHEMA_VERSION}) to {cache_path}")
+        cache_path.write_text(
+            json.dumps({"__schema__": INDEX_SCHEMA_VERSION, "index": idx})
+        )
+        print(
+            f"[upstream] Cached index (schema v{INDEX_SCHEMA_VERSION}) to {cache_path}"
+        )
 
     return idx
 
@@ -909,7 +926,9 @@ def normalize_python_version(version: str) -> str:
     return f"{major}.{minor}"
 
 
-def render_dockerfile(repo_name: str, python_version: str, upstream_py: str = "") -> str:
+def render_dockerfile(
+    repo_name: str, python_version: str, upstream_py: str = ""
+) -> str:
     """Pick generic vs scientific vs scientific-legacy vs aiohttp vs sympy vs moto Dockerfile.
 
     v28 routing (8-snapshot budget):
@@ -950,8 +969,7 @@ def render_test_sh(repo_name: str, timeout_sec: int) -> str:
         cwd = "/testbed"
         tests_dir = "/testbed/r2e_tests"
     return (
-        TEST_SH_TEMPLATE
-        .replace("{TIMEOUT_SEC}", str(timeout_sec))
+        TEST_SH_TEMPLATE.replace("{TIMEOUT_SEC}", str(timeout_sec))
         .replace("{PYTEST_CWD}", cwd)
         .replace("{TESTS_DIR}", tests_dir)
     )
@@ -1344,7 +1362,9 @@ def main():
         if not args.output_dir:
             raise SystemExit("--from-upstream requires --output-dir")
         if args.tasks_dir:
-            raise SystemExit("--from-upstream cannot be combined with a tasks_dir positional arg")
+            raise SystemExit(
+                "--from-upstream cannot be combined with a tasks_dir positional arg"
+            )
     else:
         if not args.tasks_dir:
             raise SystemExit("tasks_dir is required (or use --from-upstream)")
@@ -1415,7 +1435,8 @@ def main():
         raise SystemExit(f"Not a directory: {tasks_root}")
 
     task_dirs = sorted(
-        d for d in tasks_root.iterdir()
+        d
+        for d in tasks_root.iterdir()
         if d.is_dir() and (d / "instruction.md").exists()
     )
     print(f"Found {len(task_dirs)} tasks in {tasks_root}")

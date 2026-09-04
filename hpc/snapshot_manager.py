@@ -34,16 +34,18 @@ import sys
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 # -----------------------------------------------------------------------------
 # Public dataclasses + exceptions
 # -----------------------------------------------------------------------------
 
+
 @dataclass
 class OrgConfig:
     """A single Daytona org/key the manager will register snapshots on."""
+
     name: str
     api_key: str
     api_url: Optional[str] = None
@@ -92,7 +94,9 @@ class SnapshotBuildFailed(Exception):
 # -----------------------------------------------------------------------------
 
 _REGISTRY_ENV_VAR = "OT_AGENT_SNAPSHOT_REGISTRY"
-_DEFAULT_REGISTRY_PATH = Path.home() / ".cache" / "ot-agent" / "daytona_snapshot_registry.jsonl"
+_DEFAULT_REGISTRY_PATH = (
+    Path.home() / ".cache" / "ot-agent" / "daytona_snapshot_registry.jsonl"
+)
 
 
 def _resolve_registry_path(registry_path: Optional[Path]) -> Path:
@@ -112,17 +116,29 @@ def _snapshot_name(env_hash: str, target_region: str) -> str:
 
 
 def _is_active(state: Any) -> bool:
-    return state is not None and str(state).upper() in ("ACTIVE", "SNAPSHOTSTATE.ACTIVE")
+    return state is not None and str(state).upper() in (
+        "ACTIVE",
+        "SNAPSHOTSTATE.ACTIVE",
+    )
 
 
 def _is_pending(state: Any) -> bool:
-    return state is not None and str(state).upper() in ("PENDING", "BUILDING", "SNAPSHOTSTATE.PENDING", "SNAPSHOTSTATE.BUILDING")
+    return state is not None and str(state).upper() in (
+        "PENDING",
+        "BUILDING",
+        "SNAPSHOTSTATE.PENDING",
+        "SNAPSHOTSTATE.BUILDING",
+    )
 
 
 def _is_error(state: Any) -> bool:
     return state is not None and str(state).upper() in (
-        "ERROR", "BUILD_FAILED", "FAILED",
-        "SNAPSHOTSTATE.ERROR", "SNAPSHOTSTATE.BUILD_FAILED", "SNAPSHOTSTATE.FAILED",
+        "ERROR",
+        "BUILD_FAILED",
+        "FAILED",
+        "SNAPSHOTSTATE.ERROR",
+        "SNAPSHOTSTATE.BUILD_FAILED",
+        "SNAPSHOTSTATE.FAILED",
     )
 
 
@@ -145,6 +161,7 @@ def _with_rate_limit_backoff(call: Callable[[], Any], *, max_attempts: int = 5) 
     rate_limit_types: Tuple[type, ...] = ()
     try:
         from daytona.common.errors import DaytonaRateLimitError  # type: ignore
+
         rate_limit_types = (DaytonaRateLimitError,)
     except Exception:
         pass
@@ -152,6 +169,7 @@ def _with_rate_limit_backoff(call: Callable[[], Any], *, max_attempts: int = 5) 
     is_transient_predicate: Optional[Callable[[Exception], bool]] = None
     try:
         from harbor.environments.daytona_utils import is_transient_daytona_error  # type: ignore
+
         is_transient_predicate = is_transient_daytona_error
     except Exception:
         is_transient_predicate = None
@@ -163,7 +181,9 @@ def _with_rate_limit_backoff(call: Callable[[], Any], *, max_attempts: int = 5) 
         except rate_limit_types as exc:  # type: ignore[misc]
             last_exc = exc
             delay = 30 * (attempt + 1)
-            print(f"  rate-limited; sleeping {delay}s (attempt {attempt + 1}/{max_attempts})")
+            print(
+                f"  rate-limited; sleeping {delay}s (attempt {attempt + 1}/{max_attempts})"
+            )
             time.sleep(delay)
             continue
         except Exception as exc:
@@ -181,6 +201,7 @@ def _with_rate_limit_backoff(call: Callable[[], Any], *, max_attempts: int = 5) 
 # -----------------------------------------------------------------------------
 # Registry
 # -----------------------------------------------------------------------------
+
 
 class _RegistryWriter:
     """Append-only JSONL registry, folded to latest-per-(hash, org) on read."""
@@ -220,9 +241,11 @@ class _RegistryWriter:
 # Daytona client construction (factory pattern for testability)
 # -----------------------------------------------------------------------------
 
+
 def _default_daytona_factory(org: OrgConfig):
     """Create a real ``Daytona`` client for the given org."""
     from daytona import Daytona, DaytonaConfig  # type: ignore
+
     cfg_kwargs: Dict[str, Any] = {"api_key": org.api_key, "target": org.target}
     if org.api_url:
         cfg_kwargs["api_url"] = org.api_url
@@ -232,6 +255,7 @@ def _default_daytona_factory(org: OrgConfig):
 # -----------------------------------------------------------------------------
 # Core manager
 # -----------------------------------------------------------------------------
+
 
 class _SnapshotManager:
     """Per-launch worker that knows how to talk to one or more Daytona orgs."""
@@ -262,6 +286,7 @@ class _SnapshotManager:
         try:
             from daytona.common.errors import DaytonaNotFoundError  # type: ignore
         except Exception:
+
             class DaytonaNotFoundError(Exception):  # type: ignore
                 pass
 
@@ -300,11 +325,15 @@ class _SnapshotManager:
             # PENDING — keep polling
             now = time.time()
             if now >= deadline:
-                print(f"  {name}: WARNING wait timed out after {timeout_s:.0f}s in state {state}")
+                print(
+                    f"  {name}: WARNING wait timed out after {timeout_s:.0f}s in state {state}"
+                )
                 return (state, snap)
             if now - last_warn >= 420:  # ~7 min
-                print(f"  {name}: still {state} after {int(now - (deadline - timeout_s))}s; "
-                      f"consider increasing pending_wait_s")
+                print(
+                    f"  {name}: still {state} after {int(now - (deadline - timeout_s))}s; "
+                    f"consider increasing pending_wait_s"
+                )
                 last_warn = now
             time.sleep(poll_s)
 
@@ -342,24 +371,39 @@ class _SnapshotManager:
 
         if state == "ACTIVE":
             print(f"  [{org.name}] {name}: already ACTIVE, skipping")
-            self.registry.append({
-                "hash": env_hash, "snapshot_name": name, "org": org.name,
-                "state": "ACTIVE", "env_dir_path": str(env_dir),
-            })
+            self.registry.append(
+                {
+                    "hash": env_hash,
+                    "snapshot_name": name,
+                    "org": org.name,
+                    "state": "ACTIVE",
+                    "env_dir_path": str(env_dir),
+                }
+            )
             return "ACTIVE"
 
         if state == "PENDING":
-            print(f"  [{org.name}] {name}: PENDING, waiting up to {pending_wait_s:.0f}s")
+            print(
+                f"  [{org.name}] {name}: PENDING, waiting up to {pending_wait_s:.0f}s"
+            )
             final_state, snap = self._wait_for_state(
-                client, name, target_state="ACTIVE",
-                timeout_s=pending_wait_s, poll_s=5.0,
+                client,
+                name,
+                target_state="ACTIVE",
+                timeout_s=pending_wait_s,
+                poll_s=5.0,
             )
             if final_state == "ACTIVE":
                 print(f"  [{org.name}] {name}: reached ACTIVE")
-                self.registry.append({
-                    "hash": env_hash, "snapshot_name": name, "org": org.name,
-                    "state": "ACTIVE", "env_dir_path": str(env_dir),
-                })
+                self.registry.append(
+                    {
+                        "hash": env_hash,
+                        "snapshot_name": name,
+                        "org": org.name,
+                        "state": "ACTIVE",
+                        "env_dir_path": str(env_dir),
+                    }
+                )
                 return "ACTIVE"
             # Fall through: delete + recreate.
             state, snap = (final_state, snap)
@@ -374,11 +418,15 @@ class _SnapshotManager:
         # Build (or rebuild).
         dockerfile_path = env_dir / "Dockerfile"
         if not dockerfile_path.exists():
-            print(f"  [{org.name}] {name}: WARNING no Dockerfile at {dockerfile_path}, skipping")
+            print(
+                f"  [{org.name}] {name}: WARNING no Dockerfile at {dockerfile_path}, skipping"
+            )
             return "MISSING"
 
         if dry_run:
-            print(f"  [{org.name}] {name}: [DRY-RUN] would build from {dockerfile_path}")
+            print(
+                f"  [{org.name}] {name}: [DRY-RUN] would build from {dockerfile_path}"
+            )
             return "MISSING"
 
         print(f"  [{org.name}] {name}: building from {dockerfile_path} ...")
@@ -390,28 +438,40 @@ class _SnapshotManager:
             create_kwargs["region_id"] = target_region
 
         try:
-            _with_rate_limit_backoff(lambda: client.snapshot.create(
-                CreateSnapshotParams(**create_kwargs),
-                on_logs=print,
-                timeout=build_timeout,
-            ))
+            _with_rate_limit_backoff(
+                lambda: client.snapshot.create(
+                    CreateSnapshotParams(**create_kwargs),
+                    on_logs=print,
+                    timeout=build_timeout,
+                )
+            )
         except Exception as exc:
             msg = str(exc).lower()
             # Concurrent-create idempotency: another launch beat us to it.
             if "already exists" in msg or "conflict" in msg or "duplicate" in msg:
-                print(f"  [{org.name}] {name}: already exists (concurrent create), continuing")
+                print(
+                    f"  [{org.name}] {name}: already exists (concurrent create), continuing"
+                )
             else:
                 raise
 
         # Confirm final state.
         final_state, _ = self._wait_for_state(
-            client, name, target_state="ACTIVE",
-            timeout_s=pending_wait_s, poll_s=5.0,
+            client,
+            name,
+            target_state="ACTIVE",
+            timeout_s=pending_wait_s,
+            poll_s=5.0,
         )
-        self.registry.append({
-            "hash": env_hash, "snapshot_name": name, "org": org.name,
-            "state": final_state, "env_dir_path": str(env_dir),
-        })
+        self.registry.append(
+            {
+                "hash": env_hash,
+                "snapshot_name": name,
+                "org": org.name,
+                "state": final_state,
+                "env_dir_path": str(env_dir),
+            }
+        )
         if final_state != "ACTIVE":
             raise SnapshotBuildFailed(
                 f"[{org.name}] {name}: never reached ACTIVE (final={final_state})"
@@ -434,8 +494,12 @@ class _SnapshotManager:
                     )
                 except TypeError:
                     # Some clients don't accept ``page``; fall back to a single call.
-                    resp = _with_rate_limit_backoff(lambda: client.snapshot.list(limit=page_limit))
-                snaps = getattr(resp, "items", None) or getattr(resp, "data", None) or []
+                    resp = _with_rate_limit_backoff(
+                        lambda: client.snapshot.list(limit=page_limit)
+                    )
+                snaps = (
+                    getattr(resp, "items", None) or getattr(resp, "data", None) or []
+                )
                 for snap in snaps:
                     name = getattr(snap, "name", "") or ""
                     state = _normalized_state(getattr(snap, "state", None))
@@ -445,7 +509,9 @@ class _SnapshotManager:
                         parts = name.split("__")
                         if len(parts) >= 3:
                             h = parts[1]
-                    items.append(SnapshotInfo(name=name, hash=h, org=org.name, state=state))
+                    items.append(
+                        SnapshotInfo(name=name, hash=h, org=org.name, state=state)
+                    )
                 # Pagination heuristic
                 total_pages = getattr(resp, "total_pages", None)
                 if total_pages is None or page >= total_pages:
@@ -459,12 +525,24 @@ class _SnapshotManager:
 # Public functions
 # -----------------------------------------------------------------------------
 
-def _discover_hash_to_env_dir(resolved_data_paths: List[str]) -> Tuple[Dict[str, Path], Any]:
-    """Run task discovery + analysis; returns (hash_to_env_dir, stats)."""
+
+def _discover_hash_to_env_dir(
+    resolved_data_paths: List[str],
+) -> Tuple[Dict[str, Path], Any]:
+    """Run task discovery + analysis; returns (hash_to_env_dir, stats).
+
+    Task enumeration uses harbor's authoritative ``get_task_configs`` path (via
+    ``count_snapshots_from_tasks.load_tasks_from_local_dataset``) — the SAME
+    routine the standalone snapshot-count tool uses and that the Harbor job
+    itself uses at runtime to decide which tasks to run/snapshot. We deliberately
+    do NOT use the naive ``discover_task_dirs`` filesystem walk here: it keys on a
+    literal ``instruction.md`` and silently drops tasks with other valid layouts
+    (e.g. multi-step tasks), so its count diverges from the real snapshot count.
+    """
     try:
         from scripts.harbor.count_snapshots_from_tasks import (
-            discover_task_dirs,
             get_snapshot_env_dirs,
+            load_tasks_from_local_dataset,
         )
         from harbor.utils.container_cache import analyze_task_dockerfiles
     except ImportError as exc:
@@ -473,7 +551,14 @@ def _discover_hash_to_env_dir(resolved_data_paths: List[str]) -> Tuple[Dict[str,
             "(pip install -e /path/to/harbor) and the repo root is on PYTHONPATH"
         ) from exc
 
-    task_dirs = discover_task_dirs(resolved_data_paths)
+    task_dirs: List[Path] = []
+    for data_path in resolved_data_paths:
+        root = Path(data_path)
+        if not root.is_dir():
+            continue
+        task_dirs.extend(
+            load_tasks_from_local_dataset(dataset_path=root.expanduser().resolve())
+        )
     if not task_dirs:
         return {}, None
     stats = analyze_task_dockerfiles(task_dirs)
@@ -512,8 +597,10 @@ def ensure_snapshots(
     if not hash_to_env_dir:
         print("No task directories or environments found; skipping.")
         return SnapshotPlanResult()
-    print(f"Found {getattr(stats, 'total_tasks', '?')} task(s) with "
-          f"{len(hash_to_env_dir)} unique environment(s)")
+    print(
+        f"Found {getattr(stats, 'total_tasks', '?')} task(s) with "
+        f"{len(hash_to_env_dir)} unique environment(s)"
+    )
 
     if len(hash_to_env_dir) > max_new_snapshots:
         raise SnapshotCapExceeded(
@@ -522,7 +609,9 @@ def ensure_snapshots(
             f"Pass max_new_snapshots=N to ensure_snapshots if intentional."
         )
 
-    manager = _SnapshotManager(orgs, registry_path=registry_path, daytona_factory=daytona_factory)
+    manager = _SnapshotManager(
+        orgs, registry_path=registry_path, daytona_factory=daytona_factory
+    )
     registry_cache = manager.registry.load()
     result = SnapshotPlanResult()
 
@@ -549,7 +638,9 @@ def ensure_snapshots(
         for env_hash, env_dir in hash_to_env_dir.items():
             try:
                 final = manager._ensure_one(
-                    org, env_hash, env_dir,
+                    org,
+                    env_hash,
+                    env_dir,
                     target_region=target_region,
                     build_timeout=build_timeout,
                     pending_wait_s=pending_wait_s,
@@ -564,7 +655,10 @@ def ensure_snapshots(
                 # ensure_one logs "already ACTIVE" vs "built successfully";
                 # we just bin by current state for the report.
                 counts.active += 1
-                if registry_cache.get((env_hash, org.name), {}).get("state") == "ACTIVE":
+                if (
+                    registry_cache.get((env_hash, org.name), {}).get("state")
+                    == "ACTIVE"
+                ):
                     result.skipped += 1
                 else:
                     result.built += 1
@@ -576,8 +670,10 @@ def ensure_snapshots(
                 counts.missing += 1
         result.per_org[org.name] = counts
 
-    print(f"\nSnapshot pre-build complete: {result.built} built, {result.skipped} already existed, "
-          f"{len(result.errors)} error(s)")
+    print(
+        f"\nSnapshot pre-build complete: {result.built} built, {result.skipped} already existed, "
+        f"{len(result.errors)} error(s)"
+    )
     return result
 
 
@@ -594,7 +690,9 @@ def cleanup_unused_snapshots(
     NEVER called automatically by ``ensure_snapshots``; manual use only.
     """
     print(f"\n=== Cleaning up unused Daytona snapshots ({len(orgs)} org(s)) ===")
-    manager = _SnapshotManager(orgs, registry_path=registry_path, daytona_factory=daytona_factory)
+    manager = _SnapshotManager(
+        orgs, registry_path=registry_path, daytona_factory=daytona_factory
+    )
     listing = manager.list_all()
     result = CleanupResult()
     for org_name, snaps in listing.items():
@@ -696,6 +794,7 @@ def load_orgs_from_env(names: List[str]) -> List[OrgConfig]:
 # Optional CLI
 # -----------------------------------------------------------------------------
 
+
 def _parse_org_arg(spec: str) -> OrgConfig:
     """Parse a ``NAME=KEY`` org spec (used by the CLI)."""
     if "=" not in spec:
@@ -710,13 +809,17 @@ def _parse_org_arg(spec: str) -> OrgConfig:
 
 def _cli() -> int:
     import argparse
+
     p = argparse.ArgumentParser(prog="python -m hpc.snapshot_manager")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    common_org = lambda sp: sp.add_argument(
-        "--org", action="append", required=True,
-        help="Daytona org spec NAME=API_KEY (can be repeated for multi-org)",
-    )
+    def common_org(sp):
+        return sp.add_argument(
+            "--org",
+            action="append",
+            required=True,
+            help="Daytona org spec NAME=API_KEY (can be repeated for multi-org)",
+        )
 
     ens = sub.add_parser("ensure", help="Pre-build snapshots for a tasks dir")
     ens.add_argument("--tasks", required=True, help="Local tasks directory")
@@ -729,7 +832,9 @@ def _cli() -> int:
     ens.add_argument("--dry-run", action="store_true")
 
     cln = sub.add_parser("cleanup", help="Delete snapshots not needed by --tasks")
-    cln.add_argument("--tasks", required=True, help="Local tasks directory (defines needed set)")
+    cln.add_argument(
+        "--tasks", required=True, help="Local tasks directory (defines needed set)"
+    )
     common_org(cln)
     cln.add_argument("--dry-run", action="store_true")
 
@@ -746,7 +851,8 @@ def _cli() -> int:
 
     if args.cmd == "ensure":
         r = ensure_snapshots(
-            [args.tasks], orgs,
+            [args.tasks],
+            orgs,
             max_new_snapshots=args.max_new_snapshots,
             max_org_snapshots=args.max_org_snapshots,
             target_region=args.target_region,
@@ -759,7 +865,9 @@ def _cli() -> int:
 
     if args.cmd == "cleanup":
         hash_to_env_dir, _ = _discover_hash_to_env_dir([args.tasks])
-        r = cleanup_unused_snapshots(set(hash_to_env_dir.keys()), orgs, dry_run=args.dry_run)
+        r = cleanup_unused_snapshots(
+            set(hash_to_env_dir.keys()), orgs, dry_run=args.dry_run
+        )
         print(json.dumps(asdict(r), default=str, indent=2))
         return 0
 
@@ -774,8 +882,10 @@ def _cli() -> int:
     if args.cmd == "status":
         r = status_snapshots([args.tasks], orgs, target_region=args.target_region)
         for org_name, counts in r.items():
-            print(f"[{org_name}] active={counts.active} pending={counts.pending} "
-                  f"error={counts.error} missing={counts.missing}")
+            print(
+                f"[{org_name}] active={counts.active} pending={counts.pending} "
+                f"error={counts.error} missing={counts.missing}"
+            )
         return 0
 
     return 1

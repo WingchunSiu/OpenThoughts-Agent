@@ -34,6 +34,7 @@ If a task has no parseable top-level user-module import (e.g. the test uses
 `importlib.util` to dynamically locate the file, or the test file is missing),
 the task is skipped and counted under `n_skipped`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -203,7 +204,9 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True, help="Tasks dir (extracted parquet)")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--limit", type=int, default=0, help="Patch at most N tasks (0 = all)")
+    p.add_argument(
+        "--limit", type=int, default=0, help="Patch at most N tasks (0 = all)"
+    )
     p.add_argument(
         "--skiplist-out",
         default=None,

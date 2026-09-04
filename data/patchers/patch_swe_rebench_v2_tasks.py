@@ -68,6 +68,11 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Iterable, Iterator
 
+from data.patchers.trusted_test_patch import (
+    trusted_test_patch_command,
+    write_trusted_test_patch_installer,
+)
+
 
 # ---------------------------------------------------------------------------
 # Base image map
@@ -108,38 +113,38 @@ def _python_image_for(base_image_name: str) -> str | None:
 # what matters; minor-version suffixes are ignored.
 _FAMILY_IMAGE: dict[str, str] = {
     # JS / TS — node base
-    "node":            "node:20-bookworm",
+    "node": "node:20-bookworm",
     # Go — go base
-    "go":              "golang:1.23-bookworm",
+    "go": "golang:1.23-bookworm",
     # Rust
-    "rust":            "rust:1.84-bookworm",
+    "rust": "rust:1.84-bookworm",
     # JVM family (Java, Kotlin, Scala, Clojure) — temurin JDK 21
-    "java":            "eclipse-temurin:21-jdk-jammy",
-    "kotlin":          "eclipse-temurin:21-jdk-jammy",
-    "scala":           "eclipse-temurin:21-jdk-jammy",
-    "clojure":         "eclipse-temurin:21-jdk-jammy",
+    "java": "eclipse-temurin:21-jdk-jammy",
+    "kotlin": "eclipse-temurin:21-jdk-jammy",
+    "scala": "eclipse-temurin:21-jdk-jammy",
+    "clojure": "eclipse-temurin:21-jdk-jammy",
     # PHP
-    "php":             "php:8.3-bookworm",
+    "php": "php:8.3-bookworm",
     # Julia
-    "julia":           "julia:1.10-bookworm",
+    "julia": "julia:1.10-bookworm",
     # Elixir
-    "elixir":          "elixir:1.16",
+    "elixir": "elixir:1.16",
     # Swift
-    "swift":           "swift:5.10",
+    "swift": "swift:5.10",
     # Dart
-    "dart":            "dart:stable",
+    "dart": "dart:stable",
     # C / C++ — share one gcc image
-    "c":               "gcc:13-bookworm",
-    "cpp":             "gcc:13-bookworm",
+    "c": "gcc:13-bookworm",
+    "cpp": "gcc:13-bookworm",
     # C#
-    "csharp":          "mcr.microsoft.com/dotnet/sdk:8.0",
-    "dotnet":          "mcr.microsoft.com/dotnet/sdk:8.0",
+    "csharp": "mcr.microsoft.com/dotnet/sdk:8.0",
+    "dotnet": "mcr.microsoft.com/dotnet/sdk:8.0",
     # R
-    "r":               "r-base:4.4.0",
+    "r": "r-base:4.4.0",
     # OCaml
-    "ocaml":           "ocaml/opam:debian-12-ocaml-5.1",
+    "ocaml": "ocaml/opam:debian-12-ocaml-5.1",
     # Lua
-    "lua":             "nickblah/lua:5.4-luarocks-debian",
+    "lua": "nickblah/lua:5.4-luarocks-debian",
 }
 
 
@@ -240,11 +245,11 @@ _PHP_EXTRAS = dedent(
 )
 
 _FAMILY_DOCKERFILE_EXTRAS: dict[str, str] = {
-    "java":    _JVM_EXTRAS,
-    "kotlin":  _JVM_EXTRAS,
-    "scala":   _JVM_EXTRAS,
+    "java": _JVM_EXTRAS,
+    "kotlin": _JVM_EXTRAS,
+    "scala": _JVM_EXTRAS,
     "clojure": _JVM_EXTRAS,
-    "php":     _PHP_EXTRAS,
+    "php": _PHP_EXTRAS,
 }
 
 
@@ -332,11 +337,10 @@ TEST_SH_TEMPLATE = dedent(
 
     mkdir -p /logs/verifier
 
-    # Apply the hidden test patch (the tests the fix PR introduced)
-    cd /testbed
-    if [ -f /tests/test_patch.diff ]; then
-        git apply --verbose /tests/test_patch.diff || \\
-            git apply --verbose --reject /tests/test_patch.diff || true
+    # Restore hidden-test paths from the immutable base before applying the
+    # trusted patch. Product-code edits made by the agent remain untouched.
+    if ! {trusted_test_patch_command}; then
+        exit 1
     fi
 
     # Run the task's test command (per-row from install_config.test_cmd).
@@ -1034,6 +1038,7 @@ def _row_iter_from_hf(repo_id: str, split: str = "train") -> Iterator[dict]:
 # Per-task patching
 # ---------------------------------------------------------------------------
 
+
 def patch_row(row: dict, output_root: Path, dry_run: bool = False) -> dict:
     """Emit one Harbor task directory from a V2 row.
 
@@ -1064,7 +1069,10 @@ def patch_row(row: dict, output_root: Path, dry_run: bool = False) -> dict:
         return {"status": "skipped", "reason": "missing log_parser"}
     resolved = _resolve_base_image_and_family(base_image_name, language)
     if resolved is None:
-        return {"status": "skipped", "reason": f"unsupported base_image_name={base_image_name!r} language={language!r}"}
+        return {
+            "status": "skipped",
+            "reason": f"unsupported base_image_name={base_image_name!r} language={language!r}",
+        }
     base_image, family = resolved
 
     task_dir = output_root / _safe_name(instance_id)
@@ -1095,7 +1103,10 @@ def patch_row(row: dict, output_root: Path, dry_run: bool = False) -> dict:
 
     # 3. tests/test.sh
     (task_dir / "tests" / "test.sh").write_text(
-        TEST_SH_TEMPLATE.format(test_cmd=test_cmd)
+        TEST_SH_TEMPLATE.format(
+            test_cmd=test_cmd,
+            trusted_test_patch_command=trusted_test_patch_command(base_commit),
+        )
     )
 
     # 4. tests/test_state.py
@@ -1122,6 +1133,9 @@ def patch_row(row: dict, output_root: Path, dry_run: bool = False) -> dict:
     # 6. tests/test_patch.diff
     if test_patch and test_patch.strip():
         (task_dir / "tests" / "test_patch.diff").write_text(test_patch)
+        write_trusted_test_patch_installer(
+            task_dir / "tests" / "install_trusted_test_patch.sh"
+        )
 
     # 7. solution/solve.sh
     (task_dir / "solution" / "solve.sh").write_text(
@@ -1143,17 +1157,28 @@ def patch_row(row: dict, output_root: Path, dry_run: bool = False) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Patch nebius/SWE-rebench-V2 rows into Harbor task directories",
     )
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--hf-repo", default=None, help="HF dataset id (e.g. nebius/SWE-rebench-V2)")
-    src.add_argument("--parquet", type=Path, default=None, help="Local parquet snapshot path")
+    src.add_argument(
+        "--hf-repo", default=None, help="HF dataset id (e.g. nebius/SWE-rebench-V2)"
+    )
+    src.add_argument(
+        "--parquet", type=Path, default=None, help="Local parquet snapshot path"
+    )
     p.add_argument("--split", default="train", help="HF split (default: train)")
-    p.add_argument("--output-dir", type=Path, required=True, help="Where to write task directories")
-    p.add_argument("--limit", type=int, default=None, help="Stop after emitting N tasks")
-    p.add_argument("--dry-run", action="store_true", help="Count rows only; write nothing")
+    p.add_argument(
+        "--output-dir", type=Path, required=True, help="Where to write task directories"
+    )
+    p.add_argument(
+        "--limit", type=int, default=None, help="Stop after emitting N tasks"
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="Count rows only; write nothing"
+    )
     return p.parse_args()
 
 

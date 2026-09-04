@@ -207,7 +207,7 @@ exit $BENCHMARK_EXIT_CODE
         )
 
         script_path = self.experiments_dir / f"run_{config_hash}_{config_name}.sbatch"
-        with open(script_path, 'w') as f:
+        with open(script_path, "w") as f:
             f.write(script_content)
 
         script_path.chmod(0o755)
@@ -232,7 +232,7 @@ exit $BENCHMARK_EXIT_CODE
 
         scripts = []
         for config_file in config_files:
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 config = json.load(f)
 
             script_path = self.generate_sbatch_script(
@@ -264,7 +264,7 @@ echo ""
 
         for i, script_path in enumerate(script_paths):
             launch_content += f"""
-# Experiment {i+1}/{len(script_paths)}
+# Experiment {i + 1}/{len(script_paths)}
 echo "Submitting: {script_path.name}"
 JOB_ID=$(sbatch --parsable "{script_path}")
 echo "  Job ID: $JOB_ID"
@@ -279,7 +279,7 @@ echo "View results in: $EXPERIMENTS_DIR/results/"
 """
 
         launch_path = self.experiments_dir / "launch_all.sh"
-        with open(launch_path, 'w') as f:
+        with open(launch_path, "w") as f:
             f.write(launch_content)
 
         launch_path.chmod(0o755)
@@ -287,20 +287,31 @@ echo "View results in: $EXPERIMENTS_DIR/results/"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate SLURM batch scripts for Ray Serve vLLM experiments")
+    parser = argparse.ArgumentParser(
+        description="Generate SLURM batch scripts for Ray Serve vLLM experiments"
+    )
     parser.add_argument("--config-dir", help="Directory containing config JSON files")
-    parser.add_argument("--experiments-dir", default=None,
-                        help="Base experiments directory (default: $DCAGENT_DIR/data/vllm_experiments)")
-    parser.add_argument("--dataset", default="large_throughput.jsonl", help="Dataset file name")
-    parser.add_argument("--request-rate", type=float, default=10.0, help="Requests per second")
-    parser.add_argument("--single-config", help="Generate script for single config file")
+    parser.add_argument(
+        "--experiments-dir",
+        default=None,
+        help="Base experiments directory (default: $DCAGENT_DIR/data/vllm_experiments)",
+    )
+    parser.add_argument(
+        "--dataset", default="large_throughput.jsonl", help="Dataset file name"
+    )
+    parser.add_argument(
+        "--request-rate", type=float, default=10.0, help="Requests per second"
+    )
+    parser.add_argument(
+        "--single-config", help="Generate script for single config file"
+    )
 
     args = parser.parse_args()
 
     generator = RayServeSbatchGenerator(experiments_dir=args.experiments_dir)
 
     if args.single_config:
-        with open(args.single_config, 'r') as f:
+        with open(args.single_config, "r") as f:
             config = json.load(f)
 
         script_path = generator.generate_sbatch_script(
@@ -311,7 +322,9 @@ def main():
         )
         print(f"Generated: {script_path}")
     else:
-        config_dir = args.config_dir or str(generator.experiments_dir / "configs" / "focused")
+        config_dir = args.config_dir or str(
+            generator.experiments_dir / "configs" / "focused"
+        )
         scripts = generator.generate_all_scripts(
             config_dir=config_dir,
             dataset=args.dataset,
@@ -322,7 +335,7 @@ def main():
             launch_script = generator.generate_launch_script(scripts)
             print(f"\nGenerated {len(scripts)} sbatch scripts")
             print(f"Launch script: {launch_script}")
-            print(f"\nTo launch all experiments:")
+            print("\nTo launch all experiments:")
             print(f"  ./{launch_script.name}")
 
 

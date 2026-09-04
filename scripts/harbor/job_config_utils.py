@@ -11,12 +11,9 @@ from harbor.models.metric.type import MetricType
 from scripts.harbor._harbor_compat import LocalDatasetConfig, is_local_dataset
 
 
-# Metric types that legacy OT-Agent harbor YAMLs commonly declare but which
-# the pinned harbor (``penfever/otagent-latest``) doesn't ship a built-in
-# Pydantic enum entry or factory for. We drop these silently at load time
-# rather than rewriting every harbor_yaml/* file — the eval still completes
-# without them (harbor falls back to its default Mean metric internally), and
-# downstream postprocessing recomputes drop-EI from raw rewards anyway.
+# Metric types that legacy OT-Agent harbor YAMLs declare but the pinned harbor
+# schema can't validate. Dropped silently at load time; downstream postprocessing
+# recomputes drop-EI from raw rewards.
 _UNSUPPORTED_METRIC_TYPES = frozenset({"mean-drop-ei", "accuracy-drop-ei"})
 
 
@@ -36,7 +33,9 @@ def _filter_supported_metrics(raw: Any) -> Any:
     for entry in metrics:
         if isinstance(entry, dict):
             mtype = entry.get("type")
-            if mtype in _UNSUPPORTED_METRIC_TYPES or (mtype is not None and mtype not in allowed):
+            if mtype in _UNSUPPORTED_METRIC_TYPES or (
+                mtype is not None and mtype not in allowed
+            ):
                 dropped.append(mtype)
                 continue
         filtered.append(entry)
@@ -67,6 +66,7 @@ def load_job_config(config_path: Path | str) -> JobConfig:
         config = JobConfig.model_validate(raw)
     elif suffix == ".json":
         import json as _json
+
         raw = _filter_supported_metrics(_json.loads(path.read_text()))
         config = JobConfig.model_validate(raw)
     else:

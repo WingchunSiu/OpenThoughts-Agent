@@ -4,13 +4,13 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import yaml
 
-from hpc.arguments import LlamaFactoryArgs
 from hpc.data_argument_keys import DATA_ARGUMENT_KEYS
 from hpc.launch_utils import (
     resolve_job_and_paths,
@@ -29,7 +29,9 @@ def apply_mca_training_template(
 ) -> dict:
     """Point training jobs at the MCA-specific sbatch template when requested."""
 
-    mca_template = Path(__file__).parent / "sbatch" / f"{hpc.name.lower()}_train_mca.sbatch"
+    mca_template = (
+        Path(__file__).parent / "sbatch" / f"{hpc.name.lower()}_train_mca.sbatch"
+    )
     if mca_template.exists():
         return update_exp_args_fn(
             exp_args,
@@ -77,20 +79,32 @@ def maybe_compute_gradient_accumulation(base_config: dict, exp_args: dict) -> di
         base_config.pop("global_batch_size", None)
 
     if raw_global_batch_size is None:
-        print("\nSkipping automatic gradient accumulation calculation because global_batch_size was not provided.")
+        print(
+            "\nSkipping automatic gradient accumulation calculation because global_batch_size was not provided."
+        )
         return base_config
 
     global_batch_size = coerce_positive_int(raw_global_batch_size, 0)
     if global_batch_size <= 0:
-        raise ValueError(f"Expected positive global_batch_size, got {raw_global_batch_size!r}")
+        raise ValueError(
+            f"Expected positive global_batch_size, got {raw_global_batch_size!r}"
+        )
 
     total_gpu_count = num_nodes * num_gpus
 
     # Model parallelism settings
-    tensor_model_parallel_size = coerce_positive_int(base_config.get("tensor_model_parallel_size"), 1)
-    pipeline_model_parallel_size = coerce_positive_int(base_config.get("pipeline_model_parallel_size"), 1)
-    expert_model_parallel_size = coerce_positive_int(base_config.get("expert_model_parallel_size"), 1)
-    sequence_parallel_size = coerce_positive_int(base_config.get("sequence_parallel_size"), 1)
+    tensor_model_parallel_size = coerce_positive_int(
+        base_config.get("tensor_model_parallel_size"), 1
+    )
+    pipeline_model_parallel_size = coerce_positive_int(
+        base_config.get("pipeline_model_parallel_size"), 1
+    )
+    expert_model_parallel_size = coerce_positive_int(
+        base_config.get("expert_model_parallel_size"), 1
+    )
+    sequence_parallel_size = coerce_positive_int(
+        base_config.get("sequence_parallel_size"), 1
+    )
 
     model_parallel_world_size = (
         tensor_model_parallel_size
@@ -106,7 +120,9 @@ def maybe_compute_gradient_accumulation(base_config: dict, exp_args: dict) -> di
         )
     data_parallel_replicas = max(total_gpu_count // model_parallel_world_size, 1)
 
-    per_device_train_batch_size = coerce_positive_int(base_config.get("per_device_train_batch_size"), 1)
+    per_device_train_batch_size = coerce_positive_int(
+        base_config.get("per_device_train_batch_size"), 1
+    )
 
     effective_batch_denom = per_device_train_batch_size * data_parallel_replicas
     gradient_accumulation_steps = global_batch_size // effective_batch_denom
@@ -123,7 +139,9 @@ def maybe_compute_gradient_accumulation(base_config: dict, exp_args: dict) -> di
     base_config["gradient_accumulation_steps"] = gradient_accumulation_steps
     base_config["per_device_train_batch_size"] = per_device_train_batch_size
     # base_config["global_batch_size"] = global_batch_size
-    print(f"\nCalculated based on {num_nodes} nodes, {num_gpus} GPUs per node, and global batch size {global_batch_size}:")
+    print(
+        f"\nCalculated based on {num_nodes} nodes, {num_gpus} GPUs per node, and global batch size {global_batch_size}:"
+    )
     print(f"data_parallel_replicas: {data_parallel_replicas}")
     print(f"per_device_train_batch_size: {per_device_train_batch_size}")
     print(f"gradient_accumulation_steps: {gradient_accumulation_steps}")
@@ -160,7 +178,7 @@ def prebuild_arrow_cache(base_config: dict, train_config_path: str = "") -> None
         print("[arrow-cache] No train_config_path provided, skipping pre-build.")
         return
 
-    print(f"[arrow-cache] Pre-building tokenization cache via LlamaFactory pipeline...")
+    print("[arrow-cache] Pre-building tokenization cache via LlamaFactory pipeline...")
     os.makedirs(cache_dir, exist_ok=True)
 
     try:
@@ -177,10 +195,13 @@ def prebuild_arrow_cache(base_config: dict, train_config_path: str = "") -> None
         # This uses the real template, tokenizer, and preprocessing — the
         # exact same .map() calls that training will use — so the cache
         # fingerprints match and compute nodes skip tokenization.
-        import subprocess, sys
+        import subprocess
+        import sys
+
         result = subprocess.run(
             [
-                sys.executable, "-c",
+                sys.executable,
+                "-c",
                 "import os; os.environ['CUDA_VISIBLE_DEVICES']=''; "
                 "from llamafactory.hparams import get_train_args; "
                 "from llamafactory.data.loader import get_dataset; "
@@ -191,9 +212,11 @@ def prebuild_arrow_cache(base_config: dict, train_config_path: str = "") -> None
                 "  model_args.model_name_or_path, trust_remote_code=True); "
                 "ds = get_dataset(model_args, data_args, training_args, "
                 "  stage='sft', tokenizer=tokenizer, processor=None); "
-                "print(f'Cache built: {len(ds[\"train_dataset\"])} examples')"
+                "print(f'Cache built: {len(ds[\"train_dataset\"])} examples')",
             ],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True,
+            text=True,
+            timeout=600,
             env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
         )
         if result.returncode == 0:
@@ -201,12 +224,13 @@ def prebuild_arrow_cache(base_config: dict, train_config_path: str = "") -> None
         else:
             # Common failure: bf16 validation on CPU. Fall back to raw cache only.
             stderr_short = result.stderr.strip().split("\n")[-3:]
-            print(f"[arrow-cache] LlamaFactory pipeline failed (non-fatal):")
+            print("[arrow-cache] LlamaFactory pipeline failed (non-fatal):")
             for line in stderr_short:
                 print(f"[arrow-cache]   {line}")
             print("[arrow-cache] Falling back to raw dataset cache only.")
 
             from datasets import load_dataset
+
             for ds_path in local_paths:
                 ds_name = os.path.basename(ds_path)[:50]
                 print(f"[arrow-cache]   Loading raw: {ds_name}...")
@@ -222,11 +246,26 @@ def prebuild_arrow_cache(base_config: dict, train_config_path: str = "") -> None
             os.environ["WORLD_SIZE"] = prev_world
 
     except Exception as exc:
-        print(f"[arrow-cache] WARNING: Pre-build failed ({exc}). "
-              "Training may work but tokenization will race on compute nodes.")
+        print(
+            f"[arrow-cache] WARNING: Pre-build failed ({exc}). "
+            "Training may work but tokenization will race on compute nodes."
+        )
 
 
-def apply_data_argument_overrides(base_config: dict, exp_args: dict) -> None:
+def apply_data_argument_overrides(
+    base_config: dict, exp_args: dict, registry_mode: bool = False
+) -> None:
+    # In registry mode (--dataset_dir with a dataset_info.json), each dataset's
+    # column/tag schema is resolved per-dataset from the registry. Injecting the
+    # global CLI schema defaults here (e.g. messages="conversations") OVERRIDES
+    # that per-dataset resolution and breaks heterogeneous mixes — LLaMA-Factory
+    # then looks up the wrong column and raises KeyError in dataset preprocessing
+    # (bit the Delphi #6279 grid: wildchat_386k's column is `conversation`, but the
+    # default messages="conversations" clobbered it -> KeyError 'conversations').
+    # The registry already carries these tags, so skip all overrides here.
+    if registry_mode:
+        return
+
     tool_call_tag = exp_args.get("tool_call_tag")
     if tool_call_tag:
         base_config["tools"] = tool_call_tag
@@ -261,7 +300,11 @@ def _get_sft_conda_activate(hpc, exp_args: dict) -> str:
         return resolve_conda_activate(hpc, exp_args)
 
     # 2. Model-specific auto-detection
-    model_name = str(exp_args.get("model_name_or_path") or exp_args.get("_original_model_name_or_path") or "").lower()
+    model_name = str(
+        exp_args.get("model_name_or_path")
+        or exp_args.get("_original_model_name_or_path")
+        or ""
+    ).lower()
 
     for pattern, env_name in _MODELS_REQUIRING_SPECIAL_ENV.items():
         if pattern in model_name:
@@ -272,8 +315,11 @@ def _get_sft_conda_activate(hpc, exp_args: dict) -> str:
             conda_prefix = os.environ.get("CONDA_PREFIX", "")
             if conda_prefix:
                 import re
+
                 base = re.sub(r"/envs/[^/]+$", "", conda_prefix)
-                return f"source {base}/etc/profile.d/conda.sh && conda activate {env_name}"
+                return (
+                    f"source {base}/etc/profile.d/conda.sh && conda activate {env_name}"
+                )
             return f"conda activate {env_name}"
 
     return hpc.conda_activate or "# No conda activation configured"
@@ -333,13 +379,27 @@ def configure_sft_reporting(base_config: dict, exp_args: dict, model_path: str) 
         base_config["report_to"] = "wandb"
         base_config["push_to_hub"] = push_to_hub
     else:
-        base_config.pop("report_to", None)
+        # No-internet node: default reporting OFF. Popping report_to is NOT enough
+        # — HF transformers defaults an unset report_to to "all", which re-activates
+        # WandbCallback -> wandb.init(). Even with WANDB_MODE=offline (set per-cluster
+        # in hpc.py), wandb 0.28.x still spins up a service and connects over a unix
+        # socket, which fails on compute nodes ("FileNotFoundError: [Errno 2]" from
+        # service_token.connect), crashing LF trainer init. "none" is what the pop
+        # was trying to express; trainer_state.json (the loss series) is written
+        # regardless of report_to. Default to "none" only when unset, so a cluster
+        # whose offline wandb DOES work can still opt back in via an explicit
+        # report_to in the YAML/CLI (no code change, no silent loss of offline logs
+        # on clusters that relied on them).
+        if not base_config.get("report_to"):
+            base_config["report_to"] = "none"
         base_config["push_to_hub"] = push_to_hub
         base_config["model_name_or_path"] = model_path
         # Use a dedicated arrow cache dir alongside HF_HUB_CACHE (not inside it) to avoid
         # datasets>=4.7.0 cache resolution bugs while keeping arrow caches off /tmp.
         _hf_cache = os.environ.get("HF_HUB_CACHE", "")
-        base_config["datasets_cache_dir"] = os.path.join(os.path.dirname(_hf_cache), "arrow_cache") if _hf_cache else ""
+        base_config["datasets_cache_dir"] = (
+            os.path.join(os.path.dirname(_hf_cache), "arrow_cache") if _hf_cache else ""
+        )
     return base_config
 
 
@@ -398,7 +458,7 @@ def _estimate_thinking_rate(
                 )
                 rows = tbl.to_pydict().get(conversations_col, [])
                 for conv in rows[:_THINKING_SAMPLE_ROWS]:
-                    for msg in (conv or []):
+                    for msg in conv or []:
                         if not isinstance(msg, dict):
                             continue
                         if msg.get(role_tag) != "assistant":
@@ -496,9 +556,7 @@ def maybe_preprocess_thinking(
         return artifacts
 
     agent_name = (
-        exp_args.get("trace_agent_name")
-        or exp_args.get("agent")
-        or "terminus-2"
+        exp_args.get("trace_agent_name") or exp_args.get("agent") or "terminus-2"
     )
 
     if template not in _REASONING_TEMPLATES:
@@ -530,7 +588,9 @@ def maybe_preprocess_thinking(
 
     # Auto-detect: should we use thinking or nothink template?
     thinking_rate, n_think, n_total = _estimate_thinking_rate(
-        local_paths, role_tag=role_tag, content_tag=content_tag,
+        local_paths,
+        role_tag=role_tag,
+        content_tag=content_tag,
     )
     print(
         f"[prep_for_thinking] Thinking rate: {thinking_rate:.1%} "
@@ -538,7 +598,6 @@ def maybe_preprocess_thinking(
     )
 
     # Decide template based on thinking rate, but always preprocess below.
-    use_nothink = False
     if thinking_rate < _THINKING_RATE_THRESHOLD:
         nothink_template = _NOTHINK_TEMPLATE_MAP.get(template)
         if nothink_template:
@@ -548,7 +607,6 @@ def maybe_preprocess_thinking(
                 f"Switching template: {template} -> {nothink_template}"
             )
             base_config["template"] = nothink_template
-            use_nothink = True
             # Try to load the _nothink config variant for any additional
             # overrides (e.g. different save_steps, hyperparams).
             _apply_nothink_config_overrides(base_config, exp_args)
@@ -560,7 +618,9 @@ def maybe_preprocess_thinking(
 
     # Always preprocess: normalises format, captures free-text reasoning,
     # and prints per-dataset stats regardless of template choice.
-    print(f"[prep_for_thinking] Preprocessing data for template '{base_config['template']}'")
+    print(
+        f"[prep_for_thinking] Preprocessing data for template '{base_config['template']}'"
+    )
     from scripts.datagen.prep_for_thinking import preprocess_local_dataset
 
     new_paths: list[str] = []
@@ -609,8 +669,10 @@ def _warn_if_thinking_data_with_plain_template(template: str, artifacts) -> None
                 tbl = pq.read_table(str(pq_file), columns=["conversations"])
                 sample = tbl.to_pydict().get("conversations", [])[:5]
                 for conv in sample:
-                    for msg in (conv or []):
-                        content = msg.get("content", "") if isinstance(msg, dict) else ""
+                    for msg in conv or []:
+                        content = (
+                            msg.get("content", "") if isinstance(msg, dict) else ""
+                        )
                         if "<think>" in content or "</think>" in content:
                             print(
                                 f"\n*** WARNING: Dataset at {ds_path} contains <think> tags "
@@ -687,17 +749,23 @@ def submit_sft_job(
     # Construct the config yaml
     train_config, train_config_path_out = construct_config_yaml_fn(exp_args)
     exp_args = update_exp_args_fn(exp_args, train_config)
-    exp_args = update_exp_args_fn(exp_args, {"train_config_path_out": train_config_path_out})
+    exp_args = update_exp_args_fn(
+        exp_args, {"train_config_path_out": train_config_path_out}
+    )
     write_run_summary_fn(exp_args, train_config)
 
     # Construct the sbatch script using universal SFT template
     train_sbatch_path_out = construct_sft_sbatch_script(exp_args, hpc)
-    exp_args = update_exp_args_fn(exp_args, {"train_sbatch_path_out": train_sbatch_path_out})
+    exp_args = update_exp_args_fn(
+        exp_args, {"train_sbatch_path_out": train_sbatch_path_out}
+    )
 
     display_args_fn(exp_args, "Train")
 
     if exp_args.get("dry_run", False):
-        print("DRY RUN: Job would be submitted with the above parameters, but --dry_run flag was set.")
+        print(
+            "DRY RUN: Job would be submitted with the above parameters, but --dry_run flag was set."
+        )
         return None
 
     dependency = None
@@ -705,13 +773,17 @@ def submit_sft_job(
     if wants_pretokenize:
         tokenized_path = exp_args.get("tokenized_path", "")
         if tokenized_path and os.path.exists(tokenized_path):
-            print(f"Tokenized directory {tokenized_path} already exists, skipping pretokenization job submission")
+            print(
+                f"Tokenized directory {tokenized_path} already exists, skipping pretokenization job submission"
+            )
         else:
             pretok_job_id = schedule_pretokenize_fn(
                 exp_args,
                 update_exp_args_fn=update_exp_args_fn,
                 construct_config_yaml_fn=construct_config_yaml_fn,
-                construct_sbatch_script_fn=lambda args: construct_sft_sbatch_script(args, hpc),
+                construct_sbatch_script_fn=lambda args: construct_sft_sbatch_script(
+                    args, hpc
+                ),
                 submit_job_fn=submit_job_fn,
             )
             dependency = f"afterok:{pretok_job_id}"
@@ -741,6 +813,11 @@ class SFTJobConfig:
 
     # Training launcher: "torchrun" or "accelerate"
     launcher: str = "torchrun"
+
+    # SFT backend: "llamafactory" (default) or "axolotl". Selects the trainer
+    # entrypoint in SFTJobRunner. Defaults to "llamafactory" so a config JSON
+    # written before this field existed still deserializes to the LF path.
+    sft_backend: str = "llamafactory"
 
     # Accelerate config (if launcher == "accelerate")
     accelerate_config_path: Optional[str] = None
@@ -834,11 +911,96 @@ class SFTJobRunner:
                 os.environ[key] = value
                 print(f"[cuda] {key}={value}")
 
+        # Anti-fragmentation allocator config — applies to BOTH SFT backends.
+        # expandable_segments:True reduces CUDA reserved-but-unallocated
+        # fragmentation; it changes allocator segment management only, NOT numerics,
+        # so it's safe to share across backends and clusters. It was previously
+        # gated axolotl-only, which OOM'd the LF path on the exact config axolotl
+        # fit (LF left 6.17 GiB reserved-but-unallocated on a 95 GiB GH200 -> OOM by
+        # 224 MiB; expandable_segments recovers it). setdefault so a cluster env or
+        # a backend that sets its own PYTORCH_CUDA_ALLOC_CONF wins.
+        if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            print("[sft] PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
+
+        # Axolotl-backend-only env (cluster-agnostic; gated on backend so the
+        # LF path is untouched). Cluster-specific values (compiler CUDA_HOME/
+        # GCC_HOME, NCCL_SOCKET_IFNAME, offline flags) come from the cluster
+        # dotenv/hpc config via the sbatch template — NOT hardcoded here.
+        # setdefault so a value already exported by the cluster env wins.
+        if self.config.sft_backend == "axolotl":
+            if "AXOLOTL_DO_NOT_TRACK" not in os.environ:
+                os.environ["AXOLOTL_DO_NOT_TRACK"] = "1"
+                print("[axolotl] AXOLOTL_DO_NOT_TRACK=1")
+
+        # Short, job-scoped TMPDIR (AF_UNIX fix) — applies to BOTH SFT backends,
+        # but ONLY when the inherited TMPDIR is actually too long to be safe.
+        # Both axolotl and llamafactory load data via HF `datasets`, whose
+        # tokenization / .map() spawns a multiprocessing SyncManager whose control
+        # socket lives at ``$TMPDIR/pymp-XXXXXXXX/listener-XXXXXXXX`` (~32-char
+        # overhead). If ``len(TMPDIR)+overhead`` exceeds the 108-byte AF_UNIX
+        # ``sun_path`` limit the manager dies -> "OSError: AF_UNIX path too long"
+        # (axolotl) / "EOFError" (llamafactory) at dataset load (num_proc=1 does
+        # NOT help; the manager is created regardless). This bites on clusters with
+        # a deeply-nested TMPDIR (TACC's universal_sft ``tmpfix`` path under
+        # $SCRATCH); it does NOT bite where the path is already short (Leonardo/
+        # Jupiter).
+        #
+        # We redirect TMPDIR/TMP/TEMP to a short local dir ONLY when the current
+        # path is long enough to risk the limit. This is a no-op on clusters where
+        # the inherited TMPDIR is safe — so it cannot regress Leonardo, whose
+        # universal_sft guard deliberately moved TMPDIR OFF the tiny node-local
+        # /tmp (~9.6G LV) to avoid Errno-28 during dataset.map. Even when we DO
+        # redirect, only the tiny SyncManager socket + small tempfiles move to
+        # /tmp; the large HF arrow caches stay on HF_DATASETS_CACHE (set by the
+        # sbatch, untouched here), so /tmp exhaustion is not a concern. Base is
+        # /tmp (POSIX-universal, local on compute nodes); a cluster dotenv can
+        # override the base via SFT_TMPDIR_BASE (legacy AXOLOTL_TMPDIR_BASE also
+        # honored) to point at a short dir on a larger fs if /tmp is unusable.
+        _AF_UNIX_MAX = 108  # Linux sun_path limit
+        _SOCKET_OVERHEAD = 40  # /pymp-XXXXXXXX/listener-XXXXXXXX + margin
+        cur_tmp = os.environ.get("TMPDIR") or tempfile.gettempdir()
+        if len(cur_tmp) + _SOCKET_OVERHEAD > _AF_UNIX_MAX:
+            tmp_base = (
+                os.environ.get("SFT_TMPDIR_BASE")
+                or os.environ.get("AXOLOTL_TMPDIR_BASE")
+                or "/tmp"
+            )
+            job_tag = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
+            short_tmp = os.path.join(tmp_base, f"sft_{job_tag}")
+            try:
+                os.makedirs(short_tmp, exist_ok=True)
+                for key in ("TMPDIR", "TMP", "TEMP"):
+                    os.environ[key] = short_tmp
+                print(
+                    f"[sft] TMPDIR/TMP/TEMP={short_tmp} (AF_UNIX short-path fix; "
+                    f"inherited TMPDIR len={len(cur_tmp)} exceeded safe limit)"
+                )
+            except OSError as e:
+                print(
+                    f"[sft] WARN: could not create short TMPDIR {short_tmp}: {e}; "
+                    f"leaving TMPDIR={cur_tmp}",
+                    file=sys.stderr,
+                )
+
+    def _train_entrypoint_args(self) -> list:
+        """Trailing entrypoint + config args for the distributed launcher.
+
+        Backend swap point: axolotl runs ``-m axolotl.cli.train <cfg>``; the
+        default llamafactory backend runs the unchanged
+        ``sft/llamafactory/src/train.py <cfg>`` line.
+        """
+        if self.config.sft_backend == "axolotl":
+            return ["-m", "axolotl.cli.train", self.config.train_config_path]
+        return ["sft/llamafactory/src/train.py", self.config.train_config_path]
+
     def _run_torchrun(self) -> int:
         """Launch training with torchrun."""
         # Get distributed training parameters from environment
         num_nodes = int(os.environ.get("NUM_NODES", self.config.num_nodes))
-        gpus_per_node = int(os.environ.get("NUM_GPUS_PER_NODE", self.config.gpus_per_node))
+        gpus_per_node = int(
+            os.environ.get("NUM_GPUS_PER_NODE", self.config.gpus_per_node)
+        )
         master_addr = os.environ.get("MASTER_ADDR", "localhost")
         master_port = os.environ.get("MASTER_PORT", str(self.config.master_port))
         slurm_job_id = os.environ.get("SLURM_JOB_ID", "0")
@@ -850,8 +1012,7 @@ class SFTJobRunner:
             f"--rdzv_id={slurm_job_id}",
             "--rdzv_backend=c10d",
             f"--rdzv_endpoint={master_addr}:{master_port}",
-            "sft/llamafactory/src/train.py",
-            self.config.train_config_path,
+            *self._train_entrypoint_args(),
         ]
 
         print(f"Running torchrun command: {' '.join(cmd)}")
@@ -863,28 +1024,41 @@ class SFTJobRunner:
         """Launch training with accelerate."""
         # Get distributed training parameters from environment
         num_nodes = int(os.environ.get("NUM_NODES", self.config.num_nodes))
-        gpus_per_node = int(os.environ.get("NUM_GPUS_PER_NODE", self.config.gpus_per_node))
+        gpus_per_node = int(
+            os.environ.get("NUM_GPUS_PER_NODE", self.config.gpus_per_node)
+        )
         master_addr = os.environ.get("MASTER_ADDR", "localhost")
         master_port = os.environ.get("MASTER_PORT", str(self.config.master_port))
         # Use SLURM_NODEID for machine rank (node index within the allocation)
         # SLURM_PROCID is the global task ID which may not match node index
-        slurm_nodeid = os.environ.get("SLURM_NODEID", os.environ.get("SLURM_PROCID", "0"))
+        slurm_nodeid = os.environ.get(
+            "SLURM_NODEID", os.environ.get("SLURM_PROCID", "0")
+        )
 
         # Build accelerate config if not provided
         accelerate_config = self.config.accelerate_config_path
         if not accelerate_config:
-            accelerate_config = self._generate_accelerate_config(num_nodes, gpus_per_node)
+            accelerate_config = self._generate_accelerate_config(
+                num_nodes, gpus_per_node
+            )
 
         # Debug: print multi-node configuration
-        print(f"Multi-node config: num_nodes={num_nodes}, gpus_per_node={gpus_per_node}, "
-              f"machine_rank={slurm_nodeid}, master_addr={master_addr}:{master_port}")
-        print(f"SLURM env: SLURM_NODEID={os.environ.get('SLURM_NODEID')}, "
-              f"SLURM_PROCID={os.environ.get('SLURM_PROCID')}, "
-              f"SLURM_JOB_NUM_NODES={os.environ.get('SLURM_JOB_NUM_NODES')}")
+        print(
+            f"Multi-node config: num_nodes={num_nodes}, gpus_per_node={gpus_per_node}, "
+            f"machine_rank={slurm_nodeid}, master_addr={master_addr}:{master_port}"
+        )
+        print(
+            f"SLURM env: SLURM_NODEID={os.environ.get('SLURM_NODEID')}, "
+            f"SLURM_PROCID={os.environ.get('SLURM_PROCID')}, "
+            f"SLURM_JOB_NUM_NODES={os.environ.get('SLURM_JOB_NUM_NODES')}"
+        )
         sys.stdout.flush()
 
         cmd = [
-            "python", "-u", "-m", "accelerate.commands.launch",
+            "python",
+            "-u",
+            "-m",
+            "accelerate.commands.launch",
             f"--rdzv_conf=rdzv_backend=c10d,rdzv_endpoint={master_addr}:{master_port}",
             f"--config_file={accelerate_config}",
             f"--main_process_ip={master_addr}",
@@ -893,8 +1067,7 @@ class SFTJobRunner:
             f"--num_machines={num_nodes}",
             f"--num_processes={num_nodes * gpus_per_node}",
             "--tee=1",
-            "sft/llamafactory/src/train.py",
-            self.config.train_config_path,
+            *self._train_entrypoint_args(),
         ]
 
         print(f"Running accelerate command: {' '.join(cmd)}")
@@ -912,7 +1085,9 @@ class SFTJobRunner:
         # Basic accelerate config for multi-node training
         config = {
             "compute_environment": "LOCAL_MACHINE",
-            "distributed_type": "FSDP" if self.config.deepspeed_config is None else "DEEPSPEED",
+            "distributed_type": "FSDP"
+            if self.config.deepspeed_config is None
+            else "DEEPSPEED",
             "downcast_bf16": "no",
             "enable_cpu_affinity": False,
             "machine_rank": 0,
@@ -1011,10 +1186,15 @@ def construct_sft_sbatch_script(exp_args: dict, hpc) -> str:
         needs_ssh_tunnel=hpc.needs_ssh_tunnel,
         needs_cuda_detection=hpc.needs_cuda_detection,
         master_port=int(exp_args.get("master_port") or 12802),
+        sft_backend=exp_args.get("sft_backend") or "llamafactory",
     )
 
     # Write config JSON
-    config_dir = exp_paths.configs if hasattr(exp_paths, "configs") else exp_paths.root / "configs"
+    config_dir = (
+        exp_paths.configs
+        if hasattr(exp_paths, "configs")
+        else exp_paths.root / "configs"
+    )
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / f"{job_name}_sft_config.json"
     config_path.write_text(json.dumps(asdict(job_config), indent=2))
@@ -1039,16 +1219,26 @@ def construct_sft_sbatch_script(exp_args: dict, hpc) -> str:
     if hpc.needs_ssh_tunnel:
         # JSC clusters use proxychains4 for internet access
         srun_prefix += " $PROXY_CMD"
-    # if os.environ.get("IMAGE"):
-    #     print(f"Using Apptainer image: {os.environ['IMAGE']}")
-    #     srun_prefix += f' apptainer exec --nv {os.environ["IMAGE"]}'
+    # Containerized clusters (EmpireAI/Pyxis): add --container-image and related flags.
+    # For non-container clusters this is a no-op (flag-off byte-identical invariant).
+    container_flags = hpc.get_container_srun_flags()
+    if container_flags:
+        srun_prefix += f" {container_flags}"
 
-    # The srun child processes need the conda environment re-activated because
-    # srun launches a non-interactive shell that doesn't inherit the batch step's
-    # conda activation.  Prepend the conda activate so every node uses the right
-    # Python (critical for sft-qwen35 which needs transformers >= 5.3.0).
-    conda_activate = _get_sft_conda_activate(hpc, exp_args)
-    cmd = f'{conda_activate} && python -m hpc.sft_launch_utils --config "{config_path}"'
+    # Build the command that srun will execute.
+    # For containerized clusters: no conda (env is inside the .sqsh); use the
+    # cluster's env_vars (PATH sanitize, NCCL bond0, node-local caches) instead.
+    # For conda clusters: prepend conda-activate so every node uses the right Python.
+    if hpc.is_containerized:
+        container_env = hpc.get_env_exports()
+        cmd_parts = []
+        if container_env:
+            cmd_parts.append(container_env)
+        cmd_parts.append(f'python -m hpc.sft_launch_utils --config "{config_path}"')
+        cmd = "; ".join(cmd_parts)
+    else:
+        conda_activate = _get_sft_conda_activate(hpc, exp_args)
+        cmd = f'{conda_activate} && python -m hpc.sft_launch_utils --config "{config_path}"'
     srun_command = f"{srun_prefix} bash -c '{cmd}'"
     substitutions = {
         "time_limit": exp_args.get("time_limit") or "24:00:00",
@@ -1058,7 +1248,9 @@ def construct_sft_sbatch_script(exp_args: dict, hpc) -> str:
         "job_name": job_name,
         "sbatch_extra_directives": "\n".join(sbatch_directives),
         "module_commands": hpc.get_module_commands(),
-        "conda_activate": _get_sft_conda_activate(hpc, exp_args),
+        "conda_activate": ""
+        if hpc.is_containerized
+        else _get_sft_conda_activate(hpc, exp_args),
         "cluster_env_file": hpc.dotenv_filename,
         "cuda_setup": cuda_setup,
         "nccl_exports": hpc.get_nccl_exports(),
@@ -1076,7 +1268,11 @@ def construct_sft_sbatch_script(exp_args: dict, hpc) -> str:
     sbatch_text = substitute_template(template_text, substitutions)
 
     # Write sbatch script
-    sbatch_dir = exp_paths.sbatch if hasattr(exp_paths, "sbatch") else exp_paths.root / "sbatch_scripts"
+    sbatch_dir = (
+        exp_paths.sbatch
+        if hasattr(exp_paths, "sbatch")
+        else exp_paths.root / "sbatch_scripts"
+    )
     sbatch_dir.mkdir(parents=True, exist_ok=True)
     sbatch_output = sbatch_dir / f"{job_name}_sft.sbatch"
     sbatch_output.write_text(sbatch_text)

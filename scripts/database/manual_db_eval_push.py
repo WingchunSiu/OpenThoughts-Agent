@@ -165,6 +165,7 @@ def resolve_job_dir(user_path: Path) -> Path:
     match the Harbor trial naming pattern (task_hash__trial_id).
     """
     import re
+
     _TRIAL_DIR_PATTERN = re.compile(r"^.+__\w+$")
 
     def _looks_like_job_dir(d: Path) -> bool:
@@ -204,6 +205,7 @@ def derive_benchmark_name(job_dir: Path) -> str:
     Delegates to the shared utility in hpc.launch_utils for consistency.
     """
     from hpc.launch_utils import derive_benchmark_from_job_dir
+
     return derive_benchmark_from_job_dir(job_dir)
 
 

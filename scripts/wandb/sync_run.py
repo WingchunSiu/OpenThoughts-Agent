@@ -12,7 +12,6 @@ Example:
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 import wandb
@@ -99,18 +98,21 @@ def main():
     )
     parser.add_argument("run_id", help="W&B run ID (e.g., xkl0jcj9)")
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path.home() / "notes" / "rl_runs_wandb",
         help="Output directory (default: ~/notes/rl_runs_wandb)",
     )
     parser.add_argument(
-        "--entity", "-e",
+        "--entity",
+        "-e",
         default="dogml",
         help="W&B entity (default: dogml)",
     )
     parser.add_argument(
-        "--project", "-p",
+        "--project",
+        "-p",
         default="OpenThoughts-Agent",
         help="W&B project (default: OpenThoughts-Agent)",
     )

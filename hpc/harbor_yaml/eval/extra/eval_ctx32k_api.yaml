@@ -1,4 +1,3 @@
-# Harbor job configuration for API evaluation trace generation.
 
 job_name: api-eval-trace-job
 jobs_dir: trace_jobs
@@ -53,12 +52,6 @@ verifier:
   override_timeout_sec: 1800
   max_timeout_sec: 900
   disable: false
-
-metrics:
-  - type: mean-drop-ei
-    kwargs: {}
-  - type: accuracy-drop-ei
-    kwargs: {}
 
 agents:
 - name: terminus-2

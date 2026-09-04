@@ -98,6 +98,7 @@ Expected outcome (whole-dataset, post-v4):
     bucket (genuine model-capability misses, not patcher-fixable) and
     a thin tail of build/runtime issues. Solve rate target: > 30%.
 """
+
 from __future__ import annotations
 
 import argparse

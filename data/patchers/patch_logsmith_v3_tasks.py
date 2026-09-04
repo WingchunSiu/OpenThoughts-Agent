@@ -180,7 +180,10 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict:
     """Patch a single task. Returns ``{"status": ..., "reason": ...}``."""
     dockerfile = task_dir / "environment" / "Dockerfile"
     if not dockerfile.exists():
-        return {"status": "skipped_no_dockerfile", "reason": "no environment/Dockerfile"}
+        return {
+            "status": "skipped_no_dockerfile",
+            "reason": "no environment/Dockerfile",
+        }
 
     seed_data = task_dir / "setup_files" / "data"
     if not seed_data.is_dir():
@@ -241,7 +244,9 @@ def main() -> None:
     if not root.is_dir():
         raise SystemExit(f"[patcher] --root not a directory: {root}")
 
-    task_dirs = sorted(p for p in root.iterdir() if p.is_dir() and (p / "environment").exists())
+    task_dirs = sorted(
+        p for p in root.iterdir() if p.is_dir() and (p / "environment").exists()
+    )
     if args.limit is not None:
         task_dirs = task_dirs[: args.limit]
 
@@ -273,14 +278,19 @@ def main() -> None:
     # collision — should be 1 after a successful v3 patch).
     if not args.dry_run:
         import hashlib
+
         hashes: set[str] = set()
         for td in task_dirs:
             dfp = td / "environment" / "Dockerfile"
             if dfp.exists():
                 hashes.add(hashlib.sha256(dfp.read_bytes()).hexdigest())
-        print(f"\n[patcher] Unique Dockerfile hashes across {len(task_dirs)} tasks: {len(hashes)}")
+        print(
+            f"\n[patcher] Unique Dockerfile hashes across {len(task_dirs)} tasks: {len(hashes)}"
+        )
         if len(hashes) != 1:
-            print("[patcher] WARNING: more than one unique Dockerfile — snapshot cap may be at risk")
+            print(
+                "[patcher] WARNING: more than one unique Dockerfile — snapshot cap may be at risk"
+            )
 
     print(f"\n[patcher] Root: {root}")
 

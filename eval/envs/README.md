@@ -5,13 +5,15 @@ models can't be loaded by the same `transformers` line as the
 default agent runtime — see [otagent-fix vs otagent2-fix](#which-env-when)
 below.
 
+> `EVAL_GUIDE §N` references below point into [`docs/EVAL_GUIDE.md`](../../docs/EVAL_GUIDE.md).
+
 ## Files
 
 - [`otagent-fix.yml`](otagent-fix.yml) — primary env (transformers 4.x).
 - [`otagent2-fix.yml`](otagent2-fix.yml) — axolotl/Qwen3.5 + Pattern C
   reasoning-parser-plugin env (transformers 5.x, vLLM 0.17.x).
 
-Both envs install [harbor](https://github.com/harbor-framework/harbor)
+Both envs install [harbor](https://github.com/marin-community/harbor)
 **editable** from the same checkout. The exact commit matters — see
 the next section.
 
@@ -22,7 +24,7 @@ isn't (yet) merged to upstream `main`. Pin your harbor checkout to a
 state that includes them:
 
 ```bash
-git clone https://github.com/harbor-framework/harbor.git ~/harbor-fix
+git clone https://github.com/marin-community/harbor.git ~/harbor-fix
 git -C ~/harbor-fix checkout penfever/temp-override
 git -C ~/harbor-fix checkout 9980f967    # Daytona connection-pool fix (PR #1460)
 ```
@@ -80,12 +82,12 @@ If you don't run installed-agent fires, you don't need these patches.
 
 | Env | Use for |
 |---|---|
-| **`otagent-fix`** (transformers 4.x) | Default for everything. Terminus-2 reg eval, OOD presets, swe-agent / openhands text-tools / mini-swe-agent / aider installed-agent fires. Most baseline-yaml entries default to this env. |
+| **`otagent-fix`** (transformers 4.x) | Default for everything. Terminus-2 reg eval, OOD presets, swe-agent / openhands text-tools / mini-swe-agent / aider installed-agent fires. Most registry entries default to this env. |
 | **`otagent2-fix`** (transformers 5.x) | Models that don't load on transformers 4.x: axolotl-trained Qwen3 finetunes (the `extra_special_tokens` list crash), Qwen3.5 family. Also required for Pattern C scaffolds that use `--reasoning-parser-plugin` (Nemotron-Nano, Qwen3-Coder native) — needs vLLM ≥ 0.17. |
 
-Per-model env selection lives in
-[`../configs/baseline_model_configs_minimal.yaml`](../configs/baseline_model_configs_minimal.yaml)
-under each model's `conda_env:` field. The listener reads it and sets
+Per-model env selection lives in the shared registry
+[`../configs/model_configs.yaml`](../configs/model_configs.yaml)
+(the default resolution path) under each model's `conda_env:` field. The listener reads it and sets
 `PYTHON_BIN` for the sbatch from your cluster config's
 `conda_envs:` map.
 

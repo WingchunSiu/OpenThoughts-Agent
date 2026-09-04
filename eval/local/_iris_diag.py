@@ -3,7 +3,12 @@
 Run via the iris launcher in place of run_eval.py to dump the worker's
 view of sys.path, site-packages contents, and pydantic's import spec.
 """
-import sys, os, importlib.util, pathlib, traceback
+
+import sys
+import os
+import importlib.util
+import pathlib
+import traceback
 
 
 def banner(s):
@@ -11,8 +16,14 @@ def banner(s):
 
 
 banner("env (selected)")
-for k in ("PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
-          "UV_LINK_MODE", "UV_NO_EDITABLE", "PWD"):
+for k in (
+    "PYTHONPATH",
+    "VIRTUAL_ENV",
+    "UV_PROJECT_ENVIRONMENT",
+    "UV_LINK_MODE",
+    "UV_NO_EDITABLE",
+    "PWD",
+):
     print(f"  {k}={os.environ.get(k)!r}", flush=True)
 
 banner("sys.path")
@@ -80,7 +91,9 @@ if sp.is_dir():
     print("  -- all .pth files in site-packages --", flush=True)
     for f in sorted(sp.glob("*.pth")):
         try:
-            print(" ", f.name, "->", f.read_text()[:400].replace("\n", " | "), flush=True)
+            print(
+                " ", f.name, "->", f.read_text()[:400].replace("\n", " | "), flush=True
+            )
         except Exception as e:
             print(" ", f.name, "read err:", e, flush=True)
 
@@ -94,16 +107,21 @@ banner("importlib spec for pydantic")
 spec = importlib.util.find_spec("pydantic")
 print("  spec:", spec, flush=True)
 print("  spec.origin:", getattr(spec, "origin", None), flush=True)
-print("  spec.submodule_search_locations:",
-      getattr(spec, "submodule_search_locations", None), flush=True)
+print(
+    "  spec.submodule_search_locations:",
+    getattr(spec, "submodule_search_locations", None),
+    flush=True,
+)
 print("  spec.loader:", getattr(spec, "loader", None), flush=True)
 
 banner("try import")
 try:
     import pydantic
+
     print("  pydantic.__file__:", getattr(pydantic, "__file__", None), flush=True)
     print("  pydantic.__path__:", getattr(pydantic, "__path__", None), flush=True)
     from pydantic import BaseModel
+
     print("  BaseModel:", BaseModel, flush=True)
     print("  PYDANTIC IMPORT OK", flush=True)
 except Exception as e:

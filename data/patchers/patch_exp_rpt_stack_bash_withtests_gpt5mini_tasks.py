@@ -54,6 +54,7 @@ verifier signal is the success criterion, not solve rate.
 
 CLI: --root <dir> [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -99,12 +100,22 @@ DISPATCH_RE = re.compile(
 )
 
 USAGE_NOISE = {
-    "$0", "\\$0", "$@", "\\$@",
-    "[options]", "[OPTIONS]",
-    "[flags]", "[FLAGS]",
-    "[args]", "[ARGS]",
-    "[--help]", "[-h]", "-h", "--help",
-    "[options...]", "[arguments...]",
+    "$0",
+    "\\$0",
+    "$@",
+    "\\$@",
+    "[options]",
+    "[OPTIONS]",
+    "[flags]",
+    "[FLAGS]",
+    "[args]",
+    "[ARGS]",
+    "[--help]",
+    "[-h]",
+    "-h",
+    "--help",
+    "[options...]",
+    "[arguments...]",
 }
 
 
@@ -265,7 +276,7 @@ def patch_test_sh(text: str) -> tuple[str, bool, bool]:
             return (
                 f"{indent}# laion v2 (gpt5mini): inject default positional args parsed\n"
                 f"{indent}# from the script's Usage: line so run_verifier doesn't abort\n"
-                f"{indent}# on `[ -z \"$1\" ]` before reward.txt is written.\n"
+                f'{indent}# on `[ -z "$1" ]` before reward.txt is written.\n'
                 f"{indent}if run_verifier {quoted}; then"
             )
 
@@ -276,7 +287,7 @@ def patch_test_sh(text: str) -> tuple[str, bool, bool]:
 
     m = SHEBANG_RE.match(new_text)
     if m:
-        new_text = m.group(1) + REWARD_FLOOR + new_text[m.end():]
+        new_text = m.group(1) + REWARD_FLOOR + new_text[m.end() :]
     else:
         new_text = "#!/bin/bash\n" + REWARD_FLOOR + new_text
 

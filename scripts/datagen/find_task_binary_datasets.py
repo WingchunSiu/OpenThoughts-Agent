@@ -7,7 +7,6 @@ Usage:
 """
 
 import json
-import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -83,13 +82,15 @@ def main():
         result = has_task_binary(ds_id)
         status = "✓" if result else ("?" if result is None else "·")
         if (i + 1) % 50 == 0 or result or result is None:
-            print(f"  [{i+1}/{len(datasets)}] {status} {ds_id}")
+            print(f"  [{i + 1}/{len(datasets)}] {status} {ds_id}")
         if result is True:
             found.append(ds_id)
         elif result is None:
             failed.append(ds_id)
 
-    print(f"\nDone. {len(found)} datasets with task_binary, {len(failed)} failed to check.")
+    print(
+        f"\nDone. {len(found)} datasets with task_binary, {len(failed)} failed to check."
+    )
 
     # Write results
     lines = [
@@ -102,7 +103,9 @@ def main():
 
     if failed:
         lines.append(f"\n## Could Not Verify ({len(failed)})\n\n")
-        lines.append("These datasets returned errors from the first-rows API (pending processing, private, etc.):\n\n")
+        lines.append(
+            "These datasets returned errors from the first-rows API (pending processing, private, etc.):\n\n"
+        )
         for ds in failed:
             lines.append(f"- {ds}\n")
 

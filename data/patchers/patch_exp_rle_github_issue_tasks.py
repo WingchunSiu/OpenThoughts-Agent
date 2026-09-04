@@ -119,16 +119,18 @@ from pathlib import Path
 
 STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+    }
+)
 
 WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
     "requests": ("requests",),
@@ -161,9 +163,7 @@ WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 
 PIP_WHITELIST: frozenset[str] = frozenset(
-    name
-    for imports in WHITELIST_PIP_TO_IMPORTS.values()
-    for name in imports
+    name for imports in WHITELIST_PIP_TO_IMPORTS.values() for name in imports
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
@@ -178,55 +178,74 @@ MARKER_NAME = ".patcher_marker_exp_rle_github_issue_v3"
 # attribute access ``a.b.c`` at module level), the task is dropped. Built from
 # the 7%-solve trace re-triage (2026-05-15).
 # ---------------------------------------------------------------------------
-KNOWN_BROKEN_SUB_ATTRS: frozenset[str] = frozenset({
-    # pandas — removed in pandas >= 2.x
-    "pandas.compat.lrange",
-    "pandas.compat.PY37",
-    "pandas.compat.np_datetime64_compat",
-    "pandas.compat.np_version_under1p19",
-    "pandas.util.testing",
-    "pandas._np_version_under1p14",
-    "pandas.Float64Index",
-    "pandas.Int64Index",
-    "pandas.UInt64Index",
-    "pandas.core.base.SpecificationError",
-    "pandas.core.groupby.groupby.SpecificationError",
-    "pandas.core.arrays.PandasArray",
-    "pandas.core.indexing.maybe_numeric_slice",
-    "pandas.core.algorithms.quantile",
-    "pandas.tests.io.pytables.common._maybe_remove",
-    "pandas.tests.arrays.categorical.common",
-    "pandas.tests.extension.base.BaseNoReduceTests",
-    "pandas.util._test_decorators.skip_if_np_lt",
-    "pandas.util._test_decorators.skip_if_no_ne",
-    "pandas.util._test_decorators.skip_if_no_scipy",
-    # pydantic v1 APIs removed in v2
-    "pydantic.datetime_parse",
-    "pydantic.NoneBytes",
-    # sklearn — internal/removed APIs
-    "sklearn.utils._IS_32BIT",
-    "sklearn.utils._testing.assert_warns_message",
-    "sklearn.ensemble._weight_boosting._samme_proba",
-    # scipy
-    "scipy.spatial.distance.kulsinski",
-    # httpx — removed/renamed
-    "httpx.HTTPProxy",
-})
+KNOWN_BROKEN_SUB_ATTRS: frozenset[str] = frozenset(
+    {
+        # pandas — removed in pandas >= 2.x
+        "pandas.compat.lrange",
+        "pandas.compat.PY37",
+        "pandas.compat.np_datetime64_compat",
+        "pandas.compat.np_version_under1p19",
+        "pandas.util.testing",
+        "pandas._np_version_under1p14",
+        "pandas.Float64Index",
+        "pandas.Int64Index",
+        "pandas.UInt64Index",
+        "pandas.core.base.SpecificationError",
+        "pandas.core.groupby.groupby.SpecificationError",
+        "pandas.core.arrays.PandasArray",
+        "pandas.core.indexing.maybe_numeric_slice",
+        "pandas.core.algorithms.quantile",
+        "pandas.tests.io.pytables.common._maybe_remove",
+        "pandas.tests.arrays.categorical.common",
+        "pandas.tests.extension.base.BaseNoReduceTests",
+        "pandas.util._test_decorators.skip_if_np_lt",
+        "pandas.util._test_decorators.skip_if_no_ne",
+        "pandas.util._test_decorators.skip_if_no_scipy",
+        # pydantic v1 APIs removed in v2
+        "pydantic.datetime_parse",
+        "pydantic.NoneBytes",
+        # sklearn — internal/removed APIs
+        "sklearn.utils._IS_32BIT",
+        "sklearn.utils._testing.assert_warns_message",
+        "sklearn.ensemble._weight_boosting._samme_proba",
+        # scipy
+        "scipy.spatial.distance.kulsinski",
+        # httpx — removed/renamed
+        "httpx.HTTPProxy",
+    }
+)
 
 # Top-level packages that are STDLIB-shaped but NOT in sys.stdlib_module_names
 # on every Python version. Also the standard pytest-provided fixtures whose
 # names appear as fn arguments without a local @pytest.fixture definition.
-STANDARD_PYTEST_FIXTURES: frozenset[str] = frozenset({
-    "request", "tmp_path", "tmp_path_factory", "tmpdir", "tmpdir_factory",
-    "capsys", "capsysbinary", "capfd", "capfdbinary", "caplog",
-    "monkeypatch", "recwarn", "doctest_namespace", "pytestconfig",
-    "record_property", "record_xml_attribute", "record_testsuite_property",
-    "cache", "mocker",  # mocker is from pytest-mock (in whitelist)
-    "requests_mock",    # from requests-mock (in whitelist)
-    "faker",            # from faker (in whitelist)
-    "anyio_backend",    # from anyio
-    "self", "cls",
-})
+STANDARD_PYTEST_FIXTURES: frozenset[str] = frozenset(
+    {
+        "request",
+        "tmp_path",
+        "tmp_path_factory",
+        "tmpdir",
+        "tmpdir_factory",
+        "capsys",
+        "capsysbinary",
+        "capfd",
+        "capfdbinary",
+        "caplog",
+        "monkeypatch",
+        "recwarn",
+        "doctest_namespace",
+        "pytestconfig",
+        "record_property",
+        "record_xml_attribute",
+        "record_testsuite_property",
+        "cache",
+        "mocker",  # mocker is from pytest-mock (in whitelist)
+        "requests_mock",  # from requests-mock (in whitelist)
+        "faker",  # from faker (in whitelist)
+        "anyio_backend",  # from anyio
+        "self",
+        "cls",
+    }
+)
 
 # Names that are NOT fixtures even though they appear as fn args (these are
 # parametrize values, lambdas via @pytest.fixture(params=...) elsewhere, etc.).
@@ -237,6 +256,7 @@ STANDARD_PYTEST_FIXTURES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _top_level_imports(tree: ast.AST) -> set[str]:
     """Return top-level package names imported by an AST module."""
@@ -331,14 +351,18 @@ def _all_tests_skipped(tree: ast.Module) -> bool:
         return any(_is_skip_decorator(d) for d in fn.decorator_list)
 
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _func_is_test(node, False):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _func_is_test(
+            node, False
+        ):
             test_count += 1
             if _is_skipped(node):
                 skipped_count += 1
         elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             class_skipped = any(_is_skip_decorator(d) for d in node.decorator_list)
             for sub in node.body:
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and _func_is_test(sub, True):
+                if isinstance(
+                    sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and _func_is_test(sub, True):
                     test_count += 1
                     if class_skipped or _is_skipped(sub):
                         skipped_count += 1
@@ -351,6 +375,7 @@ def _all_tests_skipped(tree: ast.Module) -> bool:
 # ---------------------------------------------------------------------------
 # v3 helpers
 # ---------------------------------------------------------------------------
+
 
 def _from_import_dotted_paths(tree: ast.Module) -> set[str]:
     """Return the set of fully-dotted import targets in ``from X import Y``.
@@ -465,7 +490,11 @@ def _module_level_chdir_or_env(tree: ast.Module, instr_tokens: set[str]) -> str 
                 and isinstance(f.value, ast.Name)
                 and f.value.id == "os"
             ):
-                if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if (
+                    node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
                     target = node.args[0].value
                     # If the literal is "tests" or some absolute path not in instr,
                     # drop.
@@ -512,7 +541,9 @@ def _from_tests_import(tree: ast.Module) -> bool:
         if isinstance(node, ast.ImportFrom):
             if node.level and node.level > 0:
                 continue
-            if node.module == "tests" or (node.module and node.module.startswith("tests.")):
+            if node.module == "tests" or (
+                node.module and node.module.startswith("tests.")
+            ):
                 return True
     return False
 
@@ -536,7 +567,12 @@ def _local_fixtures(tree: ast.Module) -> set[str]:
         if isinstance(cur, ast.Name):
             parts.append(cur.id)
         dotted = ".".join(reversed(parts))
-        return dotted.endswith("pytest.fixture") or dotted == "fixture" or dotted.endswith("pytest.yield_fixture") or dotted == "yield_fixture"
+        return (
+            dotted.endswith("pytest.fixture")
+            or dotted == "fixture"
+            or dotted.endswith("pytest.yield_fixture")
+            or dotted == "yield_fixture"
+        )
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -599,7 +635,9 @@ def _looks_like_real_test(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return True
 
 
-def _missing_fixtures(tree: ast.Module, has_conftest: bool, instr_tokens: set[str]) -> list[str]:
+def _missing_fixtures(
+    tree: ast.Module, has_conftest: bool, instr_tokens: set[str]
+) -> list[str]:
     """Detect test function parameters that look like external fixtures with
     no local @pytest.fixture and no conftest.py.
 
@@ -627,11 +665,16 @@ def _missing_fixtures(tree: ast.Module, has_conftest: bool, instr_tokens: set[st
                     fn_parametrize = _parametrize_arg_names(sub.decorator_list)
                     args = [a.arg for a in sub.args.args]
                     for a in args:
-                        if a in {"self", "cls"}: continue
-                        if a in STANDARD_PYTEST_FIXTURES: continue
-                        if a in local_fixtures: continue
-                        if a in class_parametrize or a in fn_parametrize: continue
-                        if a.lower() in instr_tokens: continue
+                        if a in {"self", "cls"}:
+                            continue  # noqa: E701
+                        if a in STANDARD_PYTEST_FIXTURES:
+                            continue  # noqa: E701
+                        if a in local_fixtures:
+                            continue  # noqa: E701
+                        if a in class_parametrize or a in fn_parametrize:
+                            continue  # noqa: E701
+                        if a.lower() in instr_tokens:
+                            continue  # noqa: E701
                         unknown.add(a)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node not in tree.body:
@@ -643,11 +686,16 @@ def _missing_fixtures(tree: ast.Module, has_conftest: bool, instr_tokens: set[st
             fn_parametrize = _parametrize_arg_names(node.decorator_list)
             args = [a.arg for a in node.args.args]
             for a in args:
-                if a in {"self", "cls"}: continue
-                if a in STANDARD_PYTEST_FIXTURES: continue
-                if a in local_fixtures: continue
-                if a in fn_parametrize: continue
-                if a.lower() in instr_tokens: continue
+                if a in {"self", "cls"}:
+                    continue  # noqa: E701
+                if a in STANDARD_PYTEST_FIXTURES:
+                    continue  # noqa: E701
+                if a in local_fixtures:
+                    continue  # noqa: E701
+                if a in fn_parametrize:
+                    continue  # noqa: E701
+                if a.lower() in instr_tokens:
+                    continue  # noqa: E701
                 unknown.add(a)
     return sorted(unknown)
 
@@ -669,18 +717,28 @@ def evaluate_task(task_dir: Path) -> dict:
 
     try:
         with tempfile.NamedTemporaryFile(suffix=".pyc", delete=True) as tmp:
-            py_compile.compile(
-                str(test_file), cfile=tmp.name, doraise=True
-            )
+            py_compile.compile(str(test_file), cfile=tmp.name, doraise=True)
     except py_compile.PyCompileError as exc:
-        return {"kept": False, "reason": f"syntax_error: {exc.msg.splitlines()[0][:80]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"syntax_error: {exc.msg.splitlines()[0][:80]}",
+            "bad_imports": [],
+        }
     except Exception as exc:
-        return {"kept": False, "reason": f"compile_error: {type(exc).__name__}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"compile_error: {type(exc).__name__}",
+            "bad_imports": [],
+        }
 
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8", errors="replace"))
     except SyntaxError as exc:
-        return {"kept": False, "reason": f"ast_syntax: {exc.msg[:60]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"ast_syntax: {exc.msg[:60]}",
+            "bad_imports": [],
+        }
 
     imports = _top_level_imports(tree)
     instr_tokens: set[str] = set()
@@ -730,7 +788,11 @@ def evaluate_task(task_dir: Path) -> dict:
         return {"kept": False, "reason": mlchdir, "bad_imports": []}
 
     # (e) missing fixtures referenced as fn args (and no conftest.py shipped)
-    has_conftest = any((task_dir / "tests").rglob("conftest.py")) if (task_dir / "tests").exists() else False
+    has_conftest = (
+        any((task_dir / "tests").rglob("conftest.py"))
+        if (task_dir / "tests").exists()
+        else False
+    )
     missing_fix = _missing_fixtures(tree, has_conftest, instr_tokens)
     if missing_fix:
         return {"kept": False, "reason": "missing_fixtures", "bad_imports": missing_fix}
@@ -742,22 +804,40 @@ def evaluate_task(task_dir: Path) -> dict:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import samples.")
-    p.add_argument("--force", action="store_true",
-                   help="Re-run even if marker file is present.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad", type=int, default=20, help="Print the first N bad-import samples."
+    )
+    p.add_argument(
+        "--force", action="store_true", help="Re-run even if marker file is present."
+    )
     return p.parse_args()
 
 
@@ -769,14 +849,18 @@ def main() -> None:
 
     marker = root / MARKER_NAME
     if marker.exists() and not args.force and not args.dry_run:
-        print(f"[patch_exp_rle_github_issue] marker present at {marker}; skipping (use --force to override)")
+        print(
+            f"[patch_exp_rle_github_issue] marker present at {marker}; skipping (use --force to override)"
+        )
         return
 
     task_dirs = sorted(d for d in root.iterdir() if d.is_dir())
     if args.limit:
         task_dirs = task_dirs[: args.limit]
 
-    print(f"[patch_exp_rle_github_issue] inspecting {len(task_dirs)} tasks under {root}")
+    print(
+        f"[patch_exp_rle_github_issue] inspecting {len(task_dirs)} tasks under {root}"
+    )
 
     syntax_dropped = 0
     no_test_dropped = 0
@@ -802,7 +886,11 @@ def main() -> None:
         r = v["reason"]
         if r == "no_test_file":
             no_test_dropped += 1
-        elif r.startswith("syntax_error") or r.startswith("ast_syntax") or r.startswith("compile_error"):
+        elif (
+            r.startswith("syntax_error")
+            or r.startswith("ast_syntax")
+            or r.startswith("compile_error")
+        ):
             syntax_dropped += 1
         elif r == "missing_import":
             import_dropped += 1
@@ -818,7 +906,11 @@ def main() -> None:
                 bad_import_samples.append((td.name, v["bad_imports"]))
         elif r == "module_importorskip":
             importorskip_dropped += 1
-        elif r.startswith("module_chdir") or r.startswith("module_env") or r.startswith("module_ctypes_cdll"):
+        elif (
+            r.startswith("module_chdir")
+            or r.startswith("module_env")
+            or r.startswith("module_ctypes_cdll")
+        ):
             chdir_env_dropped += 1
         elif r == "missing_fixtures":
             missing_fix_dropped += 1
@@ -841,13 +933,17 @@ def main() -> None:
 
     if bad_import_samples:
         print()
-        print(f"[patch_exp_rle_github_issue] sample bad-import drops (first {len(bad_import_samples)}):")
+        print(
+            f"[patch_exp_rle_github_issue] sample bad-import drops (first {len(bad_import_samples)}):"
+        )
         for tid, bad in bad_import_samples:
             print(f"  {tid}: {bad}")
 
     if args.report_json:
         args.report_json.write_text(json.dumps(verdicts, indent=2))
-        print(f"[patch_exp_rle_github_issue] wrote per-task verdicts: {args.report_json}")
+        print(
+            f"[patch_exp_rle_github_issue] wrote per-task verdicts: {args.report_json}"
+        )
 
     if args.dry_run:
         print("[patch_exp_rle_github_issue] dry-run: not deleting dropped tasks.")
@@ -863,19 +959,24 @@ def main() -> None:
             removed += 1
     print(f"[patch_exp_rle_github_issue] removed {removed} dropped task directories.")
 
-    marker.write_text(json.dumps({
-        "kept": kept,
-        "total": total,
-        "no_test": no_test_dropped,
-        "syntax": syntax_dropped,
-        "missing_import": import_dropped,
-        "all_skipped": skip_dropped,
-        "from_tests_import": from_tests_dropped,
-        "broken_subattr": broken_subattr_dropped,
-        "module_importorskip": importorskip_dropped,
-        "module_chdir_env_cdll": chdir_env_dropped,
-        "missing_fixtures": missing_fix_dropped,
-    }, indent=2))
+    marker.write_text(
+        json.dumps(
+            {
+                "kept": kept,
+                "total": total,
+                "no_test": no_test_dropped,
+                "syntax": syntax_dropped,
+                "missing_import": import_dropped,
+                "all_skipped": skip_dropped,
+                "from_tests_import": from_tests_dropped,
+                "broken_subattr": broken_subattr_dropped,
+                "module_importorskip": importorskip_dropped,
+                "module_chdir_env_cdll": chdir_env_dropped,
+                "missing_fixtures": missing_fix_dropped,
+            },
+            indent=2,
+        )
+    )
     print(f"[patch_exp_rle_github_issue] wrote idempotency marker: {marker}")
 
 

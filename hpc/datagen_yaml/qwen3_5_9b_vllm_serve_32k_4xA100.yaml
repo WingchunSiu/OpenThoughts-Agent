@@ -1,8 +1,3 @@
-# Qwen3.5-9B serving config — 32K context, TP=1 DP=4 on 4x A100/GH200
-# https://huggingface.co/Qwen/Qwen3.5-9B
-#
-# Requires: vLLM with Qwen3.5 support (trust_remote_code + --language-model-only)
-#
 engine:
   type: vllm_local
   model: Qwen/Qwen3.5-9B

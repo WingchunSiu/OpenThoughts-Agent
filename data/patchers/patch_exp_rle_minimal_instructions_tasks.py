@@ -77,16 +77,18 @@ from pathlib import Path
 
 STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+    }
+)
 
 WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
     "requests": ("requests",),
@@ -119,9 +121,7 @@ WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 
 PIP_WHITELIST: frozenset[str] = frozenset(
-    name
-    for imports in WHITELIST_PIP_TO_IMPORTS.values()
-    for name in imports
+    name for imports in WHITELIST_PIP_TO_IMPORTS.values() for name in imports
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
@@ -132,6 +132,7 @@ MARKER_NAME = ".patched_exp_rle_minimal_instructions"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _top_level_imports(tree: ast.AST) -> set[str]:
     """Top-level package names imported by an AST module.
@@ -183,7 +184,11 @@ def evaluate_task(task_dir: Path) -> dict:
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8", errors="replace"))
     except SyntaxError as exc:
-        return {"kept": False, "reason": f"ast_syntax: {exc.msg[:60]}", "bad_imports": []}
+        return {
+            "kept": False,
+            "reason": f"ast_syntax: {exc.msg[:60]}",
+            "bad_imports": [],
+        }
 
     imports = _top_level_imports(tree)
 
@@ -214,6 +219,7 @@ def evaluate_task(task_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -332,7 +338,9 @@ def main() -> None:
         )
 
     if args.dry_run:
-        print("[patch_exp_rle_minimal_instructions] dry-run: not deleting dropped tasks.")
+        print(
+            "[patch_exp_rle_minimal_instructions] dry-run: not deleting dropped tasks."
+        )
         return
 
     removed = 0

@@ -33,11 +33,13 @@ import os
 import signal
 import sys
 import time
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 import httpx
 from datasets import Dataset, load_dataset
+
+from data.conversation_utils import extract_system_prompt as build_system_prompt
+from data.conversation_utils import extract_user_prompt as extract_prompt
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,33 +59,9 @@ def _handle_signal(signum, frame):
 
 
 # ---------------------------------------------------------------------------
-# Prompt extraction (same as curator_datagen.py)
-# ---------------------------------------------------------------------------
-
-def extract_prompt(conversations: List[Dict[str, str]]) -> str:
-    for msg in conversations:
-        role = msg.get("from") or msg.get("role", "")
-        content = msg.get("value") or msg.get("content", "")
-        if role in ("human", "user"):
-            return content
-    if conversations:
-        msg = conversations[-1]
-        return msg.get("value") or msg.get("content", "")
-    return ""
-
-
-def build_system_prompt(conversations: List[Dict[str, str]]) -> Optional[str]:
-    for msg in conversations:
-        role = msg.get("from") or msg.get("role", "")
-        content = msg.get("value") or msg.get("content", "")
-        if role == "system":
-            return content
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
+
 
 def load_completed_ids(jsonl_path: str) -> set:
     """Load IDs of already-completed prompts from checkpoint JSONL."""
@@ -126,6 +104,7 @@ def save_parquet_checkpoint(jsonl_path: str, out_dir: str, count: int):
 # ---------------------------------------------------------------------------
 # Async completion worker
 # ---------------------------------------------------------------------------
+
 
 async def process_one(
     client: httpx.AsyncClient,
@@ -216,7 +195,9 @@ async def process_one(
                     )
                     await asyncio.sleep(wait)
                 else:
-                    log.error(f"Giving up on {row['_original_id']} after {max_retries} timeouts")
+                    log.error(
+                        f"Giving up on {row['_original_id']} after {max_retries} timeouts"
+                    )
                     stats["failed"] += 1
                     return None
 
@@ -254,7 +235,9 @@ async def process_one(
                 stats["errors"] += 1
                 if retries <= max_retries:
                     wait = min(30, 5 * retries)
-                    log.warning(f"Error for {row['_original_id']}: {e}, retrying in {wait}s")
+                    log.warning(
+                        f"Error for {row['_original_id']}: {e}, retrying in {wait}s"
+                    )
                     await asyncio.sleep(wait)
                 else:
                     log.error(f"Giving up on {row['_original_id']}: {e}")
@@ -267,6 +250,7 @@ async def process_one(
 # ---------------------------------------------------------------------------
 # Progress reporter
 # ---------------------------------------------------------------------------
+
 
 async def progress_reporter(stats: dict, total: int, interval: float = 30.0):
     """Periodically log progress stats."""
@@ -291,6 +275,7 @@ async def progress_reporter(stats: dict, total: int, interval: float = 30.0):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 async def run(args):
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -320,7 +305,9 @@ async def run(args):
         total = len(ds)
         indices = list(range(args.shard_index, total, args.num_shards))
         ds = ds.select(indices)
-        log.info(f"Shard {args.shard_index}/{args.num_shards}: {len(ds)} rows (of {total})")
+        log.info(
+            f"Shard {args.shard_index}/{args.num_shards}: {len(ds)} rows (of {total})"
+        )
 
     # -----------------------------------------------------------------------
     # Extract prompts
@@ -332,14 +319,16 @@ async def run(args):
         user_prompt = extract_prompt(convs)
         if not user_prompt:
             continue
-        input_rows.append({
-            "source": row.get("source", ""),
-            "domain": row.get("domain", ""),
-            "difficulty": row.get("difficulty", None),
-            "_original_id": str(idx),
-            "_user_prompt": user_prompt,
-            "_system_prompt": build_system_prompt(convs),
-        })
+        input_rows.append(
+            {
+                "source": row.get("source", ""),
+                "domain": row.get("domain", ""),
+                "difficulty": row.get("difficulty", None),
+                "_original_id": str(idx),
+                "_user_prompt": user_prompt,
+                "_system_prompt": build_system_prompt(convs),
+            }
+        )
     log.info(f"Extracted {len(input_rows)} prompts")
     if not input_rows:
         log.error("No prompts extracted")
@@ -356,7 +345,9 @@ async def run(args):
     if completed_ids:
         original_count = len(input_rows)
         input_rows = [r for r in input_rows if r["_original_id"] not in completed_ids]
-        log.info(f"Resume: {len(completed_ids)} done, {len(input_rows)} remaining (of {original_count})")
+        log.info(
+            f"Resume: {len(completed_ids)} done, {len(input_rows)} remaining (of {original_count})"
+        )
 
     if not input_rows:
         log.info("All prompts already completed!")
@@ -394,10 +385,13 @@ async def run(args):
     t0 = time.time()
     last_checkpoint = 0
 
-    async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(
-        max_connections=args.max_concurrent + 10,
-        max_keepalive_connections=args.max_concurrent,
-    )) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        limits=httpx.Limits(
+            max_connections=args.max_concurrent + 10,
+            max_keepalive_connections=args.max_concurrent,
+        ),
+    ) as client:
         # Start progress reporter
         reporter = asyncio.create_task(progress_reporter(stats, total))
 
@@ -413,8 +407,16 @@ async def run(args):
 
             tasks = [
                 process_one(
-                    client, sem, args.base_url, args.api_key, args.model,
-                    row, params, jsonl_path, jsonl_lock, stats,
+                    client,
+                    sem,
+                    args.base_url,
+                    args.api_key,
+                    args.model,
+                    row,
+                    params,
+                    jsonl_path,
+                    jsonl_lock,
+                    stats,
                 )
                 for row in chunk
             ]
@@ -438,7 +440,9 @@ async def run(args):
                         if rows_list:
                             push_ds = Dataset.from_list(rows_list)
                             push_ds.push_to_hub(args.output_repo, private=False)
-                            log.info(f"Pushed {len(push_ds)} rows to {args.output_repo}")
+                            log.info(
+                                f"Pushed {len(push_ds)} rows to {args.output_repo}"
+                            )
                     except Exception as e:
                         log.warning(f"HF push failed: {e}")
 
@@ -467,7 +471,7 @@ async def run(args):
 
     # Summary
     print(f"\n{'=' * 60}")
-    print(f"Async Datagen Summary")
+    print("Async Datagen Summary")
     print(f"{'=' * 60}")
     print(f"Input:       {args.input_dataset}")
     print(f"Model:       {args.model}")
@@ -497,21 +501,36 @@ def main():
 
     # Model / serving
     parser.add_argument("--model", required=True)
-    parser.add_argument("--base-url", required=True, help="vLLM server URL (e.g., http://localhost:8000/v1)")
+    parser.add_argument(
+        "--base-url",
+        required=True,
+        help="vLLM server URL (e.g., http://localhost:8000/v1)",
+    )
     parser.add_argument("--api-key", default="token-placeholder")
 
     # Generation params
     parser.add_argument("--max-tokens", type=int, default=20480)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
-    parser.add_argument("--enable-thinking", action="store_true",
-                        help="Enable thinking mode (passes enable_thinking=True via extra_body)")
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        help="Enable thinking mode (passes enable_thinking=True via extra_body)",
+    )
 
     # Concurrency / timeouts
-    parser.add_argument("--max-concurrent", type=int, default=45,
-                        help="Max in-flight requests (should be <= vLLM max_num_seqs)")
-    parser.add_argument("--request-timeout", type=int, default=1200,
-                        help="Read timeout per request in seconds (default: 1200 = 20 min)")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=45,
+        help="Max in-flight requests (should be <= vLLM max_num_seqs)",
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=int,
+        default=1200,
+        help="Read timeout per request in seconds (default: 1200 = 20 min)",
+    )
 
     # Output
     parser.add_argument("--output-repo", default=None)

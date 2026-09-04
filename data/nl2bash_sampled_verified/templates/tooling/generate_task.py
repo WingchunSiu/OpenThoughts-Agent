@@ -65,7 +65,9 @@ def _copy_workspace_seed_files(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate a sandboxes task for NL2Bash")
+    parser = argparse.ArgumentParser(
+        description="Generate a sandboxes task for NL2Bash"
+    )
     parser.add_argument("--target-dir", required=True, type=Path)
     parser.add_argument("--original-nl", required=True)
     parser.add_argument("--original-bash", required=True)
@@ -77,7 +79,9 @@ def main() -> None:
 
     template_root = Path(__file__).parent / "template_task"
     if not template_root.exists():
-        template_root = (Path(__file__).resolve().parents[2] / "template_task").resolve()
+        template_root = (
+            Path(__file__).resolve().parents[2] / "template_task"
+        ).resolve()
     target_dir: Path = args.target_dir
 
     if target_dir.exists():

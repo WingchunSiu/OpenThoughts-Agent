@@ -1,4 +1,3 @@
-# Harbor eval configuration (16 concurrency, terminus-kira agent, 131k context).
 
 job_name: default-eval-job
 jobs_dir: trace_jobs
@@ -53,12 +52,6 @@ verifier:
   override_timeout_sec:
   max_timeout_sec:
   disable: false
-
-metrics:
-  - type: mean-drop-ei
-    kwargs: {}
-  - type: accuracy-drop-ei
-    kwargs: {}
 
 agents:
 - name: terminus-kira

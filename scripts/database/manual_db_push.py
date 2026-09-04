@@ -35,7 +35,9 @@ DEFAULT_TRAINING_TYPE = "SFT"
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Register a trained model with Supabase.")
+    parser = argparse.ArgumentParser(
+        description="Register a trained model with Supabase."
+    )
     parser.add_argument(
         "--hf-model-id",
         default=DEFAULT_HF_MODEL_ID,
@@ -102,7 +104,9 @@ def main() -> None:
             finished = datetime.fromisoformat(finished.replace("Z", "+00:00"))
 
         if created is None:
-            raise RuntimeError(f"W&B run {args.wandb_run} does not have created_at populated yet")
+            raise RuntimeError(
+                f"W&B run {args.wandb_run} does not have created_at populated yet"
+            )
 
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
@@ -113,7 +117,9 @@ def main() -> None:
             finished = datetime.now(timezone.utc)
 
         training_start = created.astimezone(timezone.utc).isoformat()
-        training_end = finished.astimezone(timezone.utc).isoformat() if finished else None
+        training_end = (
+            finished.astimezone(timezone.utc).isoformat() if finished else None
+        )
     else:
         now = datetime.now(timezone.utc)
         training_start = now.isoformat()
@@ -154,6 +160,7 @@ def main() -> None:
         print(f"✅ Supabase registration {status}: {model['id']} ({model['name']})")
     else:
         raise RuntimeError(f"Supabase registration failed: {result.get('error')}")
+
 
 if __name__ == "__main__":
     main()

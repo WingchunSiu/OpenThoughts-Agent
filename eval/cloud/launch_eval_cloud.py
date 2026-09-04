@@ -20,23 +20,29 @@ if str(_repo_root) not in sys.path:
 # Handle --list-providers before importing anything heavy
 if "--list-providers" in sys.argv:
     from hpc.cloud_providers import list_providers
+
     print(list_providers(verbose=True))
     sys.exit(0)
 
-import argparse
+import argparse  # noqa: E402
 
-from hpc.launch_utils import PROJECT_ROOT
-from hpc.cloud_launch_utils import CloudLauncher, repo_relative, parse_gpu_count, infer_harbor_env_from_config
-from hpc.cloud_sync_utils import sync_outputs
-from hpc.arg_groups import (
+from hpc.launch_utils import PROJECT_ROOT  # noqa: E402
+from hpc.cloud_launch_utils import (  # noqa: E402
+    CloudLauncher,
+    repo_relative,
+    parse_gpu_count,
+    infer_harbor_env_from_config,
+)
+from hpc.cloud_sync_utils import sync_outputs  # noqa: E402
+from hpc.arg_groups import (  # noqa: E402
     add_harbor_args,
     add_harbor_env_arg,
     add_model_compute_args,
     add_hf_upload_args,
     add_database_upload_args,
 )
-from hpc.harbor_utils import load_harbor_config
-from hpc.datagen_config_utils import parse_datagen_config
+from hpc.harbor_utils import load_harbor_config  # noqa: E402
+from hpc.datagen_config_utils import parse_datagen_config  # noqa: E402
 
 
 class EvalCloudLauncher(CloudLauncher):
@@ -64,23 +70,36 @@ class EvalCloudLauncher(CloudLauncher):
 
         # Harbor environment backend (unified --harbor_env, with legacy aliases)
         # Default=None to allow inference from harbor config's environment.type field
-        add_harbor_env_arg(parser, default=None, legacy_names=["--eval-env", "--eval_env"])
+        add_harbor_env_arg(
+            parser, default=None, legacy_names=["--eval-env", "--eval_env"]
+        )
 
         # Eval-specific arguments (underscore primary, kebab alias)
-        parser.add_argument("--datagen_config",
-                            help="Optional datagen config to seed defaults.")
-        parser.add_argument("--datagen-config", dest="datagen_config", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--datagen_config", help="Optional datagen config to seed defaults."
+        )
+        parser.add_argument(
+            "--datagen-config", dest="datagen_config", help=argparse.SUPPRESS
+        )
 
-        parser.add_argument("--dataset",
-                            help="Harbor dataset slug (exclusive with --dataset_path).")
-        parser.add_argument("--dataset_path",
-                            help="Path to tasks directory (exclusive with --dataset).")
-        parser.add_argument("--dataset-path", dest="dataset_path", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--dataset", help="Harbor dataset slug (exclusive with --dataset_path)."
+        )
+        parser.add_argument(
+            "--dataset_path", help="Path to tasks directory (exclusive with --dataset)."
+        )
+        parser.add_argument(
+            "--dataset-path", dest="dataset_path", help=argparse.SUPPRESS
+        )
 
         # Ray memory configuration (for cloud VMs with limited RAM)
-        parser.add_argument("--ray_object_store_gb", "--ray-object-store-gb",
-                            type=float, default=None,
-                            help="Ray object store (plasma) size in GB. Default 40GB may OOM on small VMs.")
+        parser.add_argument(
+            "--ray_object_store_gb",
+            "--ray-object-store-gb",
+            type=float,
+            default=None,
+            help="Ray object store (plasma) size in GB. Default 40GB may OOM on small VMs.",
+        )
 
         # Upload options (shared from arg_groups)
         add_hf_upload_args(parser)
@@ -96,7 +115,9 @@ class EvalCloudLauncher(CloudLauncher):
         if args.dataset and args.dataset_path:
             raise ValueError("Specify either --dataset or --dataset-path (not both).")
         if not args.dataset and not args.dataset_path:
-            raise ValueError("Must provide --dataset or --dataset-path for eval workloads.")
+            raise ValueError(
+                "Must provide --dataset or --dataset-path for eval workloads."
+            )
 
         # Infer --gpus from --accelerator if not explicitly provided
         if args.gpus is None:
@@ -110,7 +131,9 @@ class EvalCloudLauncher(CloudLauncher):
             args.dataset_path = repo_relative(args.dataset_path, self.repo_root)
 
         # Infer --harbor_env from harbor config if not provided
-        infer_harbor_env_from_config(args, args.harbor_config, log_prefix="[eval-cloud]")
+        infer_harbor_env_from_config(
+            args, args.harbor_config, log_prefix="[eval-cloud]"
+        )
 
         # Infer --agent from harbor config if not provided
         if not args.agent:
@@ -120,7 +143,9 @@ class EvalCloudLauncher(CloudLauncher):
                 inferred_agent = agents[0].get("name")
                 if inferred_agent:
                     args.agent = inferred_agent
-                    print(f"[eval-cloud] Inferred --agent={inferred_agent} from harbor config")
+                    print(
+                        f"[eval-cloud] Inferred --agent={inferred_agent} from harbor config"
+                    )
 
         # Infer --model from datagen config if not provided
         if not args.model and args.datagen_config:
@@ -128,9 +153,13 @@ class EvalCloudLauncher(CloudLauncher):
                 parsed = parse_datagen_config(args.datagen_config)
                 if parsed.model:
                     args.model = parsed.model
-                    print(f"[eval-cloud] Inferred --model={parsed.model} from datagen config")
+                    print(
+                        f"[eval-cloud] Inferred --model={parsed.model} from datagen config"
+                    )
             except Exception as e:
-                print(f"[eval-cloud] Warning: Could not parse datagen config for model: {e}")
+                print(
+                    f"[eval-cloud] Warning: Could not parse datagen config for model: {e}"
+                )
 
         # Validate required fields after inference
         if not args.model:
@@ -142,12 +171,23 @@ class EvalCloudLauncher(CloudLauncher):
                 "Must provide --agent or ensure harbor config has agents[0].name"
             )
 
+        # Resolve per-model serve config from model_config/ (single source of
+        # truth). agent_kwargs are merged + forwarded here; serve intrinsics +
+        # parallelism are applied downstream by run_eval.py on the VM (which reads
+        # the same model_config/). Explicit CLI flags always win.
+        from hpc.model_config_apply import apply_to_launcher
+
+        apply_to_launcher(args, log_prefix="[eval-cloud]")
+
     def build_task_command(self, args, remote_output_dir: str) -> List[str]:
         """Build the run_eval.py command."""
         cmd: List[str] = [
-            "python", "eval/local/run_eval.py",
-            "--harbor_config", args.harbor_config,
-            "--model", args.model,
+            "python",
+            "eval/local/run_eval.py",
+            "--harbor_config",
+            args.harbor_config,
+            "--model",
+            args.model,
         ]
 
         if args.datagen_config:
@@ -157,13 +197,20 @@ class EvalCloudLauncher(CloudLauncher):
         elif args.dataset_path:
             cmd.extend(["--dataset_path", args.dataset_path])
 
-        cmd.extend([
-            "--agent", args.agent,
-            "--n_concurrent", str(args.n_concurrent),
-            "--n_attempts", str(args.n_attempts),
-            "--gpus", str(args.gpus),
-            "--experiments_dir", remote_output_dir,
-        ])
+        cmd.extend(
+            [
+                "--agent",
+                args.agent,
+                "--n_concurrent",
+                str(args.n_concurrent),
+                "--n_attempts",
+                str(args.n_attempts),
+                "--gpus",
+                str(args.gpus),
+                "--experiments_dir",
+                remote_output_dir,
+            ]
+        )
 
         # Only pass --harbor_env if explicitly specified (otherwise infer from config)
         if args.harbor_env:
@@ -203,21 +250,30 @@ class EvalCloudLauncher(CloudLauncher):
 
         return cmd
 
-    def get_periodic_sync_paths(self, args, remote_output_dir: str, remote_workdir: str) -> List[tuple]:
+    def get_periodic_sync_paths(
+        self, args, remote_output_dir: str, remote_workdir: str
+    ) -> List[tuple]:
         """Return paths to sync periodically during job execution.
 
         Syncs logs and Harbor trace_jobs directory to track eval progress.
         """
         return [
             (f"{remote_output_dir}/logs", str(Path(args.local_sync_dir) / "logs")),
-            (f"{remote_workdir}/trace_jobs", str(Path(args.local_sync_dir) / "trace_jobs")),
+            (
+                f"{remote_workdir}/trace_jobs",
+                str(Path(args.local_sync_dir) / "trace_jobs"),
+            ),
         ]
 
-    def sync_additional_outputs(self, cluster_name: str, args, remote_workdir: str) -> None:
+    def sync_additional_outputs(
+        self, cluster_name: str, args, remote_workdir: str
+    ) -> None:
         """Sync Harbor trace_jobs directory (final sync after job completes)."""
         trace_jobs_remote = f"{remote_workdir}/trace_jobs"
         trace_jobs_local = str(Path(args.local_sync_dir) / "trace_jobs")
-        print(f"[cloud-sync] Also syncing Harbor trace_jobs from {trace_jobs_remote}...")
+        print(
+            f"[cloud-sync] Also syncing Harbor trace_jobs from {trace_jobs_remote}..."
+        )
         sync_outputs(
             cluster_name=cluster_name,
             remote_path=trace_jobs_remote,

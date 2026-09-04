@@ -105,6 +105,7 @@ Constraints:
     ``tests/TestSolution.php``, ``environment/Dockerfile``,
     ``task.toml``, etc. are preserved verbatim.
 """
+
 from __future__ import annotations
 
 import argparse

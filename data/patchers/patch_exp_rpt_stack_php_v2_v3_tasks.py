@@ -68,6 +68,7 @@ Constraints (per upload spec):
     parallel agent should apply this same template (with whatever
     marker / repo name it chooses) to that tarball.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -78,7 +79,9 @@ from pathlib import Path
 # Distinct from the prior `# --- laion exp_rpt_stack-php-v2 patch: tests_found gate ---`
 # (v2-v2 patch) and `# --- laion v3 patch: tests_found gate ---` (stack-php-large
 # v3 patch) markers so we can grep-identify which generation produced a file.
-PATCH_MARKER = "# --- laion exp_rpt_stack-php-v2 v3 patch: phpunit_xml + tests_found gate ---"
+PATCH_MARKER = (
+    "# --- laion exp_rpt_stack-php-v2 v3 patch: phpunit_xml + tests_found gate ---"
+)
 
 # Markers from earlier patch generations — we want to overwrite both of these.
 PRIOR_MARKERS = (

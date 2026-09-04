@@ -15,9 +15,10 @@ module load cuda/12.8
 module load tacc-apptainer
 
 source $SCRATCH/miniconda3/etc/profile.d/conda.sh
-conda activate $SCRATCH/miniconda3/envs/dcagent
+conda activate $SCRATCH/miniconda3/envs/otagent
 
 source $DCFT/hpc/dotenv/tacc.env
+source $SCRATCH/keys.env  # HF_TOKEN (consolidate.py requires it even when push_to_hub=false)
 export NCCL_TIMEOUT=1800  # 30 minutes
 export NCCL_IB_TIMEOUT=23  # InfiniBand timeout
 

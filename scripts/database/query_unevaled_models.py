@@ -35,7 +35,7 @@ Requires: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 
 def get_client():
@@ -44,7 +44,10 @@ def get_client():
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set", file=sys.stderr)
+        print(
+            "Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return create_client(url, key)
 
@@ -89,7 +92,12 @@ def get_evaled_model_ids(client, benchmark_family_ids: Set[str]) -> Set[str]:
     """Get all model IDs that have any sandbox_job against the benchmark family."""
     evaled = set()
     for bid in benchmark_family_ids:
-        jobs = client.table("sandbox_jobs").select("model_id,job_status").eq("benchmark_id", bid).execute()
+        jobs = (
+            client.table("sandbox_jobs")
+            .select("model_id,job_status")
+            .eq("benchmark_id", bid)
+            .execute()
+        )
         for j in jobs.data:
             # Any status counts — Finished, Started, Pending
             if j.get("model_id"):
@@ -116,7 +124,9 @@ def _build_root_size_map(models_data: list) -> Dict[str, Optional[float]]:
     by_id = {m["id"]: m for m in models_data}
     cache: Dict[str, Optional[float]] = {}
 
-    def _get_root_size(model_id: str, visited: Optional[Set[str]] = None) -> Optional[float]:
+    def _get_root_size(
+        model_id: str, visited: Optional[Set[str]] = None
+    ) -> Optional[float]:
         if model_id in cache:
             return cache[model_id]
         if visited is None:
@@ -153,7 +163,9 @@ def get_models(client, size: Optional[int] = None) -> Dict[str, str]:
     ancestor and uses the root's model_size_b. Falls back to the model's
     own size or name heuristic.
     """
-    models = client.table("models").select("id,name,model_size_b,base_model_id").execute()
+    models = (
+        client.table("models").select("id,name,model_size_b,base_model_id").execute()
+    )
 
     if size is not None:
         root_sizes = _build_root_size_map(models.data)
@@ -188,18 +200,40 @@ def get_models(client, size: Optional[int] = None) -> Dict[str, str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Query unevaled models for a benchmark family")
-    parser.add_argument("--benchmark", required=True, help="Benchmark name (e.g. dev_set_v2, terminal_bench_2)")
-    parser.add_argument("--size", type=int, default=None, help="Model size in B (e.g. 8, 32). Omit for all sizes.")
-    parser.add_argument("--exclude", action="append", default=[], help="Exclude models containing this substring (repeatable)")
-    parser.add_argument("-o", "--output", default=None, help="Write model names to file (one per line)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Show benchmark family and stats")
+    parser = argparse.ArgumentParser(
+        description="Query unevaled models for a benchmark family"
+    )
+    parser.add_argument(
+        "--benchmark",
+        required=True,
+        help="Benchmark name (e.g. dev_set_v2, terminal_bench_2)",
+    )
+    parser.add_argument(
+        "--size",
+        type=int,
+        default=None,
+        help="Model size in B (e.g. 8, 32). Omit for all sizes.",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Exclude models containing this substring (repeatable)",
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="Write model names to file (one per line)"
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Show benchmark family and stats"
+    )
     args = parser.parse_args()
 
     client = get_client()
 
     # Resolve benchmark family
-    parent_id, family_ids, family_names = resolve_benchmark_family(client, args.benchmark)
+    parent_id, family_ids, family_names = resolve_benchmark_family(
+        client, args.benchmark
+    )
     if args.verbose:
         print(f"Benchmark family for '{args.benchmark}':", file=sys.stderr)
         for fn in sorted(family_names):
@@ -208,7 +242,10 @@ def main():
     # Get models
     models = get_models(client, args.size)
     if args.verbose:
-        print(f"\nTotal {args.size or 'all'}B models in DB: {len(models)}", file=sys.stderr)
+        print(
+            f"\nTotal {args.size or 'all'}B models in DB: {len(models)}",
+            file=sys.stderr,
+        )
 
     # Get evaled model IDs
     evaled_ids = get_evaled_model_ids(client, family_ids)
@@ -221,7 +258,9 @@ def main():
 
     # Apply exclusion patterns
     for pattern in args.exclude:
-        remaining = {mid: name for mid, name in remaining.items() if pattern not in name}
+        remaining = {
+            mid: name for mid, name in remaining.items() if pattern not in name
+        }
 
     remaining_names = sorted(remaining.values())
 

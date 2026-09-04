@@ -206,10 +206,14 @@ class NeulabGenerator(BaseDataGenerator):
                 current_root = subsampled
 
         print("[3/3] Finalising dataset output")
-        final_path = finalize_dataset_output(str(current_root), getattr(args, "output_dir", None))
+        final_path = finalize_dataset_output(
+            str(current_root), getattr(args, "output_dir", None)
+        )
 
         uploaded_repo: Optional[str] = None
-        target_repo = getattr(args, "target_repo", None) or str(config.get("default_repo", ""))
+        target_repo = getattr(args, "target_repo", None) or str(
+            config.get("default_repo", "")
+        )
         if target_repo == "":
             target_repo = None
         if not getattr(args, "no_upload", False) and target_repo:

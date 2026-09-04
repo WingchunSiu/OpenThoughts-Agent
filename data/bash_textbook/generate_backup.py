@@ -5,24 +5,21 @@ Implements atomic functions following the pattern from YAML config and completio
 """
 
 import copy
-import io
-import logging
-import os
-import re
-import tempfile
 from io import BytesIO
-from typing import Dict, List, Optional
-from pathlib import Path
+from typing import List
 
 import fitz
 import requests
-from datasets import Dataset, Features, Sequence, Value
+from datasets import Dataset
 from tqdm import tqdm
 
-from data.commons import generate_tasks_from_questions, create_task_from_dockerfiles_and_questions, subsample_tasks_directory, upload_tasks_to_hf, upload_traces_to_hf
-from data.completions import generate_questions_from_text, improve_questions, validate_questions, classify_domain
+from data.commons import (
+    generate_tasks_from_questions,
+    subsample_tasks_directory,
+    upload_tasks_to_hf,
+)
+from data.completions import generate_questions_from_text
 from data.gcs_cache import gcs_cache
-from data.commons import upload_tasks_to_hf, generate_tasks_from_questions, subsample_tasks_directory
 # from scripts.harbor.run_and_export_traces import run_dataset_to_traces
 # from scripts.harbor.run_and_export_traces import run_dataset_to_traces  # Skip for initial test
 
@@ -68,7 +65,7 @@ def download_pdfs(dataset: Dataset) -> Dataset:
         headers = {}  # Add any required headers here
         try:
             response = requests.get(url, headers=headers, stream=True, timeout=30)
-            
+
             if response.status_code == 200:
                 # Get the PDF content as bytes
                 pdf_bytes = response.content
@@ -81,7 +78,7 @@ def download_pdfs(dataset: Dataset) -> Dataset:
                 }
         except Exception as e:
             print(f"Error downloading {url}: {str(e)}")
-            
+
         return {**example, "pdf_bytes": b"", "filename": filename, "success": False}
 
     # Use map to process URLs in parallel
@@ -97,11 +94,11 @@ def get_pdf_page_count(url_or_bytes):
             pdf_data = BytesIO(response.content)
         else:
             pdf_data = BytesIO(url_or_bytes)
-            
+
         pdf_document = fitz.open(stream=pdf_data, filetype="pdf")
         page_count = pdf_document.page_count
         pdf_document.close()
-        
+
         # TODO - nodes will OOM if the text is too long
         return min(page_count, 500)
     except Exception as e:
@@ -112,6 +109,7 @@ def get_pdf_page_count(url_or_bytes):
 @gcs_cache()
 def get_all_page_counts(dataset: Dataset) -> Dataset:
     """Add page count to each PDF in the dataset"""
+
     def f(x):
         try:
             if x["success"] and x["pdf_bytes"]:
@@ -129,7 +127,9 @@ def get_all_page_counts(dataset: Dataset) -> Dataset:
 
 
 @gcs_cache()
-def expand_and_extract_pages(dataset: Dataset, page_count_column: str = "page_count") -> Dataset:
+def expand_and_extract_pages(
+    dataset: Dataset, page_count_column: str = "page_count"
+) -> Dataset:
     """
     Expands a dataset by creating new rows for each page number and extracts
     individual pages from PDFs. Expects dataset to have 'pdf_bytes' column
@@ -153,10 +153,12 @@ def expand_and_extract_pages(dataset: Dataset, page_count_column: str = "page_co
                 example_copy = copy.deepcopy(example)
                 example_copy["pdf_bytes"] = "REMOVED"  # Remove to save memory
                 example_copy["page_number"] = page_num
-                
+
                 # Create new PDF with single page
                 dst_pdf = fitz.open()
-                dst_pdf.insert_pdf(src_pdf, from_page=page_num - 1, to_page=page_num - 1)
+                dst_pdf.insert_pdf(
+                    src_pdf, from_page=page_num - 1, to_page=page_num - 1
+                )
 
                 # Save to bytes
                 output_stream = BytesIO()
@@ -171,7 +173,9 @@ def expand_and_extract_pages(dataset: Dataset, page_count_column: str = "page_co
             src_pdf.close()
 
         except Exception as e:
-            print(f"Error processing PDF from {example.get('url', 'unknown URL')}: {str(e)}")
+            print(
+                f"Error processing PDF from {example.get('url', 'unknown URL')}: {str(e)}"
+            )
             continue
 
     # Create new dataset from expanded data
@@ -181,6 +185,7 @@ def expand_and_extract_pages(dataset: Dataset, page_count_column: str = "page_co
 @gcs_cache()
 def extract_text_from_page_bytes(dataset: Dataset) -> Dataset:
     """Extract text from PDF page bytes using OCR/text extraction"""
+
     def extract_text(example):
         try:
             if example.get("page_bytes"):
@@ -189,7 +194,7 @@ def extract_text_from_page_bytes(dataset: Dataset) -> Dataset:
                 page = pdf[0]  # Single page
                 text = page.get_text()
                 pdf.close()
-                
+
                 example["output_extraction"] = text
             else:
                 example["output_extraction"] = ""
@@ -197,10 +202,8 @@ def extract_text_from_page_bytes(dataset: Dataset) -> Dataset:
             print(f"Error extracting text: {str(e)}")
             example["output_extraction"] = ""
         return example
-    
+
     return dataset.map(extract_text, desc="Extracting text from pages")
-
-
 
 
 def process_extracted_questions(dataset: Dataset) -> Dataset:
@@ -299,24 +302,22 @@ def process_extracted_questions(dataset: Dataset) -> Dataset:
     return new_dataset
 
 
-
-
 def filter_valid_qas(dataset: Dataset) -> Dataset:
     """
     Filters out rows that don't meet quality conditions
     """
+
     def is_valid(example):
         return (
             example.get("extracted_solution", "") != "NO ANSWER DETECTED"
-            and example.get("extracted_solution", "") not in ["free response answer", '"free response"', "free response"]
+            and example.get("extracted_solution", "")
+            not in ["free response answer", '"free response"', "free response"]
             and example.get("extracted_question", "") != "NO QUESTION DETECTED"
             and example.get("extracted_solution", "") != '"NO ANSWER DETECTED"'
         )
 
     filtered_dataset = dataset.filter(is_valid)
     return filtered_dataset
-
-
 
 
 def filter_by_validation(dataset: Dataset) -> Dataset:
@@ -335,7 +336,7 @@ def convert_to_instructions(dataset: Dataset) -> List[str]:
 
 def main() -> None:
     """Main pipeline function following atomic pattern"""
-    
+
     # Bash textbook and documentation URLs
     bash_textbook_urls = [
         "https://www.tldp.org/LDP/Bash-Beginners-Guide/Bash-Beginners-Guide.pdf",
@@ -346,23 +347,22 @@ def main() -> None:
         "https://www.cyberciti.biz/media/new/faq/2009/11/bash_reference_manual.pdf",
         # Add more bash textbook URLs as needed
     ]
-    
+
     print("Creating URL dataset...")
     url_dataset = create_url_dataset(bash_textbook_urls)
-    
+
     print("Downloading PDFs...")
     pdf_dataset = download_pdfs(url_dataset)
-    
+
     print("Getting page counts...")
     page_count_dataset = get_all_page_counts(pdf_dataset)
-    
+
     print("Extracting individual pages...")
     pages_dataset = expand_and_extract_pages(page_count_dataset)
-    
-    
+
     print("Extracting text from pages...")
     text_dataset = extract_text_from_page_bytes(pages_dataset)
-    
+
     print("Generating questions from text...")
     breakpoint()
     questions = generate_questions_from_text(text_dataset)
@@ -373,6 +373,7 @@ def main() -> None:
     breakpoint()
     # hf_dataset = run_dataset_to_traces(subsampled_dataset_dir, model_name="gpt-5-nano-2025-08-07", agent_name="terminus-2", n_concurrent=256, agent_kwargs={"max_episodes": 8})
     # upload_traces_to_hf(hf_dataset, "DCAgent/bash_textbook_tasks_traces", "SFT")
+
 
 if __name__ == "__main__":
     main()

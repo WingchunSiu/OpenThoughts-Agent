@@ -72,7 +72,9 @@ class DaytonaTaskGenerationExecutor:
                     result = future.result()
                 except Exception as exc:  # pragma: no cover - defensive
                     spec = future_map[future]
-                    LOGGER.exception("Unhandled exception while generating seed %s", spec.seed)
+                    LOGGER.exception(
+                        "Unhandled exception while generating seed %s", spec.seed
+                    )
                     results.append(
                         TaskGenerationResult(
                             spec=spec,
@@ -161,7 +163,11 @@ class DaytonaTaskGenerationExecutor:
 
         try:
             sig = inspect.signature(shutdown_fn)
-            result = shutdown_fn(timeout=timeout) if "timeout" in sig.parameters else shutdown_fn()
+            result = (
+                shutdown_fn(timeout=timeout)
+                if "timeout" in sig.parameters
+                else shutdown_fn()
+            )
             if inspect.isawaitable(result):
                 asyncio.run(result)
         except Exception as exc:  # pragma: no cover - defensive cleanup

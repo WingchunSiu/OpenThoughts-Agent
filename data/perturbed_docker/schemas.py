@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 
 class BaselineDockerfile(BaseModel):
     dockerfile: str = Field(description="Minimal solvable Dockerfile")
-    rationale: str | None = Field(default=None, description="One sentence justification")
+    rationale: str | None = Field(
+        default=None, description="One sentence justification"
+    )
 
 
 class PerturbedVariant(BaseModel):

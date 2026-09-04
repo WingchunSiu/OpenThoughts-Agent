@@ -111,8 +111,10 @@ def backup_table(client, table_name: str, out_path: Path, page_size: int = 1000)
                 except Exception as e:
                     if attempt < max_retries - 1:
                         wait = 2 ** (attempt + 1)
-                        print(f"    Retry {attempt + 1}/{max_retries} for {table_name} "
-                              f"at offset {offset} ({e}), waiting {wait}s...")
+                        print(
+                            f"    Retry {attempt + 1}/{max_retries} for {table_name} "
+                            f"at offset {offset} ({e}), waiting {wait}s..."
+                        )
                         time.sleep(wait)
                     else:
                         raise
@@ -187,7 +189,9 @@ def main() -> None:
     for table_name in tables:
         try:
             out_path = output_dir / f"{table_name}.json"
-            n_rows = backup_table(client, table_name, out_path, page_size=args.page_size)
+            n_rows = backup_table(
+                client, table_name, out_path, page_size=args.page_size
+            )
             manifest["tables"][table_name] = {
                 "rows": n_rows,
                 "file": f"{table_name}.json",

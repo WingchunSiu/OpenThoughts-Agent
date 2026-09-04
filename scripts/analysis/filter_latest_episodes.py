@@ -167,7 +167,10 @@ def main() -> None:
             dataset_dict = ds  # assumed DatasetDict
         # When reading from a local job dir, --split is ignored unless the export returns multiple splits
         if args.split and args.split not in dataset_dict:
-            logging.warning("--split '%s' not found in exported dataset; proceeding with all splits.", args.split)
+            logging.warning(
+                "--split '%s' not found in exported dataset; proceeding with all splits.",
+                args.split,
+            )
     else:
         logging.info("Loading dataset '%s'", args.repo_id)
         if args.split:

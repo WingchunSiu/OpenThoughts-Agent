@@ -4,12 +4,11 @@ import re
 import subprocess as sp
 import sys
 import tempfile
-import uuid
 from datetime import datetime
 
 import wandb
 import yaml
-from huggingface_hub import HfApi, repo_exists, upload_folder, whoami
+from huggingface_hub import HfApi, repo_exists, upload_folder
 
 from typing import Any
 
@@ -92,8 +91,8 @@ def wandb_sync(output_dir):
 
     wandb_regex_match = re.search(r"https://wandb.ai/.*/runs/.* ...", cmd_debug_output)
     if not wandb_regex_match:
-       print(f"Wandb run URL not found in command output: {cmd_debug_output}")
-       return
+        print(f"Wandb run URL not found in command output: {cmd_debug_output}")
+        return
     wandb_run_url = wandb_regex_match.group(0).split("...")[0].strip()
     return wandb_run_url
 
@@ -118,10 +117,12 @@ def generate_model_configs(
     Returns:
         Model: A model configuration object containing the relevant metadata to be uplaoded to DB.
     """
-    raise NotImplementedError("Database-backed model metadata generation is disabled in OpenThoughts-Agent")
+    raise NotImplementedError(
+        "Database-backed model metadata generation is disabled in OpenThoughts-Agent"
+    )
 
 
-def upload_to_db(model_configs: Any):
+def upload_to_db(model_configs: Any):  # noqa: F811
     """
     Upload the given model_config object to the database.
     Establishes a database connection using an engine and session maker, then adds the `model_configs` to the database.
@@ -167,7 +168,7 @@ def upload_local(
     assert output_dir is not None, "Output directory not provided."
     assert os.path.exists(output_dir), f"Output directory {output_dir} does not exist."
 
-    wandb_run_url = wandb_sync(output_dir)
+    wandb_sync(output_dir)
 
     if os.path.exists(os.path.join(output_dir, "start_end.json")):
         with open(config, "r") as file:

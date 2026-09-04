@@ -5,6 +5,7 @@ Usage: python generate_and_run_sbatch.py <module_name>
 Example: python generate_and_run_sbatch.py data.processing.dataset
          -> job name will be "dtst" (last part "dataset" with vowels removed)
 """
+
 import sys
 import subprocess
 import re
@@ -13,13 +14,13 @@ from pathlib import Path
 
 def remove_vowels(text):
     """Remove vowels (a, e, i, o, u) from text, case-insensitive."""
-    return re.sub(r'[aeiouAEIOU]', '', text)
+    return re.sub(r"[aeiouAEIOU]", "", text)
 
 
 def get_job_name(module_name):
     """Extract name after last period and remove vowels."""
     # Get the part after the last period
-    last_part = module_name.split('.')[-1]
+    last_part = module_name.split(".")[-1]
     # Remove vowels
     job_name = remove_vowels(last_part)
     return job_name if job_name else "job"  # Fallback if all vowels
@@ -67,22 +68,24 @@ def main():
     sbatch_content = generate_sbatch(module_name, job_name)
 
     # Write to temporary sbatch file
-    sbatch_path = Path(f"/scratch/10000/eguha3/ot-agent/data/data_gen_{job_name}.sbatch")
-    with open(sbatch_path, 'w') as f:
+    sbatch_path = Path(
+        f"/scratch/10000/eguha3/ot-agent/data/data_gen_{job_name}.sbatch"
+    )
+    with open(sbatch_path, "w") as f:
         f.write(sbatch_content)
 
     print(f"Generated sbatch file: {sbatch_path}")
 
     # Submit the job
-    result = subprocess.run(['sbatch', str(sbatch_path)],
-                          capture_output=True,
-                          text=True)
+    result = subprocess.run(
+        ["sbatch", str(sbatch_path)], capture_output=True, text=True
+    )
 
     if result.returncode == 0:
-        print(f"Job submitted successfully!")
+        print("Job submitted successfully!")
         print(result.stdout.strip())
     else:
-        print(f"Error submitting job:")
+        print("Error submitting job:")
         print(result.stderr.strip())
         sys.exit(1)
 

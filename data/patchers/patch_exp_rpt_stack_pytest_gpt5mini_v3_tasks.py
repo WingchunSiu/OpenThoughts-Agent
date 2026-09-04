@@ -79,6 +79,7 @@ CLI mirrors the v2 patcher::
 Apply on TOP of the v2 dataset (after re-extracting v2's tasks.parquet).
 Target HF repo: ``laion/exp_rpt_stack-pytest-gpt5mini-v3``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -100,20 +101,22 @@ STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 # whose test_solution.py imports from these top-level names are dropped
 # by the dedicated ``src_tests_app_pass`` filter — see #1 in the module
 # docstring.
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-    # Conventional agent-provided entrypoint module: tests in this corpus
-    # commonly do ``from solution import X`` to import what the agent
-    # produced at ``/app/solution.py``.
-    "solution",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+        # Conventional agent-provided entrypoint module: tests in this corpus
+        # commonly do ``from solution import X`` to import what the agent
+        # produced at ``/app/solution.py``.
+        "solution",
+    }
+)
 
 
 WHITELIST_PIP_TO_IMPORTS: dict[str, tuple[str, ...]] = {
@@ -175,26 +178,46 @@ IMPORT_TO_PIP_PKG: dict[str, str] = {
     for imp in imports
 }
 
-PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset({
-    "cache", "capfd", "capfdbinary", "caplog", "capsys", "capsysbinary",
-    "capteesys", "doctest_namespace", "monkeypatch", "pytestconfig",
-    "record_property", "record_testsuite_property", "record_xml_attribute",
-    "recwarn", "subtests", "tmp_path", "tmp_path_factory", "tmpdir",
-    "tmpdir_factory", "request", "testdir", "pytester",
-})
+PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset(
+    {
+        "cache",
+        "capfd",
+        "capfdbinary",
+        "caplog",
+        "capsys",
+        "capsysbinary",
+        "capteesys",
+        "doctest_namespace",
+        "monkeypatch",
+        "pytestconfig",
+        "record_property",
+        "record_testsuite_property",
+        "record_xml_attribute",
+        "recwarn",
+        "subtests",
+        "tmp_path",
+        "tmp_path_factory",
+        "tmpdir",
+        "tmpdir_factory",
+        "request",
+        "testdir",
+        "pytester",
+    }
+)
 
 # Distinct from v4/v2 markers so v3 patches don't collide with prior runs.
 V3_MARKER = "# --- laion gpt5mini v3 patch: install detected test imports ---"
 # Older markers we treat as "already patched" — leave alone (idempotency).
 PREVIOUS_MARKERS = (
     "# --- laion gpt5mini patch: install detected test imports ---",  # v2
-    "# --- laion v4 patch: install detected test imports ---",        # v4 synthetic
+    "# --- laion v4 patch: install detected test imports ---",  # v4 synthetic
 )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _normalize_token(s: str) -> str:
     return s.strip().lower()
@@ -256,11 +279,23 @@ def _conftest_fixtures(test_dir: Path) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for dec in node.decorator_list:
-                if (isinstance(dec, ast.Attribute) and dec.attr == "fixture") or \
-                   (isinstance(dec, ast.Name) and dec.id == "fixture") or \
-                   (isinstance(dec, ast.Call) and (
-                       (isinstance(dec.func, ast.Attribute) and dec.func.attr == "fixture") or
-                       (isinstance(dec.func, ast.Name) and dec.func.id == "fixture"))):
+                if (
+                    (isinstance(dec, ast.Attribute) and dec.attr == "fixture")
+                    or (isinstance(dec, ast.Name) and dec.id == "fixture")
+                    or (
+                        isinstance(dec, ast.Call)
+                        and (
+                            (
+                                isinstance(dec.func, ast.Attribute)
+                                and dec.func.attr == "fixture"
+                            )
+                            or (
+                                isinstance(dec.func, ast.Name)
+                                and dec.func.id == "fixture"
+                            )
+                        )
+                    )
+                ):
                     fixtures.add(node.name)
                     break
     return fixtures
@@ -269,8 +304,9 @@ def _conftest_fixtures(test_dir: Path) -> set[str]:
 def _test_function_param_names(tree: ast.AST) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
-                node.name.startswith("test_"):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.name.startswith("test_"):
             params: list[str] = []
             args = node.args
             for a in args.posonlyargs + args.args + args.kwonlyargs:
@@ -284,6 +320,7 @@ def _test_function_param_names(tree: ast.AST) -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 # Filter passes
 # ---------------------------------------------------------------------------
+
 
 def syntax_passes(test_solution: Path) -> tuple[bool, str]:
     try:
@@ -385,19 +422,28 @@ def rubber_stamp_pass(test_solution: Path) -> tuple[bool, str]:
         for v in targets:
             if isinstance(v, ast.Call):
                 f = v.func
-                if (isinstance(f, ast.Attribute) and f.attr == "importorskip" and
-                    isinstance(f.value, ast.Name) and f.value.id == "pytest"):
+                if (
+                    isinstance(f, ast.Attribute)
+                    and f.attr == "importorskip"
+                    and isinstance(f.value, ast.Name)
+                    and f.value.id == "pytest"
+                ):
                     if v.args and isinstance(v.args[0], ast.Constant):
                         mod = str(v.args[0].value).split(".")[0]
-                        if (mod not in WHITELIST_IMPORTS and
-                                mod not in ALWAYS_INSTALLED and
-                                mod not in STDLIB):
+                        if (
+                            mod not in WHITELIST_IMPORTS
+                            and mod not in ALWAYS_INSTALLED
+                            and mod not in STDLIB
+                        ):
                             return False, f"importorskip:{mod}"
 
     # (a) — all test_* funcs are @*skip*
-    test_funcs = [n for n in tree.body
-                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                  and n.name.startswith("test_")]
+    test_funcs = [
+        n
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name.startswith("test_")
+    ]
     if test_funcs:
         all_skipped = True
         for tf in test_funcs:
@@ -422,6 +468,7 @@ def rubber_stamp_pass(test_solution: Path) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Mutation: inject pip-installs into test.sh
 # ---------------------------------------------------------------------------
+
 
 def _detect_pip_packages(test_solution: Path) -> list[str]:
     try:
@@ -497,8 +544,9 @@ def _injection_block(pkgs: list[str]) -> str:
     )
 
 
-def _replace_existing_block(test_sh: Path, text: str, old_marker: str,
-                            pkgs: list[str]) -> tuple[bool, str]:
+def _replace_existing_block(
+    test_sh: Path, text: str, old_marker: str, pkgs: list[str]
+) -> tuple[bool, str]:
     """Replace a previous patcher's marker+install line with the v3 block.
 
     The previous patchers wrote exactly two lines: marker line, then a
@@ -529,7 +577,7 @@ def _replace_existing_block(test_sh: Path, text: str, old_marker: str,
     indent = re.match(r"[ \t]*", lines[marker_idx]).group(0)
     indented_new = "".join(indent + ln for ln in new_block.splitlines(keepends=True))
 
-    new_lines = lines[:marker_idx] + [indented_new] + lines[marker_idx + 2:]
+    new_lines = lines[:marker_idx] + [indented_new] + lines[marker_idx + 2 :]
     test_sh.write_text("".join(new_lines))
     return True, f"replaced-old-marker:{','.join(pkgs)}"
 
@@ -537,6 +585,7 @@ def _replace_existing_block(test_sh: Path, text: str, old_marker: str,
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+
 
 def filter_one_task(task_dir: Path) -> tuple[str, str]:
     """Run all filter passes. Return ``(verdict, reason)``.
@@ -637,7 +686,11 @@ def main() -> int:
                 else:
                     counts["patch_skipped"] += 1
         else:
-            if reason.startswith("syntax") or reason.startswith("compile") or reason.startswith("parse"):
+            if (
+                reason.startswith("syntax")
+                or reason.startswith("compile")
+                or reason.startswith("parse")
+            ):
                 key = "drop_syntax"
             elif reason.startswith("src_tests_app"):
                 key = "drop_src_tests_app"
@@ -647,7 +700,9 @@ def main() -> int:
                 key = "drop_fixture"
             elif reason.startswith("relative"):
                 key = "drop_relative"
-            elif reason.startswith("importorskip") or reason.startswith("all_test_funcs_skipped"):
+            elif reason.startswith("importorskip") or reason.startswith(
+                "all_test_funcs_skipped"
+            ):
                 key = "drop_rubber_stamp"
             else:
                 key = "drop_other"
@@ -666,9 +721,18 @@ def main() -> int:
     print("=" * 60)
     yld = counts["keep"] / total * 100 if total else 0.0
     print(f"Total: {total}  Kept: {counts['keep']} ({yld:.1f}%)  Dry={args.dry_run}")
-    for k in ("keep", "drop_syntax", "drop_src_tests_app", "drop_import",
-              "drop_fixture", "drop_relative", "drop_rubber_stamp", "drop_other",
-              "patched", "patch_skipped"):
+    for k in (
+        "keep",
+        "drop_syntax",
+        "drop_src_tests_app",
+        "drop_import",
+        "drop_fixture",
+        "drop_relative",
+        "drop_rubber_stamp",
+        "drop_other",
+        "patched",
+        "patch_skipped",
+    ):
         v = counts[k]
         print(f"  {k:<22}: {v:>5}")
         for ex in examples.get(k, [])[:5]:

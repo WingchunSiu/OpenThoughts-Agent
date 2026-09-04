@@ -1,5 +1,3 @@
-# Mirror of SERA's axolotl_qwen3_8b.yaml, parameterized for Jupiter SFT on v3 data.
-# Filled at render time via sed-substitution of __SIZE__.
 
 base_model: Qwen/Qwen3-8B
 deepspeed: /e/scratch/jureap59/feuer1/code/axolotl/deepspeed_configs/zero3_bf16.json
@@ -7,10 +5,6 @@ deepspeed: /e/scratch/jureap59/feuer1/code/axolotl/deepspeed_configs/zero3_bf16.
 load_in_8bit: false
 load_in_4bit: false
 
-# plugins disabled 2026-04-22: CCE + bf16 + flash-attn on aarch64/torch2.9 caused
-# gradient explosion (grad_norm 9.8e+11) and loss -> 0 within first 3-7 steps.
-# plugins:
-#   - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
 
 chat_template: chatml
 datasets:

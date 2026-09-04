@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from data.gcs_cache import gcs_cache
 
+
 @gcs_cache()
 def dedup_tasks(tasks_path: str | Path) -> Path:
     """Dedup tasks by instruction.md content, return path to new directory with unique tasks."""

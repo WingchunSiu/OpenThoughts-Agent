@@ -91,9 +91,9 @@ Tasks fall into two categories:
 - laion/swegym-tasks-patched-validated-v2
 - laion/exp_rpt_stack-bash-v3
 - laion/exp_rpt_methods2test-large-v2
-- laion/exp_rpt_codenet-python-v2
+- laion/exp_rpt_codenet-python-v3
 - DCAgent/exp_rpt_curriculum-medium
-- DCAgent/exp_rpt_nemotron-cpp
+- laion/exp_rpt_nemotron-cpp-v2
 - DCAgent/exp_rpt_pr
 - DCAgent/exp_rpt_stack-pytest-large
 - DCAgent/exp_rpt_stack-pytest-v2

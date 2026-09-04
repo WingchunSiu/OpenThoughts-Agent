@@ -8,7 +8,7 @@ from pydantic import BaseModel, computed_field
 
 class HPC(BaseModel):
     """Base model for HPC clusters"""
-    
+
     # Define all fields as class attributes with default values
     name: str = ""
     hostname: str = ""
@@ -58,8 +58,8 @@ jsc_jureca = HPC(
     hostname_pattern=r"jr.*?.jureca",
     train_sbatch_jinja_filename="jsc_train.j2",
     dotenv_filename="jsc.env",
-    account="westai0007", # synthlaion (24 nodes per job)
-    partition="dc-hwai", # dc-gpu
+    account="westai0007",  # synthlaion (24 nodes per job)
+    partition="dc-hwai",  # dc-gpu
     gpus_per_node=4,
     cpus_per_node=48,
     internet_node=False,
@@ -150,7 +150,7 @@ def set_environment(hpc_name: HPC) -> None:
     if os.path.exists(dotenv):
         with open(dotenv, "r") as f:
             for line in f:
-                if line.strip() and not line.startswith('#'):
+                if line.strip() and not line.startswith("#"):
                     key, value = line.strip().split("=", 1)
                     key = key.replace("export ", "")
                     os.environ[key] = os.path.expandvars(

@@ -17,9 +17,11 @@ Usage:
         print(f"Total GPUs: {ray_cluster.total_gpus}")
         # ... launch vLLM or other Ray-based workloads
 """
+
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -66,7 +68,10 @@ def compute_ray_memory_from_slurm(headroom_mb: Optional[int] = None) -> Optional
     try:
         slurm_mem_mb = int(slurm_mem_str)
     except ValueError:
-        print(f"Warning: Could not parse SLURM_MEM_PER_NODE={slurm_mem_str}", file=sys.stderr)
+        print(
+            f"Warning: Could not parse SLURM_MEM_PER_NODE={slurm_mem_str}",
+            file=sys.stderr,
+        )
         return None
 
     # Compute headroom: either explicit override, or scale with node size
@@ -84,10 +89,15 @@ def compute_ray_memory_from_slurm(headroom_mb: Optional[int] = None) -> Optional
 
     usable_mem_mb = slurm_mem_mb - actual_headroom_mb
     if usable_mem_mb <= 0:
-        print(f"Warning: SLURM_MEM_PER_NODE ({slurm_mem_mb}MB) <= headroom ({actual_headroom_mb}MB)", file=sys.stderr)
+        print(
+            f"Warning: SLURM_MEM_PER_NODE ({slurm_mem_mb}MB) <= headroom ({actual_headroom_mb}MB)",
+            file=sys.stderr,
+        )
         return None
 
-    print(f"[Ray] Memory: {slurm_mem_mb}MB SLURM - {actual_headroom_mb}MB headroom = {usable_mem_mb}MB for Ray")
+    print(
+        f"[Ray] Memory: {slurm_mem_mb}MB SLURM - {actual_headroom_mb}MB headroom = {usable_mem_mb}MB for Ray"
+    )
     return usable_mem_mb * 1024 * 1024  # Convert MB to bytes
 
 
@@ -101,9 +111,15 @@ class RayClusterConfig:
     ray_port: int = 6379
     srun_export_env: str = "ALL"
     ray_env_vars: str = ""  # Space-separated KEY=value pairs for Ray workers
-    wait_for_cluster_script: str = "scripts/ray/wait_for_cluster.py"
+    wait_for_cluster_script: str = "hpc/ray/wait_for_cluster.py"
     poll_interval: int = 10
-    startup_timeout: int = 600
+    # Driver-side wait window for the full cluster to register all GPUs/nodes.
+    # Raised 600 -> 1200 for 6-node GH200 RL: with RAY_raylet_start_wait_time_s
+    # bumped to 120s (see build_apptainer_prefix), a slow head/worker raylet
+    # registration can legitimately push first-contact past the old 600s cliff.
+    # The driver still polls on poll_interval and returns as soon as the cluster
+    # is ready, so this only extends the patience ceiling, not the happy path.
+    startup_timeout: int = 1200
     # Memory configuration (bytes). If None, Ray auto-detects (which can cause OOM).
     # Set explicitly to limit Ray to the SLURM allocation minus headroom.
     memory_per_node: Optional[int] = None  # Total memory Ray can use per node
@@ -126,6 +142,16 @@ class RayClusterConfig:
     # When set, wraps ray commands with: proxychains4 -f $PROXYCHAINS_CONF_FILE ray start ...
     # This is more reliable on some systems (e.g., Jupiter ARM GH200 nodes)
     proxychains_binary: str = ""
+    # Apptainer/Singularity RL runtime mode (OPT-IN). When container_sif is set,
+    # `ray start` (head + worker) and the ray.init() wait scripts run inside the
+    # SIF via `apptainer exec --nv`. Proxychains stays OUTSIDE the apptainer exec
+    # (proxychains4 -f conf apptainer exec ... ray ...). See
+    # scope_rl_via_apptainer_launcher.md §5.
+    container_sif: Optional[str] = None
+    container_binds: List[str] = field(default_factory=list)
+    # In-container PYTHONPATH (prepended via `--env`) so the bind-mounted host
+    # SkyRL/harbor source overrides the in-SIF install.
+    container_pythonpath: str = ""
 
 
 @dataclass
@@ -173,7 +199,9 @@ class RayCluster:
         # This allows Ray workers to make proxied external calls (e.g., Daytona API)
         # Prefer wrapped binary approach (proxychains_binary) over LD_PRELOAD (proxychains_preload)
         proxychains_binary = getattr(hpc, "proxychains_binary", "")
-        use_proxychains = bool(proxychains_binary or getattr(hpc, "proxychains_preload", ""))
+        use_proxychains = bool(
+            proxychains_binary or getattr(hpc, "proxychains_preload", "")
+        )
 
         # Enable NUMA monitoring if configured for this cluster (e.g., Jupiter GH200)
         # This helps debug NUMA locality issues that cause variable vLLM latency
@@ -238,7 +266,12 @@ class RayCluster:
         for hostname_flag in ["--ip-address", "-i"]:
             try:
                 result = subprocess.run(
-                    srun_base + ["bash", "-c", f"unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; hostname {hostname_flag}"],
+                    srun_base
+                    + [
+                        "bash",
+                        "-c",
+                        f"unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; hostname {hostname_flag}",
+                    ],
                     capture_output=True,
                     text=True,
                     check=True,
@@ -299,7 +332,8 @@ class RayCluster:
                         "--cpu-bind=none",  # No binding needed for cleanup
                         "-w",
                         node,
-                        "bash", "-c",
+                        "bash",
+                        "-c",
                         "unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; ray stop --force",
                     ],
                     capture_output=True,
@@ -323,19 +357,20 @@ class RayCluster:
         # Clean up any lingering Ray instances from previous jobs
         self._cleanup_existing_ray()
 
-        print(f"=== Starting Ray Cluster ===", flush=True)
+        print("=== Starting Ray Cluster ===", flush=True)
         print(f"  Nodes: {len(self.node_list)}", flush=True)
         print(f"  GPUs per node: {self.config.gpus_per_node}", flush=True)
         print(f"  CPUs per node: {self.config.cpus_per_node}", flush=True)
         print(f"  Head node: {self.node_list[0]} ({self.head_ip})", flush=True)
         print(f"  Ray port: {self.config.ray_port}", flush=True)
-        print(f"============================", flush=True)
+        print("============================", flush=True)
 
         # Set NUMA affinity for the Ray orchestrator process (binds to GPU 0's NUMA node).
         # On GH200 (Jupiter), this ensures the Python process managing the Ray cluster
         # runs on CPUs local to GPU 0. Ray workers spawned via srun handle their own
         # binding. No-op when SKYRL_ENABLE_NUMA_AFFINITY is unset.
         from hpc.numa_utils import apply_numa_affinity
+
         apply_numa_affinity(gpu_id=0)
 
         # Start head node
@@ -369,10 +404,10 @@ class RayCluster:
         # Start NUMA monitoring if enabled (useful for GH200 debugging)
         self._start_numa_monitoring()
 
-        print(f"=== Ray Cluster Ready ===", flush=True)
+        print("=== Ray Cluster Ready ===", flush=True)
         print(f"  Address: {self.address}", flush=True)
         print(f"  Total GPUs: {self.total_gpus}", flush=True)
-        print(f"=========================", flush=True)
+        print("=========================", flush=True)
 
     def stop(self) -> None:
         """Stop the Ray cluster.
@@ -398,7 +433,8 @@ class RayCluster:
                         "--cpu-bind=none",  # No binding needed for cleanup
                         "-w",
                         node,
-                        "bash", "-c",
+                        "bash",
+                        "-c",
                         "unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; ray stop --force",
                     ],
                     capture_output=True,
@@ -434,7 +470,11 @@ class RayCluster:
     def _start_node(self, node: str, is_head: bool) -> None:
         """Start Ray on a single node."""
         # Get IPv4 address for this node (ensures Ray uses IPv4, not hostnames that may resolve to IPv6)
-        node_ip = self._get_node_ip(node, self.config.srun_export_env) if node != self.node_list[0] else self.head_ip
+        node_ip = (
+            self._get_node_ip(node, self.config.srun_export_env)
+            if node != self.node_list[0]
+            else self.head_ip
+        )
 
         if is_head:
             cmd = [
@@ -471,12 +511,45 @@ class RayCluster:
         # 2. LD_PRELOAD approach: preserve LD_PRELOAD env var for Ray workers
         #    Requires localnet exclusions in proxychains config to not proxy Ray traffic
 
+        # Apptainer RL runtime mode (OPT-IN): wrap the `ray start ...` invocation
+        # in `apptainer exec --nv <binds> <sif>` so Ray runs from the SIF's own
+        # install. `ray` (cmd[0]) resolves inside the container. Proxychains, when
+        # used, stays OUTSIDE the apptainer exec (added below) so egress is handled
+        # at the host layer and the container needn't know about proxychains.
+        # See scope_rl_via_apptainer_launcher.md §5.
+        if self.config.container_sif:
+            from hpc.rl_launch_utils import build_apptainer_prefix
+
+            apptainer_prefix = build_apptainer_prefix(
+                self.config.container_sif,
+                binds=self.config.container_binds or None,
+                pythonpath=self.config.container_pythonpath or None,
+            )
+            cmd = apptainer_prefix + cmd
+
+        # Shell-quote each argv token before embedding the command into the
+        # `srun ... bash -c '<string>'` body. Apptainer's `--env PYTHONPATH=<v>`
+        # value can contain spaces, double-quotes, and literal `$(...)`/`${...}`
+        # (e.g. an inherited PYTHONPATH that still carries an unexpanded
+        # `$(resolve_rl_repo_dir "$DCFT")/skyrl-train:${DCFT_PRIVATE:-$DCFT}...`
+        # tail from jupiter.env). A naive `' '.join(cmd)` lets those spaces
+        # re-tokenize under `bash -c`, so apptainer reads the value's tail as a
+        # separate argv element and tries to open it as the SIF image
+        # ("FATAL: could not open image .../OpenThoughts-Agent/\"...\")/skyrl-train:...")
+        # → ray head exits 255 before producing any output. shlex.quote is a
+        # no-op for space/quote-free tokens, so this is byte-identical for all
+        # configs whose PYTHONPATH has no spaces (e.g. the 8B/32B ablations).
+        cmd_str = " ".join(shlex.quote(c) for c in cmd)
+
         if self.config.proxychains_binary:
             # Wrapped binary approach: unset LD_PRELOAD (avoid double-proxying) and wrap ray command
             # Uses $PROXYCHAINS_CONF_FILE env var (set by SSH tunnel setup script)
+            # In container mode the wrap is: proxychains4 -f conf apptainer exec ... ray ...
             unset_proxychains = "unset LD_PRELOAD 2>/dev/null; "
-            ray_cmd_str = ' '.join(cmd)
-            proxychains_wrap = f'{self.config.proxychains_binary} -f "$PROXYCHAINS_CONF_FILE" '
+            ray_cmd_str = cmd_str
+            proxychains_wrap = (
+                f'{self.config.proxychains_binary} -f "$PROXYCHAINS_CONF_FILE" '
+            )
             if self.config.ray_env_vars:
                 bash_cmd = f"{proxychains_wrap}{ray_cmd_str}"
             else:
@@ -485,16 +558,18 @@ class RayCluster:
             # LD_PRELOAD approach: preserve proxychains env vars for external API calls
             # The proxychains config should have localnet exclusions for internal IPs
             if self.config.ray_env_vars:
-                bash_cmd = f"env {self.config.ray_env_vars} {' '.join(cmd)}"
+                bash_cmd = f"env {self.config.ray_env_vars} {cmd_str}"
             else:
-                bash_cmd = ' '.join(cmd)
+                bash_cmd = cmd_str
         else:
             # No proxychains: unset env vars to prevent interference with Ray networking
             unset_proxychains = "unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; "
             if self.config.ray_env_vars:
-                bash_cmd = f"{unset_proxychains}env {self.config.ray_env_vars} {' '.join(cmd)}"
+                bash_cmd = (
+                    f"{unset_proxychains}env {self.config.ray_env_vars} {cmd_str}"
+                )
             else:
-                bash_cmd = f"{unset_proxychains}{' '.join(cmd)}"
+                bash_cmd = f"{unset_proxychains}{cmd_str}"
 
         srun_cmd = [
             "srun",
@@ -532,7 +607,10 @@ class RayCluster:
         ray_log_file.write("=" * 60 + "\n")
         ray_log_file.flush()
 
-        print(f"  Starting Ray {role} on {node} (logging to {ray_log_path})...", flush=True)
+        print(
+            f"  Starting Ray {role} on {node} (logging to {ray_log_path})...",
+            flush=True,
+        )
         print(f"  Command: {' '.join(srun_cmd)}", flush=True)
 
         proc = subprocess.Popen(
@@ -563,15 +641,35 @@ class RayCluster:
         # Build the wait command
         # Unset proxychains env vars to avoid interfering with Ray communication
         unset_proxychains = "unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; "
-        wait_cmd = unset_proxychains + " ".join([
-            sys.executable,
-            str(script_path),
-            "--address", self.address,
-            "--expected-gpus", str(self.total_gpus),
-            "--expected-nodes", str(len(self.node_list)),
-            "--timeout", str(self.config.startup_timeout),
-            "--poll-interval", str(self.config.poll_interval),
-        ])
+        # In Apptainer mode the wait script imports ray, so it must run INSIDE
+        # the SIF; use a bare `python` prefixed with `apptainer exec --nv`.
+        # Otherwise use the host sys.executable (the activated venv/conda).
+        if self.config.container_sif:
+            from hpc.rl_launch_utils import build_apptainer_prefix
+
+            python_invocation = build_apptainer_prefix(
+                self.config.container_sif,
+                binds=self.config.container_binds or None,
+                pythonpath=self.config.container_pythonpath or None,
+            ) + ["python"]
+        else:
+            python_invocation = [sys.executable]
+        wait_cmd = unset_proxychains + " ".join(
+            python_invocation
+            + [
+                str(script_path),
+                "--address",
+                self.address,
+                "--expected-gpus",
+                str(self.total_gpus),
+                "--expected-nodes",
+                str(len(self.node_list)),
+                "--timeout",
+                str(self.config.startup_timeout),
+                "--poll-interval",
+                str(self.config.poll_interval),
+            ]
+        )
 
         # Run on the head node via srun so ray.init() can connect to the local raylet
         srun_cmd = [
@@ -581,11 +679,17 @@ class RayCluster:
             "--ntasks=1",
             "--overlap",
             "--cpu-bind=none",  # No binding needed for wait script
-            "-w", self.node_list[0],  # Head node
-            "bash", "-c", wait_cmd,
+            "-w",
+            self.node_list[0],  # Head node
+            "bash",
+            "-c",
+            wait_cmd,
         ]
 
-        print(f"  Waiting for cluster ({self.total_gpus} GPUs, {len(self.node_list)} nodes)...", flush=True)
+        print(
+            f"  Waiting for cluster ({self.total_gpus} GPUs, {len(self.node_list)} nodes)...",
+            flush=True,
+        )
 
         # Retry logic for transient SLURM communication errors
         # (e.g., "Socket timed out", "Expired or invalid job" when slurmctld is slow)
@@ -596,7 +700,7 @@ class RayCluster:
         for attempt in range(max_retries):
             try:
                 # Run with stderr captured but stdout visible to user
-                result = subprocess.run(
+                subprocess.run(
                     srun_cmd,
                     check=True,
                     stderr=subprocess.PIPE,
@@ -607,7 +711,10 @@ class RayCluster:
                 last_error = e
                 stderr = e.stderr or ""
                 # Check for transient SLURM communication errors
-                if "Socket timed out" in stderr or "Unable to confirm allocation" in stderr:
+                if (
+                    "Socket timed out" in stderr
+                    or "Unable to confirm allocation" in stderr
+                ):
                     if attempt < max_retries - 1:
                         print(
                             f"  SLURM communication error (attempt {attempt + 1}/{max_retries}), "
@@ -635,7 +742,6 @@ class RayCluster:
         This runs a polling loop ON the head node via srun, since ray.init()
         requires a local raylet connection.
         """
-        import tempfile
 
         # Build Python script for polling
         poll_script = f'''import ray
@@ -680,7 +786,21 @@ sys.exit(1)
 
             # Run on head node via srun
             # Wrap in bash to unset proxychains env vars before running Python with ray.init()
-            bash_cmd = f"unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; {sys.executable} {script_path}"
+            # In Apptainer mode the poll script imports ray → must run inside the SIF.
+            if self.config.container_sif:
+                from hpc.rl_launch_utils import build_apptainer_prefix
+
+                python_invocation = " ".join(
+                    build_apptainer_prefix(
+                        self.config.container_sif,
+                        binds=self.config.container_binds or None,
+                        pythonpath=self.config.container_pythonpath or None,
+                    )
+                    + ["python"]
+                )
+            else:
+                python_invocation = sys.executable
+            bash_cmd = f"unset LD_PRELOAD PROXYCHAINS_CONF_FILE 2>/dev/null; {python_invocation} {script_path}"
             srun_cmd = [
                 "srun",
                 f"--export={self.config.srun_export_env}",
@@ -688,11 +808,17 @@ sys.exit(1)
                 "--ntasks=1",
                 "--overlap",
                 "--cpu-bind=none",  # No binding needed for polling script
-                "-w", self.node_list[0],
-                "bash", "-c", bash_cmd,
+                "-w",
+                self.node_list[0],
+                "bash",
+                "-c",
+                bash_cmd,
             ]
 
-            print(f"  Waiting for cluster ({self.total_gpus} GPUs, fallback mode)...", flush=True)
+            print(
+                f"  Waiting for cluster ({self.total_gpus} GPUs, fallback mode)...",
+                flush=True,
+            )
             try:
                 subprocess.run(srun_cmd, check=True)
             except subprocess.CalledProcessError as e:
@@ -732,9 +858,9 @@ node = os.environ.get("SLURMD_NODENAME", "unknown")
 
 while True:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\\n{'='*60}", flush=True)
+    print(f"\\n{"=" * 60}", flush=True)
     print(f"NUMA Monitor - {{node}} - {{timestamp}}", flush=True)
-    print(f"{'='*60}", flush=True)
+    print(f"{"=" * 60}", flush=True)
 
     # GPU memory and NUMA topology
     print("\\n--- nvidia-smi ---", flush=True)
@@ -784,8 +910,11 @@ while True:
                 f"--gres=gpu:{self.config.gpus_per_node}",
                 f"--gpu-bind={self.config.gpu_bind}",
                 "--overlap",
-                "-w", node,
-                sys.executable, "-c", monitor_script,
+                "-w",
+                node,
+                sys.executable,
+                "-c",
+                monitor_script,
             ]
 
             proc = subprocess.Popen(
@@ -795,7 +924,9 @@ while True:
             )
             self._numa_monitor_procs.append(proc)
             self._numa_monitor_log_files.append(numa_log_file)
-            print(f"    NUMA monitor started on {node} (log: {numa_log_path})", flush=True)
+            print(
+                f"    NUMA monitor started on {node} (log: {numa_log_path})", flush=True
+            )
 
     def _stop_numa_monitoring(self) -> None:
         """Stop NUMA monitoring processes."""

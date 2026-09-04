@@ -29,10 +29,10 @@ The v2 marker block is preserved verbatim -- v3 is strictly cumulative.
 CLI shape mirrors the existing v2 patcher (`--root`, `--dry-run`,
 `--limit`).
 """
+
 from __future__ import annotations
 
 import argparse
-import re
 import shutil
 import subprocess
 import sys

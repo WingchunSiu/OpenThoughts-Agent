@@ -17,12 +17,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Optional, Tuple
 
 from hpc.launch_utils import PROJECT_ROOT
 from hpc.local_runner_utils import LocalHarborRunner
-from hpc.arg_groups import add_harbor_env_arg, add_hf_upload_args, add_tasks_input_arg
+from hpc.arg_groups import (
+    add_harbor_env_arg,
+    add_hf_upload_args,
+    add_ingress_literal_args,
+    add_tasks_input_arg,
+)
 
 
 class TracegenRunner(LocalHarborRunner):
@@ -53,21 +57,30 @@ class TracegenRunner(LocalHarborRunner):
             required=True,
             help="Path to datagen YAML with vLLM settings.",
         )
-        parser.add_argument("--datagen-config", dest="datagen_config", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--datagen-config", dest="datagen_config", help=argparse.SUPPRESS
+        )
 
         # Harbor environment backend (unified --harbor_env, with legacy aliases)
         # Default=None to allow inference from harbor config's environment.type field
-        add_harbor_env_arg(parser, default=None, legacy_names=["--trace-env", "--trace_env"])
+        add_harbor_env_arg(
+            parser, default=None, legacy_names=["--trace-env", "--trace_env"]
+        )
 
         parser.add_argument(
             "--experiments_dir",
             default=str(PROJECT_ROOT / cls.DEFAULT_EXPERIMENTS_SUBDIR),
             help="Directory for logs + endpoint JSON.",
         )
-        parser.add_argument("--experiments-dir", dest="experiments_dir", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--experiments-dir", dest="experiments_dir", help=argparse.SUPPRESS
+        )
 
         # HuggingFace upload options (shared from arg_groups)
         add_hf_upload_args(parser)
+
+        # Literal-token capture + controller-ingress (opencode / SUPPORTS_LITERAL_TRACES).
+        add_ingress_literal_args(parser)
 
         return parser
 
@@ -77,6 +90,7 @@ class TracegenRunner(LocalHarborRunner):
             return self.args.harbor_env
         # Infer from harbor config if not explicitly specified
         from hpc.harbor_utils import get_harbor_env_from_config
+
         return get_harbor_env_from_config(self.args.harbor_config)
 
     def get_dataset_label(self) -> str:
@@ -100,9 +114,9 @@ class TracegenRunner(LocalHarborRunner):
           the parquet into a local directory tree via
           ``convert_parquet_to_tasks``.
 
-        Mirrors the dispatch pattern used by ``hpc.eval_launch_utils``
-        (lines 95–110) so eval and tracegen share the same "task
-        extraction" convention.
+        Mirrors the convert_parquet_to_tasks convention shared across
+        the datagen/tracegen launch paths so eval and tracegen share the
+        same "task extraction" convention.
         """
         from hpc.hf_utils import resolve_dataset_path, is_raw_tasks_directory
         from hpc.launch_utils import convert_parquet_to_tasks
@@ -123,42 +137,31 @@ class TracegenRunner(LocalHarborRunner):
         print(f"  Model: {args.model}")
         print(f"  Tasks: {args.tasks_input_path}")
         if needs_local_vllm:
-            print(f"  TP/PP/DP: {args.tensor_parallel_size}/{args.pipeline_parallel_size}/{args.data_parallel_size}")
+            print(
+                f"  TP/PP/DP: {args.tensor_parallel_size}/{args.pipeline_parallel_size}/{args.data_parallel_size}"
+            )
             print(f"  GPUs: {args.gpus}")
         else:
             print(f"  Engine: {engine_type} (API)")
         print("==============================")
 
     def post_harbor_hook(self) -> None:
-        """Upload traces to HuggingFace after Harbor completes."""
-        args = self.args
-        hf_repo = args.upload_hf_repo
-        if not hf_repo:
-            print("[upload] No --upload-hf-repo specified, skipping HuggingFace upload.")
-            return
+        """HF upload is now handled by harbor's own export.
 
-        job_name = self._harbor_job_name
-        jobs_dir_path = getattr(args, "_jobs_dir_path", None)
-        if not job_name or jobs_dir_path is None:
-            print("[upload] Unable to determine job directory; upload skipped.")
-            return
-
-        run_dir = Path(jobs_dir_path) / job_name
-
-        # Use shared upload function from launch_utils
-        from hpc.launch_utils import upload_traces_to_hf
-
-        try:
-            upload_traces_to_hf(
-                job_dir=run_dir,
-                hf_repo_id=hf_repo,
-                hf_private=args.upload_hf_private,
-                hf_token=args.upload_hf_token,
-                hf_episodes=args.upload_hf_episodes,
-                dry_run=args.dry_run,
+        When ``--upload_hf_repo`` is set, ``build_harbor_command`` passes
+        ``--export-push --export-repo <repo>`` to ``harbor jobs start``, so
+        harbor exports AND pushes from the (gs://-aware) job dir in one pass.
+        This hook used to do a second upload via ``upload_traces_to_hf``, but
+        it resolved the jobs dir from the YAML's relative ``jobs_dir`` (→ a
+        nonexistent local ``/app/trace_jobs/<job>``) and silently skipped on a
+        gs:// job dir — so it never actually uploaded. Delegating to harbor's
+        push removes that dead, misleading path.
+        """
+        if self.args.upload_hf_repo:
+            print(
+                "[upload] HF push delegated to harbor --export-push "
+                f"(repo {self.args.upload_hf_repo})."
             )
-        except Exception as e:
-            print(f"[upload] HuggingFace upload failed: {e}")
 
 
 def main() -> None:

@@ -163,7 +163,9 @@ def _load_source_index() -> dict[str, bytes]:
         except Exception as exc:
             print(f"[patcher]   warn: could not extract {path}: {exc}", file=sys.stderr)
 
-    print(f"[patcher] Source index built: {len(index)} bugsinpy_mf solutions", flush=True)
+    print(
+        f"[patcher] Source index built: {len(index)} bugsinpy_mf solutions", flush=True
+    )
     _SOURCE_INDEX = index
     return index
 
@@ -187,11 +189,16 @@ def _read_metadata_source(task_dir: Path) -> str | None:
     return None
 
 
-def patch_task(task_dir: Path, source_index: dict[str, bytes], dry_run: bool = False) -> dict:
+def patch_task(
+    task_dir: Path, source_index: dict[str, bytes], dry_run: bool = False
+) -> dict:
     """Patch a single task. Returns ``{"status": ..., "reason": ...}``."""
     dockerfile = task_dir / "environment" / "Dockerfile"
     if not dockerfile.exists():
-        return {"status": "skipped_no_dockerfile", "reason": "no environment/Dockerfile"}
+        return {
+            "status": "skipped_no_dockerfile",
+            "reason": "no environment/Dockerfile",
+        }
 
     # Idempotency check first — cheap and lets us short-circuit re-runs.
     dockerfile_text = dockerfile.read_text()
@@ -200,7 +207,10 @@ def patch_task(task_dir: Path, source_index: dict[str, bytes], dry_run: bool = F
 
     source_id = _read_metadata_source(task_dir)
     if source_id is None:
-        return {"status": "skipped_not_bugsinpy_mf", "reason": "source not bugsinpy_mf-*"}
+        return {
+            "status": "skipped_not_bugsinpy_mf",
+            "reason": "source not bugsinpy_mf-*",
+        }
 
     solution_bytes = source_index.get(source_id)
     if solution_bytes is None:
@@ -228,7 +238,10 @@ def patch_task(task_dir: Path, source_index: dict[str, bytes], dry_run: bool = F
     new_test_sh: str | None = None
     if test_sh.exists():
         original_test_sh = test_sh.read_text()
-        if PATCH_MARKER not in original_test_sh and TEST_SH_SHIM not in original_test_sh:
+        if (
+            PATCH_MARKER not in original_test_sh
+            and TEST_SH_SHIM not in original_test_sh
+        ):
             # Try to insert after the shebang so `set -e` etc. still come early.
             lines = original_test_sh.splitlines(keepends=True)
             if lines and lines[0].startswith("#!"):

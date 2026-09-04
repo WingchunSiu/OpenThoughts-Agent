@@ -120,7 +120,9 @@ def extract_questions_from_subset(subset_name: str) -> List[str]:
 
     print(f"Loading neulab/agent-data-collection subset: {subset_name}")
     try:
-        dataset = load_dataset("neulab/agent-data-collection", subset_name, split="train")
+        dataset = load_dataset(
+            "neulab/agent-data-collection", subset_name, split="train"
+        )
     except Exception as e:
         print(f"Error loading subset {subset_name}: {e}")
         return []

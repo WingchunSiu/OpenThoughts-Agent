@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import random
 import shutil
 from pathlib import Path
@@ -137,40 +136,40 @@ DEFAULT_ITEMS: List[Dict[str, Any]] = [
         "description": "Like-new wireless mouse, 2.4GHz, lightly used.",
         "list_price": 25.0,
         "category": "electronics",
-        "r_s": 18.0,   # ~72% of list
-        "r_b": 24.0,   # ~96% of list; ZOPA = 6
+        "r_s": 18.0,  # ~72% of list
+        "r_b": 24.0,  # ~96% of list; ZOPA = 6
     },
     {
         "title": "USB-C Hub",
         "description": "7-in-1 USB-C hub with HDMI, USB 3.0, SD card reader.",
         "list_price": 35.0,
         "category": "electronics",
-        "r_s": 25.0,   # ~71% of list
-        "r_b": 34.0,   # ~97% of list; ZOPA = 9
+        "r_s": 25.0,  # ~71% of list
+        "r_b": 34.0,  # ~97% of list; ZOPA = 9
     },
     {
         "title": "Car Phone Mount",
         "description": "Magnetic dashboard phone mount, universal fit.",
         "list_price": 20.0,
         "category": "automotive",
-        "r_s": 13.0,   # ~65% of list
-        "r_b": 18.0,   # ~90% of list; ZOPA = 5
+        "r_s": 13.0,  # ~65% of list
+        "r_b": 18.0,  # ~90% of list; ZOPA = 5
     },
     {
         "title": "Yoga Mat",
         "description": "Non-slip 6mm yoga mat with carrying strap.",
         "list_price": 30.0,
         "category": "sports-outdoors",
-        "r_s": 20.0,   # ~67% of list
-        "r_b": 28.0,   # ~93% of list; ZOPA = 8
+        "r_s": 20.0,  # ~67% of list
+        "r_b": 28.0,  # ~93% of list; ZOPA = 8
     },
     {
         "title": "Strategy Board Game",
         "description": "Award-winning strategy board game, complete set.",
         "list_price": 40.0,
         "category": "toys-games",
-        "r_s": 28.0,   # ~70% of list
-        "r_b": 38.0,   # ~95% of list; ZOPA = 10
+        "r_s": 28.0,  # ~70% of list
+        "r_b": 38.0,  # ~95% of list; ZOPA = 10
     },
     # --- Electronics / tools (mid-low) ---
     {
@@ -178,24 +177,24 @@ DEFAULT_ITEMS: List[Dict[str, Any]] = [
         "description": "Compact cordless screwdriver with 20 bit set.",
         "list_price": 35.0,
         "category": "tools",
-        "r_s": 25.0,   # ~71% of list
-        "r_b": 33.0,   # ~94% of list; ZOPA = 8
+        "r_s": 25.0,  # ~71% of list
+        "r_b": 33.0,  # ~94% of list; ZOPA = 8
     },
     {
         "title": "Coffee Maker",
         "description": "12-cup programmable drip coffee maker, stainless steel.",
         "list_price": 45.0,
         "category": "home-kitchen",
-        "r_s": 32.0,   # ~71% of list
-        "r_b": 42.0,   # ~93% of list; ZOPA = 10
+        "r_s": 32.0,  # ~71% of list
+        "r_b": 42.0,  # ~93% of list; ZOPA = 10
     },
     {
         "title": "Bookshelf",
         "description": "5-tier bookshelf, wood finish, easy assembly.",
         "list_price": 60.0,
         "category": "furniture",
-        "r_s": 45.0,   # ~75% of list
-        "r_b": 55.0,   # ~92% of list; ZOPA = 10
+        "r_s": 45.0,  # ~75% of list
+        "r_b": 55.0,  # ~92% of list; ZOPA = 10
     },
     # --- Mid-range ---
     {
@@ -203,64 +202,64 @@ DEFAULT_ITEMS: List[Dict[str, Any]] = [
         "description": "Full HD webcam with built-in microphone and privacy cover.",
         "list_price": 55.0,
         "category": "electronics",
-        "r_s": 40.0,   # ~73% of list
-        "r_b": 52.0,   # ~95% of list; ZOPA = 12
+        "r_s": 40.0,  # ~73% of list
+        "r_b": 52.0,  # ~95% of list; ZOPA = 12
     },
     {
         "title": "Bluetooth Speaker",
         "description": "Portable waterproof Bluetooth speaker, 20hr battery.",
         "list_price": 65.0,
         "category": "electronics",
-        "r_s": 48.0,   # ~74% of list
-        "r_b": 62.0,   # ~95% of list; ZOPA = 14
+        "r_s": 48.0,  # ~74% of list
+        "r_b": 62.0,  # ~95% of list; ZOPA = 14
     },
     {
         "title": "Power Drill",
         "description": "18V cordless power drill with 2 batteries and charger.",
         "list_price": 65.0,
         "category": "tools",
-        "r_s": 48.0,   # ~74% of list
-        "r_b": 62.0,   # ~95% of list; ZOPA = 14
+        "r_s": 48.0,  # ~74% of list
+        "r_b": 62.0,  # ~95% of list; ZOPA = 14
     },
     {
         "title": "Air Fryer",
         "description": "4-quart digital air fryer with 8 cooking presets.",
         "list_price": 75.0,
         "category": "home-kitchen",
-        "r_s": 55.0,   # ~73% of list
-        "r_b": 70.0,   # ~93% of list; ZOPA = 15
+        "r_s": 55.0,  # ~73% of list
+        "r_b": 70.0,  # ~93% of list; ZOPA = 15
     },
     {
         "title": "Portable Jump Starter",
         "description": "2000A peak portable car jump starter with USB charging ports.",
         "list_price": 75.0,
         "category": "automotive",
-        "r_s": 55.0,   # ~73% of list
-        "r_b": 70.0,   # ~93% of list; ZOPA = 15
+        "r_s": 55.0,  # ~73% of list
+        "r_b": 70.0,  # ~93% of list; ZOPA = 15
     },
     {
         "title": "Mechanical Keyboard",
         "description": "Tenkeyless mechanical keyboard, blue switches, RGB backlight.",
         "list_price": 80.0,
         "category": "electronics",
-        "r_s": 60.0,   # ~75% of list
-        "r_b": 78.0,   # ~98% of list; ZOPA = 18
+        "r_s": 60.0,  # ~75% of list
+        "r_b": 78.0,  # ~98% of list; ZOPA = 18
     },
     {
         "title": "Hiking Backpack",
         "description": "40L hiking backpack with hydration bladder sleeve and rain cover.",
         "list_price": 85.0,
         "category": "sports-outdoors",
-        "r_s": 62.0,   # ~73% of list
-        "r_b": 80.0,   # ~94% of list; ZOPA = 18
+        "r_s": 62.0,  # ~73% of list
+        "r_b": 80.0,  # ~94% of list; ZOPA = 18
     },
     {
         "title": "Bedside Table",
         "description": "2-drawer solid wood bedside table, walnut finish.",
         "list_price": 90.0,
         "category": "furniture",
-        "r_s": 65.0,   # ~72% of list
-        "r_b": 85.0,   # ~94% of list; ZOPA = 20
+        "r_s": 65.0,  # ~72% of list
+        "r_b": 85.0,  # ~94% of list; ZOPA = 20
     },
     # --- Higher-price ---
     {
@@ -268,7 +267,7 @@ DEFAULT_ITEMS: List[Dict[str, Any]] = [
         "description": "Ergonomic office chair, lumbar support, adjustable armrests.",
         "list_price": 120.0,
         "category": "furniture",
-        "r_s": 85.0,   # ~71% of list
+        "r_s": 85.0,  # ~71% of list
         "r_b": 110.0,  # ~92% of list; ZOPA = 25
     },
     {
@@ -276,7 +275,7 @@ DEFAULT_ITEMS: List[Dict[str, Any]] = [
         "description": "1TB portable external SSD, USB 3.2, 1000MB/s read speed.",
         "list_price": 120.0,
         "category": "electronics",
-        "r_s": 90.0,   # ~75% of list
+        "r_s": 90.0,  # ~75% of list
         "r_b": 115.0,  # ~96% of list; ZOPA = 25
     },
     {
@@ -301,7 +300,9 @@ DEFAULT_ITEMS: List[Dict[str, Any]] = [
 _COUNTERPART_SCRIPT_PATH = Path(__file__).resolve().parent / "counterpart.py"
 
 
-def _resample_zopa_from_list_price(list_price: float, rng: random.Random) -> tuple[float, float]:
+def _resample_zopa_from_list_price(
+    list_price: float, rng: random.Random
+) -> tuple[float, float]:
     """Sample r_s and r_b from list_price; ranges (0.7–0.95) and (1.05–1.3) ensure r_s < r_b."""
     r_s = float(list_price * rng.uniform(0.7, 0.95))
     r_b = float(list_price * rng.uniform(1.05, 1.3))
@@ -351,14 +352,16 @@ def load_items_from_csv(
                     r_s, r_b = seller_target, buyer_target
                     if r_s > r_b:
                         r_s, r_b = _resample_zopa_from_list_price(list_price, rng)
-            items.append({
-                "title": (row.get("title") or "").strip() or "Item",
-                "description": (row.get("description") or "").strip() or "",
-                "list_price": float(list_price),
-                "category": (row.get("category") or "").strip() or "general",
-                "r_s": float(r_s),
-                "r_b": float(r_b),
-            })
+            items.append(
+                {
+                    "title": (row.get("title") or "").strip() or "Item",
+                    "description": (row.get("description") or "").strip() or "",
+                    "list_price": float(list_price),
+                    "category": (row.get("category") or "").strip() or "general",
+                    "r_s": float(r_s),
+                    "r_b": float(r_b),
+                }
+            )
     return items
 
 
@@ -455,9 +458,12 @@ def build_instruction(role: str, item: Dict[str, Any], scenario: Dict[str, Any])
     agent_reservation = r_s if role == "seller" else r_b
     counterpart_role = "buyer" if role == "seller" else "seller"
     action_verb = "sell" if role == "seller" else "buy"
-    reservation_label = "minimum acceptable price" if role == "seller" else "maximum acceptable price"
+    reservation_label = (
+        "minimum acceptable price" if role == "seller" else "maximum acceptable price"
+    )
     reservation_note = (
-        "Do not sell below this price." if role == "seller"
+        "Do not sell below this price."
+        if role == "seller"
         else "Do not pay above this price."
     )
     score_direction = "higher" if role == "seller" else "lower"
@@ -474,59 +480,66 @@ def build_instruction(role: str, item: Dict[str, Any], scenario: Dict[str, Any])
     ]
     if description:
         lines.extend(["", "**Description:**", description])
-    lines.extend([
-        "",
-        "## Your position",
-        f"- **Your {reservation_label} (reservation):** ${agent_reservation:.2f} — {reservation_note}",
-        f"- **Allowed price range:** ${p_min:.2f} – ${p_max:.2f}",
-        f"- **Max rounds:** {K}",
-        "",
-        f"The {counterpart_role}'s reservation price is **unknown to you**.",
-        "",
-        "## Current state",
-        f"**Counterpart's opening offer:** ${counterpart_opening:.2f}",
-        "It is your turn.",
-        "",
-        "## Commands",
-        "",
-        "**Make an offer** (must be within the allowed price range):",
-        "```bash",
-        "python /app/counterpart.py offer <price>",
-        "```",
-        "",
-        f"**Accept the {counterpart_role}'s last offer:**",
-        "```bash",
-        "python /app/counterpart.py accept",
-        "```",
-        "",
-        "**Walk away (no deal):**",
-        "```bash",
-        "python /app/counterpart.py reject",
-        "```",
-        "",
-        "## Response format",
-        "",
-        "Each `offer` command returns JSON, for example:",
-        "```json",
-        json.dumps({
-            "round": 1,
-            "counterpart_offer": round(counterpart_opening * (1.05 if role == "seller" else 0.95), 2),
-            "counterpart_message": "I can move a bit, but I need a better price from you.",
-            "accepted": False,
-            "done": False,
-            "rounds_remaining": K - 1,
-        }, indent=2),
-        "```",
-        "",
-        "When `accepted: true` or `done: true`, the negotiation is over.",
-        "",
-        "## Scoring",
-        "",
-        "- No deal → reward = 0",
-        "- Deal at price **p** → reward = your surplus / total surplus ∈ [0, 1]",
-        "",
-        f"Maximize your reward: drive the price **{score_direction}** while still reaching agreement.",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Your position",
+            f"- **Your {reservation_label} (reservation):** ${agent_reservation:.2f} — {reservation_note}",
+            f"- **Allowed price range:** ${p_min:.2f} – ${p_max:.2f}",
+            f"- **Max rounds:** {K}",
+            "",
+            f"The {counterpart_role}'s reservation price is **unknown to you**.",
+            "",
+            "## Current state",
+            f"**Counterpart's opening offer:** ${counterpart_opening:.2f}",
+            "It is your turn.",
+            "",
+            "## Commands",
+            "",
+            "**Make an offer** (must be within the allowed price range):",
+            "```bash",
+            "python /app/counterpart.py offer <price>",
+            "```",
+            "",
+            f"**Accept the {counterpart_role}'s last offer:**",
+            "```bash",
+            "python /app/counterpart.py accept",
+            "```",
+            "",
+            "**Walk away (no deal):**",
+            "```bash",
+            "python /app/counterpart.py reject",
+            "```",
+            "",
+            "## Response format",
+            "",
+            "Each `offer` command returns JSON, for example:",
+            "```json",
+            json.dumps(
+                {
+                    "round": 1,
+                    "counterpart_offer": round(
+                        counterpart_opening * (1.05 if role == "seller" else 0.95), 2
+                    ),
+                    "counterpart_message": "I can move a bit, but I need a better price from you.",
+                    "accepted": False,
+                    "done": False,
+                    "rounds_remaining": K - 1,
+                },
+                indent=2,
+            ),
+            "```",
+            "",
+            "When `accepted: true` or `done: true`, the negotiation is over.",
+            "",
+            "## Scoring",
+            "",
+            "- No deal → reward = 0",
+            "- Deal at price **p** → reward = your surplus / total surplus ∈ [0, 1]",
+            "",
+            f"Maximize your reward: drive the price **{score_direction}** while still reaching agreement.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -554,11 +567,15 @@ def create_negotiation_task(
     # honest-agent assumption as documented in README)
     data_dir = task_dir / "data"
     data_dir.mkdir(exist_ok=True)
-    (data_dir / "scenario.json").write_text(json.dumps(scenario, indent=2), encoding="utf-8")
+    (data_dir / "scenario.json").write_text(
+        json.dumps(scenario, indent=2), encoding="utf-8"
+    )
 
     # Copy counterpart.py into the task dir (Dockerfile COPYs it into /app/)
     if _COUNTERPART_SCRIPT_PATH.exists():
-        shutil.copy2(_COUNTERPART_SCRIPT_PATH, task_dir / "environment" / "counterpart.py")
+        shutil.copy2(
+            _COUNTERPART_SCRIPT_PATH, task_dir / "environment" / "counterpart.py"
+        )
 
     return task_dir
 
@@ -570,13 +587,15 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "--num-instances", "-n",
+        "--num-instances",
+        "-n",
         type=int,
         default=10,
         help="Number of task instances to generate (default: 10)",
     )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=None,
         help="Output directory for task dirs (default: data/negotiation/out)",
@@ -588,7 +607,8 @@ def main() -> None:
         help="Random seed (default: 42)",
     )
     parser.add_argument(
-        "--source", "-s",
+        "--source",
+        "-s",
         type=str,
         default=None,
         help="Path to CraigslistBargain CSV or directory containing train.csv (optional)",
@@ -642,6 +662,7 @@ def main() -> None:
 
     if args.upload_repo and not args.no_upload:
         from data.commons import upload_tasks_to_hf
+
         print(f"Uploading to {args.upload_repo}...")
         upload_tasks_to_hf(str(output_dir), args.upload_repo)
         print("Upload complete.")

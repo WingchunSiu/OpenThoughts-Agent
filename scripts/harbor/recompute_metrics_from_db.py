@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import random
 import re
@@ -73,6 +72,7 @@ DEFAULT_DROP_EXCEPTIONS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 # Reconstruct trial data from stats JSONB
 # ---------------------------------------------------------------------------
+
 
 def _parse_task_name_from_trial(trial_name: str) -> str:
     """Extract task name from trial_name format: task_name__short_uuid."""
@@ -143,6 +143,7 @@ def reconstruct_trials_from_stats(
 # Metric computation (standalone, no Harbor imports needed)
 # ---------------------------------------------------------------------------
 
+
 def compute_mean(trials: list[dict[str, Any]]) -> dict[str, Any]:
     """Flat mean over all trials (None/error → 0)."""
     values = []
@@ -212,6 +213,7 @@ def compute_drop_ei(
 # Supabase query
 # ---------------------------------------------------------------------------
 
+
 def _fetch_batch(client, offset: int, batch_size: int) -> list[dict]:
     """Fetch a single batch from sandbox_jobs."""
     return (
@@ -228,7 +230,9 @@ def _fetch_batch(client, offset: int, batch_size: int) -> list[dict]:
     ).data or []
 
 
-def fetch_jobs(n: int | None, all_jobs: bool = False, batch_size: int = 200) -> list[dict]:
+def fetch_jobs(
+    n: int | None, all_jobs: bool = False, batch_size: int = 200
+) -> list[dict]:
     """Fetch jobs from sandbox_jobs where hf_traces_link is not null."""
     from database.unified_db.config import get_default_client
 
@@ -305,11 +309,7 @@ def fetch_name_lookups(
     if benchmark_ids:
         # Fetch all benchmarks (not just the ones we need) to resolve
         # duplicate_of chains where the canonical parent may not be in our set
-        resp = (
-            client.table("benchmarks")
-            .select("id, name, duplicate_of")
-            .execute()
-        )
+        resp = client.table("benchmarks").select("id, name, duplicate_of").execute()
         all_benchmarks = {row["id"]: row for row in (resp.data or [])}
 
         for row in all_benchmarks.values():
@@ -339,6 +339,7 @@ def fetch_name_lookups(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def _extract_original_metric(metrics: list[dict] | None, name: str) -> float | None:
     """Extract a named metric value from the DB metrics array."""
@@ -421,6 +422,7 @@ def run(
                 task_counts[t["task_name"]] += 1
             if task_counts:
                 from collections import Counter
+
                 count_freq = Counter(task_counts.values())
                 inferred_n_attempts = count_freq.most_common(1)[0][0]
             else:
@@ -436,12 +438,8 @@ def run(
                 )
 
             mean_result = compute_mean(trials)
-            mean_drop_ei = compute_drop_ei(
-                trials, n_attempts, floor_rewards=False
-            )
-            accuracy_drop_ei = compute_drop_ei(
-                trials, n_attempts, floor_rewards=True
-            )
+            mean_drop_ei = compute_drop_ei(trials, n_attempts, floor_rewards=False)
+            accuracy_drop_ei = compute_drop_ei(trials, n_attempts, floor_rewards=True)
 
             # Extract original values
             orig_accuracy = _extract_original_metric(original_metrics, "accuracy")
@@ -463,7 +461,10 @@ def run(
                 "agent": agent_names.get(job.get("agent_id"), ""),
                 "model": model_names.get(job.get("model_id"), ""),
                 "benchmark": benchmark_names.get(job.get("benchmark_id"), ""),
-                "benchmark_group": benchmark_group.get(job.get("benchmark_id"), benchmark_names.get(job.get("benchmark_id"), "")),
+                "benchmark_group": benchmark_group.get(
+                    job.get("benchmark_id"),
+                    benchmark_names.get(job.get("benchmark_id"), ""),
+                ),
                 "n_trials": job.get("n_trials", 0),
                 "n_attempts_db": n_attempts_db,
                 "n_attempts_inferred": inferred_n_attempts,
@@ -479,13 +480,23 @@ def run(
                 # New: mean_drop_ei
                 "mean_drop_ei_reward": mean_drop_ei["mean_drop_ei_reward"],
                 "mean_drop_ei_reward_count": mean_drop_ei["mean_drop_ei_reward_count"],
-                "mean_drop_ei_tasks_dropped": mean_drop_ei["mean_drop_ei_tasks_dropped"],
-                "mean_drop_ei_trials_dropped": mean_drop_ei["mean_drop_ei_trials_dropped"],
+                "mean_drop_ei_tasks_dropped": mean_drop_ei[
+                    "mean_drop_ei_tasks_dropped"
+                ],
+                "mean_drop_ei_trials_dropped": mean_drop_ei[
+                    "mean_drop_ei_trials_dropped"
+                ],
                 # New: accuracy_drop_ei
                 "accuracy_drop_ei_reward": accuracy_drop_ei["accuracy_drop_ei_reward"],
-                "accuracy_drop_ei_reward_count": accuracy_drop_ei["accuracy_drop_ei_reward_count"],
-                "accuracy_drop_ei_tasks_dropped": accuracy_drop_ei["accuracy_drop_ei_tasks_dropped"],
-                "accuracy_drop_ei_trials_dropped": accuracy_drop_ei["accuracy_drop_ei_trials_dropped"],
+                "accuracy_drop_ei_reward_count": accuracy_drop_ei[
+                    "accuracy_drop_ei_reward_count"
+                ],
+                "accuracy_drop_ei_tasks_dropped": accuracy_drop_ei[
+                    "accuracy_drop_ei_tasks_dropped"
+                ],
+                "accuracy_drop_ei_trials_dropped": accuracy_drop_ei[
+                    "accuracy_drop_ei_trials_dropped"
+                ],
             }
             rows_out.append(row)
 
@@ -493,7 +504,9 @@ def run(
     print(f"Found {len(rows_out)} with dropped trials/tasks")
 
     if not rows_out:
-        print("No jobs had infrastructure errors or incomplete tasks — nothing to write.")
+        print(
+            "No jobs had infrastructure errors or incomplete tasks — nothing to write."
+        )
         return
 
     # Group rows by benchmark_group
@@ -521,8 +534,10 @@ def run(
         from scipy.stats import spearmanr
         import numpy as np
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         has_plot_deps = True
     except ImportError as exc:
         print(f"Skipping plots (missing dependency: {exc})")
@@ -559,7 +574,11 @@ def run(
                 "------------|------------|\n"
             )
             for r in group_rows:
-                orig = f"{r['orig_accuracy']:.4f}" if r["orig_accuracy"] is not None else "N/A"
+                orig = (
+                    f"{r['orig_accuracy']:.4f}"
+                    if r["orig_accuracy"] is not None
+                    else "N/A"
+                )
                 f.write(
                     f"| {r['job_name'][:40]} "
                     f"| {r['model'][:25]} "
@@ -579,15 +598,25 @@ def run(
             for r in group_rows:
                 if r["orig_accuracy"] is not None:
                     delta = r["mean_drop_ei_reward"] - r["orig_accuracy"]
-                    deltas.append((r["job_name"], r["model"], delta,
-                                   r["mean_drop_ei_trials_dropped"],
-                                   r["mean_drop_ei_tasks_dropped"]))
+                    deltas.append(
+                        (
+                            r["job_name"],
+                            r["model"],
+                            delta,
+                            r["mean_drop_ei_trials_dropped"],
+                            r["mean_drop_ei_tasks_dropped"],
+                        )
+                    )
             if deltas:
                 f.write("| Job | Model | Delta | Trials Drop | Tasks Drop |\n")
                 f.write("|-----|-------|-------|-------------|------------|\n")
-                for name, model, delta, td, tkd in sorted(deltas, key=lambda x: -abs(x[2])):
+                for name, model, delta, td, tkd in sorted(
+                    deltas, key=lambda x: -abs(x[2])
+                ):
                     sign = "+" if delta >= 0 else ""
-                    f.write(f"| {name[:40]} | {model[:25]} | {sign}{delta:.4f} | {td} | {tkd} |\n")
+                    f.write(
+                        f"| {name[:40]} | {model[:25]} | {sign}{delta:.4f} | {td} | {tkd} |\n"
+                    )
 
         # Per-group scatterplot
         if has_plot_deps and len(group_rows) >= 3:
@@ -603,8 +632,13 @@ def run(
             y = np.array(means_drop)
             coeffs = np.polyfit(x, y, 1)
             x_line = np.linspace(x.min(), x.max(), 100)
-            ax.plot(x_line, np.polyval(coeffs, x_line), "r--", linewidth=1.5,
-                    label=f"fit: y={coeffs[0]:.3f}x+{coeffs[1]:.4f}")
+            ax.plot(
+                x_line,
+                np.polyval(coeffs, x_line),
+                "r--",
+                linewidth=1.5,
+                label=f"fit: y={coeffs[0]:.3f}x+{coeffs[1]:.4f}",
+            )
 
             hi = max(x.max(), y.max()) * 1.05
             ax.plot([0, hi], [0, hi], "k:", alpha=0.4, label="y=x")
@@ -613,7 +647,9 @@ def run(
             ax.set_ylim(bottom=0)
             ax.set_xlabel("Mean Reward (original)")
             ax.set_ylabel("Mean Drop EI Reward")
-            ax.set_title(f"{group_name}\nSpearman rho={rho:.3f}, p={pval:.3g}, n={len(group_rows)}")
+            ax.set_title(
+                f"{group_name}\nSpearman rho={rho:.3f}, p={pval:.3g}, n={len(group_rows)}"
+            )
             ax.legend()
             ax.set_aspect("equal", adjustable="datalim")
             fig.tight_layout()
@@ -622,7 +658,9 @@ def run(
             fig.savefig(plot_path, dpi=150)
             plt.close(fig)
 
-        print(f"  [{group_name}] {len(group_rows)} jobs — wrote {safe_name}.{{csv,md,png}}")
+        print(
+            f"  [{group_name}] {len(group_rows)} jobs — wrote {safe_name}.{{csv,md,png}}"
+        )
 
     # Global correlation
     if has_plot_deps and len(rows_out) >= 3:
@@ -639,8 +677,16 @@ def run(
             grows = grouped[gname]
             gx = [r["recomputed_mean_reward"] for r in grows]
             gy = [r["mean_drop_ei_reward"] for r in grows]
-            ax.scatter(gx, gy, alpha=0.7, edgecolors="k", linewidths=0.3,
-                       color=colors[i % len(colors)], label=gname[:30], s=40)
+            ax.scatter(
+                gx,
+                gy,
+                alpha=0.7,
+                edgecolors="k",
+                linewidths=0.3,
+                color=colors[i % len(colors)],
+                label=gname[:30],
+                s=40,
+            )
 
         x = np.array(means)
         y = np.array(means_drop)
@@ -663,7 +709,9 @@ def run(
         plt.close(fig)
         print(f"Wrote global scatterplot: {plot_path}")
 
-    print(f"\nDone! {len(rows_out)} evals across {len(grouped)} benchmark groups → {run_dir}")
+    print(
+        f"\nDone! {len(rows_out)} evals across {len(grouped)} benchmark groups → {run_dir}"
+    )
 
 
 def main() -> None:

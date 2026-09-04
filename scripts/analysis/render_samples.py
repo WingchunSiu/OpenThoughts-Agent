@@ -13,7 +13,6 @@ import argparse
 import html
 import json
 import re
-import sys
 from pathlib import Path
 
 
@@ -73,9 +72,9 @@ h2 { color: #f5f5f7; margin-top: 24px; }
 """
 
 
-THINK_RE     = re.compile(r"(<think>)(.*?)(</think>)", re.DOTALL)
-TOOLCALL_RE  = re.compile(r"(<tool_call>)\s*(.*?)\s*(</tool_call>)", re.DOTALL)
-TOOLRESP_RE  = re.compile(r"(<tool_response>)\s*(.*?)\s*(</tool_response>)", re.DOTALL)
+THINK_RE = re.compile(r"(<think>)(.*?)(</think>)", re.DOTALL)
+TOOLCALL_RE = re.compile(r"(<tool_call>)\s*(.*?)\s*(</tool_call>)", re.DOTALL)
+TOOLRESP_RE = re.compile(r"(<tool_response>)\s*(.*?)\s*(</tool_response>)", re.DOTALL)
 
 
 def highlight_inline(text: str) -> str:
@@ -98,12 +97,16 @@ def highlight_inline(text: str) -> str:
 
     # Escaped tags look like &lt;think&gt; etc.
     THINK_E = re.compile(r"&lt;think&gt;(.*?)&lt;/think&gt;", re.DOTALL)
-    TC_E    = re.compile(r"&lt;tool_call&gt;\s*(.*?)\s*&lt;/tool_call&gt;", re.DOTALL)
-    TR_E    = re.compile(r"&lt;tool_response&gt;\s*(.*?)\s*&lt;/tool_response&gt;", re.DOTALL)
+    TC_E = re.compile(r"&lt;tool_call&gt;\s*(.*?)\s*&lt;/tool_call&gt;", re.DOTALL)
+    TR_E = re.compile(
+        r"&lt;tool_response&gt;\s*(.*?)\s*&lt;/tool_response&gt;", re.DOTALL
+    )
 
     s = THINK_E.sub(lambda m: f'<span class="think">{m.group(1).strip()}</span>', s)
     s = TC_E.sub(lambda m: f'<span class="toolcall">{m.group(1).strip()}</span>', s)
-    s = TR_E.sub(lambda m: f'<span class="toolresp-inner">{m.group(1).strip()}</span>', s)
+    s = TR_E.sub(
+        lambda m: f'<span class="toolresp-inner">{m.group(1).strip()}</span>', s
+    )
     return s
 
 
@@ -133,7 +136,7 @@ def render_row(row: dict, idx: int) -> str:
         role_counts[r] = role_counts.get(r, 0) + 1
 
     parts = [
-        f"<!DOCTYPE html><html><head><meta charset='utf-8'>",
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>",
         f"<title>Sera v4-1000 sample {idx} — {html.escape(instance_id)}</title>",
         f"<style>{CSS}</style></head><body>",
         f"<h1>Sample {idx}: {html.escape(instance_id)}</h1>",
@@ -142,7 +145,7 @@ def render_row(row: dict, idx: int) -> str:
         f"<div><span class='key'>source:</span> <span class='val'>{html.escape(source)}</span></div>",
         f"<div><span class='key'>func_name:</span> <span class='val'>{html.escape(func_name)}</span></div>",
         f"<div><span class='key'>func_path:</span> <span class='val'>{html.escape(func_path)}</span></div>",
-        f"<div><span class='key'>messages:</span> <span class='val'>{n_msgs}  ({', '.join(f'{r}={c}' for r,c in role_counts.items())})</span></div>",
+        f"<div><span class='key'>messages:</span> <span class='val'>{n_msgs}  ({', '.join(f'{r}={c}' for r, c in role_counts.items())})</span></div>",
         "</div>",
         "<h2>Problem statement</h2>",
         f"<div class='problem'>{html.escape(problem)}</div>",
@@ -153,7 +156,10 @@ def render_row(row: dict, idx: int) -> str:
         role = m.get("role", "?")
         content = m.get("content", "") or ""
         if isinstance(content, list):
-            content = "".join(c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content)
+            content = "".join(
+                c.get("text", str(c)) if isinstance(c, dict) else str(c)
+                for c in content
+            )
         train = m.get("train")
         cls = classify(role, content)
         train_tag = ""
@@ -173,8 +179,14 @@ def render_row(row: dict, idx: int) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default="/Users/benjaminfeuer/Documents/agent-traces-analysis/sera_v4_training_data/sera-4.6-lite-t2_v4_1000.jsonl")
-    ap.add_argument("--out_dir", default="/Users/benjaminfeuer/Documents/agent-traces-analysis/sera_v4_training_data")
+    ap.add_argument(
+        "--input",
+        default="/Users/benjaminfeuer/Documents/agent-traces-analysis/sera_v4_training_data/sera-4.6-lite-t2_v4_1000.jsonl",
+    )
+    ap.add_argument(
+        "--out_dir",
+        default="/Users/benjaminfeuer/Documents/agent-traces-analysis/sera_v4_training_data",
+    )
     ap.add_argument("--n", type=int, default=3)
     args = ap.parse_args()
 
@@ -188,10 +200,14 @@ def main():
                 break
             row = json.loads(line)
             html_str = render_row(row, idx)
-            inst = (row.get("instance_id") or f"row{idx}").replace("/", "_").replace(":", "_")
+            inst = (
+                (row.get("instance_id") or f"row{idx}")
+                .replace("/", "_")
+                .replace(":", "_")
+            )
             outpath = out / f"sample_{idx:02d}_{inst}.html"
             outpath.write_text(html_str)
-            print(f"wrote {outpath}  ({len(html_str)//1024} KB)")
+            print(f"wrote {outpath}  ({len(html_str) // 1024} KB)")
 
 
 if __name__ == "__main__":

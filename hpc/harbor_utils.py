@@ -11,6 +11,7 @@ These utilities are shared across all execution paths:
 - Cloud launchers (data/cloud/launch_tracegen_cloud.py, eval/cloud/launch_eval_cloud.py)
 - HPC SLURM launchers (hpc/launch.py --job_type datagen/eval)
 """
+
 from __future__ import annotations
 
 import copy
@@ -34,6 +35,7 @@ import yaml
 # Directory containing Harbor YAML configs (relative to this file)
 _DIRENV = os.path.dirname(__file__)
 HARBOR_CONFIG_DIR = os.path.join(_DIRENV, "harbor_yaml")
+VERIFIER_OPENAI_API_KEY_TEMPLATE = "${OPENAI_API_KEY}"
 
 
 def resolve_harbor_config_path(
@@ -72,8 +74,7 @@ def resolve_harbor_config_path(
 
     # Not found - raise with helpful message
     raise FileNotFoundError(
-        f"Harbor job config not found: {raw_value} "
-        f"(also checked {config_dir})"
+        f"Harbor job config not found: {raw_value} (also checked {config_dir})"
     )
 
 
@@ -95,6 +96,7 @@ def resolve_jobs_dir_path(
     if repo_root is None:
         try:
             from hpc.launch_utils import PROJECT_ROOT
+
             repo_root = PROJECT_ROOT
         except ImportError:
             repo_root = Path(__file__).resolve().parent.parent
@@ -110,12 +112,14 @@ def resolve_jobs_dir_path(
 # Harbor registry utilities
 # ---------------------------------------------------------------------------
 
+
 # Default locations to search for Harbor registry.json
 def _get_default_registry_hints() -> List[Optional[Path]]:
     """Get default paths to check for Harbor registry."""
     # Import here to avoid circular imports
     try:
         from hpc.launch_utils import PROJECT_ROOT
+
         project_parent = PROJECT_ROOT.parent
     except ImportError:
         project_parent = Path(__file__).resolve().parent.parent.parent
@@ -263,7 +267,9 @@ def get_harbor_env_from_config(
 # ---------------------------------------------------------------------------
 
 
-def build_endpoint_meta(endpoint_url: str) -> Dict[str, str]:
+def build_endpoint_meta(
+    endpoint_url: str, api_key: Optional[str] = None
+) -> Dict[str, str]:
     """Build endpoint metadata dict from a vLLM endpoint URL.
 
     Handles both formats:
@@ -272,9 +278,12 @@ def build_endpoint_meta(endpoint_url: str) -> Dict[str, str]:
 
     Args:
         endpoint_url: vLLM endpoint URL (with or without /v1 suffix)
+        api_key: optional bearer key to carry into agent kwargs (controller-ingress
+            mode). When None (the default / pinggy path), the returned dict is
+            byte-identical to the legacy behavior.
 
     Returns:
-        Dict with 'api_base' and 'metrics_endpoint' keys
+        Dict with 'api_base' and 'metrics_endpoint' keys (+ 'api_key' if provided)
     """
     url = endpoint_url.rstrip("/")
 
@@ -288,10 +297,13 @@ def build_endpoint_meta(endpoint_url: str) -> Dict[str, str]:
 
     metrics_endpoint = f"{base_url}/metrics"
 
-    return {
+    meta = {
         "api_base": api_base,
         "metrics_endpoint": metrics_endpoint,
     }
+    if api_key:
+        meta["api_key"] = api_key
+    return meta
 
 
 def derive_vllm_supports_tool_calling(vllm_cfg: Any) -> Optional[bool]:
@@ -329,6 +341,7 @@ def derive_vllm_supports_tool_calling(vllm_cfg: Any) -> Optional[bool]:
 
     return False
 
+
 def load_endpoint_metadata(endpoint_json: Path) -> Dict[str, Any]:
     """Load and parse vLLM endpoint metadata from JSON file.
 
@@ -360,7 +373,9 @@ def load_endpoint_metadata(endpoint_json: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def extract_agent_kwargs_from_config(harbor_config: dict, agent_name: Optional[str]) -> dict:
+def extract_agent_kwargs_from_config(
+    harbor_config: dict, agent_name: Optional[str]
+) -> dict:
     """Extract kwargs for the specified agent from harbor config.
 
     The Harbor YAML is the ground truth for agent configuration. This function
@@ -553,6 +568,10 @@ def merge_agent_kwargs(
             agent_kwargs["metrics_endpoint"] = endpoint_meta["metrics_endpoint"]
         if endpoint_meta.get("api_base"):
             agent_kwargs["api_base"] = endpoint_meta["api_base"]
+        # api_key only present in controller-ingress mode; dormant (byte-identical)
+        # for the pinggy/local path where endpoint_meta carries no api_key.
+        if endpoint_meta.get("api_key"):
+            agent_kwargs["api_key"] = endpoint_meta["api_key"]
 
     # 3. Apply extra kwargs from datagen config
     if extra_kwargs:
@@ -618,6 +637,16 @@ def merge_harbor_config(
         existing_kwargs.update(agent_kwargs)
         agent["kwargs"] = existing_kwargs
 
+    # Harbor resolves verifier environment templates from its host process and
+    # then passes the resolved values to the sandbox.  The task-level configs
+    # do not consistently declare this dependency, so relying on their
+    # ``[verifier.env]`` blocks leaves LLM-based verifiers without credentials.
+    # Keep this a template rather than a literal: the secret never lands in the
+    # generated YAML or the resumable Harbor config.
+    verifier = modified_config.setdefault("verifier", {})
+    verifier_env = verifier.setdefault("env", {})
+    verifier_env.setdefault("OPENAI_API_KEY", VERIFIER_OPENAI_API_KEY_TEMPLATE)
+
     return modified_config
 
 
@@ -638,6 +667,7 @@ def build_harbor_command(
     dataset_path: Optional[str] = None,
     jobs_dir: Optional[str] = None,
     extra_agent_kwargs: Optional[Dict[str, Any]] = None,
+    export_hf_repo: Optional[str] = None,
 ) -> List[str]:
     """Build the harbor jobs start command.
 
@@ -708,6 +738,7 @@ def build_harbor_command(
     # harbor reads back. Apply the filter here too — see commit 1ba6a4a7.
     try:
         from scripts.harbor.job_config_utils import _filter_supported_metrics
+
         modified_config = _filter_supported_metrics(modified_config)
     except ImportError:
         # _filter_supported_metrics lives under scripts.harbor; if we're
@@ -725,6 +756,13 @@ def build_harbor_command(
         harbor_binary,
         "jobs",
         "start",
+        # Non-interactive: suppress harbor's host-env confirmation prompt
+        # (`_confirm_host_env_access` console.input, jobs.py, added in PR #1195).
+        # Verified configs declare host-env vars (OPENAI_API_KEY/JUDGE_MODEL for
+        # the LLM judge) which trigger the prompt; under SLURM there is no TTY so
+        # console.input() blocks forever → 12h TIMEOUT, zero output (datagen #22
+        # 2026-06-10). The launcher is always non-interactive, so always confirm.
+        "--yes",
         "--config",
         temp_config_path,
         "--job-name",
@@ -766,7 +804,9 @@ def build_harbor_command(
         with open(merged_config_path, "w") as f:
             yaml.safe_dump(modified_config, f)
         # gs://, s3:// etc. are remote schemes; never local.
-        looks_local = not dataset_path.startswith(("gs://", "s3://", "http://", "https://"))
+        looks_local = not dataset_path.startswith(
+            ("gs://", "s3://", "http://", "https://")
+        )
         if looks_local and Path(dataset_path).expanduser().exists():
             cmd.extend(["--path", str(Path(dataset_path).expanduser().resolve())])
         else:
@@ -778,7 +818,9 @@ def build_harbor_command(
         _placeholder = "/replace/with/tasks/path"
         yaml_datasets = modified_config.get("datasets") or []
         if yaml_datasets and any(
-            d.get("path", "") == _placeholder for d in yaml_datasets if isinstance(d, dict)
+            d.get("path", "") == _placeholder
+            for d in yaml_datasets
+            if isinstance(d, dict)
         ):
             modified_config.pop("datasets", None)
             modified_config.pop("tasks", None)
@@ -839,10 +881,25 @@ def build_harbor_command(
     # the post-run pipeline that uploads to Supabase / HF gets no inputs.
     if not (_flag_present("--export-traces") or _flag_present("--no-export-traces")):
         extra_args.append("--export-traces")
-    if not (_flag_present("--export-verifier-metadata") or _flag_present("--no-export-verifier-metadata")):
+    if not (
+        _flag_present("--export-verifier-metadata")
+        or _flag_present("--no-export-verifier-metadata")
+    ):
         extra_args.append("--export-verifier-metadata")
     if not _flag_present("--export-episodes"):
         extra_args.extend(["--export-episodes", "last"])
+
+    # Push the exported traces to HF directly from harbor's (gs://-aware)
+    # export path. Without --export-push/--export-repo, `harbor jobs start`
+    # builds the dataset in memory and discards it — the historical reason
+    # datagen jobs produced no HF repo on a clean completion. harbor reads the
+    # token from HF_TOKEN/HUGGINGFACE_TOKEN (forwarded to the worker via
+    # --secrets-env). This supersedes the OT-Agent post_harbor_hook upload,
+    # which silently no-op'd on a gs:// jobs_dir.
+    if export_hf_repo and not _flag_present("--export-repo"):
+        if not _flag_present("--export-push"):
+            extra_args.append("--export-push")
+        extra_args.extend(["--export-repo", export_hf_repo])
 
     for extra in extra_args:
         cmd.append(extra)
@@ -879,7 +936,7 @@ def build_harbor_command(
                 with open(config_json_path, "rb") as _f:
                     os.fsync(_f.fileno())
                 print(
-                    f"[build_harbor_command] Sync complete, fsync'd",
+                    "[build_harbor_command] Sync complete, fsync'd",
                     flush=True,
                 )
             except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -899,6 +956,133 @@ def build_harbor_command(
             )
 
     return cmd
+
+
+def prune_refire_errored_trials(
+    run_dir_uri: str,
+    filter_error_types: List[str],
+    *,
+    log_prefix: str = "",
+) -> Tuple[int, Dict[str, int]]:
+    """Delete infra-errored trial dirs from a Harbor run dir so a subsequent
+    ``harbor jobs start`` AUTO-RESUME re-runs them.
+
+    This is a UPath/fsspec-native, ``gs://``-capable reimplementation of the
+    trial-deletion pass inside ``harbor jobs resume --filter-error-type``.
+
+    WHY not just call ``harbor jobs resume`` (as the Jupiter/Leonardo sbatches
+    do): harbor's ``resume`` CLI (``src/harbor/cli/jobs.py``) opens the job dir
+    with plain ``pathlib.Path`` (``job_dir = Path(job_path)``), so
+    ``-p gs://bucket/...`` fails — ``pathlib`` collapses the ``//`` and the dir
+    "does not exist". The Iris eval writes its durable run dir to GCS, so the
+    SLURM path's ``harbor jobs resume`` call cannot be reused verbatim in-pod.
+
+    This helper applies the SAME deletion criterion harbor's resume uses —
+    remove any trial whose ``result.json``'s
+    ``exception_info.exception_type`` is in ``filter_error_types`` — but through
+    ``upath.UPath`` + harbor's ``safe_rmtree``, so it works on ``gs://``,
+    ``s3://`` AND local paths. After pruning, the existing ``harbor jobs start``
+    auto-resume (which reads the run dir via UPath and re-runs only the
+    now-missing trials, against the LIVE vLLM endpoint the merged ``--config``
+    points at) does the actual re-run. BENIGN "not-solved" results (types NOT in
+    the filter — AgentTimeoutError, ContextLengthExceededError, etc.) are kept:
+    they are valid results, not infra flakes.
+
+    Byte-identical no-op when ``filter_error_types`` is empty/falsey or the run
+    dir does not yet exist (a fresh launch) — nothing is inspected or deleted.
+
+    Returns ``(n_pruned, {exception_type: count})``.
+    """
+    if not filter_error_types:
+        return 0, {}
+    try:
+        from upath import UPath
+        from harbor.models.trial.paths import TrialPaths
+        from harbor.models.trial.result import TrialResult
+        from harbor.utils.path_compat import safe_rmtree
+    except ImportError as exc:
+        print(
+            f"{log_prefix}[refire] WARNING: harbor/upath not importable ({exc}); "
+            "skipping errored-trial prune. Auto-resume will run but will NOT "
+            "re-run the infra-errored trials.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 0, {}
+
+    filter_set = set(filter_error_types)
+    job_dir = UPath(run_dir_uri)
+    try:
+        if not job_dir.exists():
+            print(
+                f"{log_prefix}[refire] no existing run dir at {run_dir_uri}; "
+                "nothing to prune (fresh launch).",
+                flush=True,
+            )
+            return 0, {}
+    except Exception as exc:  # noqa: BLE001 — stat can raise on a bad/unauth URI
+        print(
+            f"{log_prefix}[refire] WARNING: could not stat {run_dir_uri} "
+            f"({type(exc).__name__}: {exc}); skipping prune.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 0, {}
+
+    n_pruned = 0
+    breakdown: Dict[str, int] = {}
+    for trial_dir in job_dir.iterdir():
+        try:
+            if not trial_dir.is_dir():
+                continue
+            result_path = TrialPaths(trial_dir).result_path
+            if not result_path.exists():
+                # No result yet -> a genuinely incomplete/missing trial that
+                # auto-resume already re-runs. Leave it alone.
+                continue
+            try:
+                trial_result = TrialResult.model_validate_json(result_path.read_text())
+            except Exception as exc:  # noqa: BLE001
+                # Deliberately MORE conservative than harbor's local-only resume
+                # (which deletes on any parse error): on a REMOTE filesystem a
+                # transient read error must NOT destroy a possibly-valid trial.
+                # Skip + warn; a later pass re-fires it if it is still errored.
+                print(
+                    f"{log_prefix}[refire] WARNING: unreadable result for "
+                    f"{trial_dir.name} ({type(exc).__name__}); leaving in place.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            exc_info = trial_result.exception_info
+            if exc_info is not None and exc_info.exception_type in filter_set:
+                safe_rmtree(trial_dir)
+                n_pruned += 1
+                breakdown[exc_info.exception_type] = (
+                    breakdown.get(exc_info.exception_type, 0) + 1
+                )
+        except Exception as exc:  # noqa: BLE001 — never let one bad dir abort the sweep
+            print(
+                f"{log_prefix}[refire] WARNING: error handling {trial_dir} "
+                f"({type(exc).__name__}: {exc}); skipping.",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+
+    if n_pruned:
+        print(
+            f"{log_prefix}[refire] pruned {n_pruned} infra-errored trial dir(s) "
+            f"from {run_dir_uri} so auto-resume re-runs them: {breakdown}",
+            flush=True,
+        )
+    else:
+        print(
+            f"{log_prefix}[refire] no trials matched the infra filter "
+            f"{sorted(filter_set)} in {run_dir_uri}; nothing to re-run.",
+            flush=True,
+        )
+    return n_pruned, breakdown
 
 
 def _sync_runtime_fields_into_config_json(
@@ -962,13 +1146,20 @@ def _sync_runtime_fields_into_config_json(
     # the harbor_config.yaml were tweaked), the on-disk JSON must follow
     # so Harbor's self.config (which is just YAML+CLI overrides) matches.
     yaml_orchestrator = modified_config.get("orchestrator") or {}
-    yaml_retry = yaml_orchestrator.get("retry") if isinstance(yaml_orchestrator, dict) else None
+    yaml_retry = (
+        yaml_orchestrator.get("retry") if isinstance(yaml_orchestrator, dict) else None
+    )
     if isinstance(yaml_retry, dict):
         cj_retry = orchestrator.setdefault("retry", {})
         # Only sync the include/exclude exception lists — other retry fields
         # (max_retries, wait_multiplier, etc.) are not runtime-derived and
         # don't need re-syncing.
-        for k in ("include_exceptions", "exclude_exceptions", "mask_exceptions", "passthrough_exceptions"):
+        for k in (
+            "include_exceptions",
+            "exclude_exceptions",
+            "mask_exceptions",
+            "passthrough_exceptions",
+        ):
             if k in yaml_retry:
                 cj_retry[k] = yaml_retry[k]
 
@@ -1068,6 +1259,7 @@ __all__ = [
     "default_job_name",
     # Command building and execution
     "build_harbor_command",
+    "prune_refire_errored_trials",
     "merge_harbor_config",
     "run_harbor_cli",
 ]

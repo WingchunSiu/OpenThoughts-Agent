@@ -96,10 +96,10 @@ Usage:
   python data/patchers/patch_exp_rpt_defects4j_v3_v2_tasks.py \
       --root /path/to/extracted-tasks [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
-import hashlib
 import shutil
 import sys
 from pathlib import Path

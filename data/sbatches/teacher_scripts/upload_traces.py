@@ -10,7 +10,10 @@ from datasets import concatenate_datasets
 
 def main():
     if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <hf_repo_id> <job_dir1> [job_dir2] ...", file=sys.stderr)
+        print(
+            f"Usage: {sys.argv[0]} <hf_repo_id> <job_dir1> [job_dir2] ...",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     repo_id = sys.argv[1]
@@ -30,10 +33,10 @@ def main():
             ds = export_traces(
                 root=job_dir,
                 recursive=True,
-                episodes='last',
+                episodes="last",
                 push=False,
                 verbose=True,
-                embed_tools_in_conversation = False,
+                embed_tools_in_conversation=False,
             )
             if len(ds) > 0:
                 all_datasets.append(ds)

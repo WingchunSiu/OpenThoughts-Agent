@@ -25,3 +25,5 @@ drive/MyDrive
 *.pyc
 .next/
 .circleci
+scratchpad/
+**/scratchpad/

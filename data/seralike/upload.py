@@ -73,7 +73,9 @@ def main():
 
     print(f"Repo:    {args.repo}")
     print(f"Folder:  {args.folder}")
-    print(f"Shards:  {len(shards)}  ({sum(s.stat().st_size for s in shards) / 1e9:.2f} GB)")
+    print(
+        f"Shards:  {len(shards)}  ({sum(s.stat().st_size for s in shards) / 1e9:.2f} GB)"
+    )
     if args.dry_run:
         print("DRY RUN — not uploading.")
         return

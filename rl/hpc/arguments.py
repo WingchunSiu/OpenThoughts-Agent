@@ -14,8 +14,10 @@ class LaunchArgs:
     #  Core launch arguments
     # ----------------------------------
     job_name: Optional[str] = field(
-        default=None, 
-        metadata={"help": "Job name. This will determine outputs (logs, checkpoints, etc.)."}
+        default=None,
+        metadata={
+            "help": "Job name. This will determine outputs (logs, checkpoints, etc.)."
+        },
     )
     experiments_dir: Optional[str] = field(
         # TODO(Charlie): should we reuse EXPORT_PATH instead so everything is in the same place?
@@ -25,16 +27,13 @@ class LaunchArgs:
         },
     )
     time_limit: Optional[str] = field(
-        default=None, 
-        metadata={"help": "Time limit for the job"}
+        default=None, metadata={"help": "Time limit for the job"}
     )
     max_restarts: Optional[int] = field(
-        default=None, 
-        metadata={"help": "Maximum number of job restarts"}
+        default=None, metadata={"help": "Maximum number of job restarts"}
     )
     num_nodes: Optional[int] = field(
-        default=None, 
-        metadata={"help": "Number of nodes to use"}
+        default=None, metadata={"help": "Number of nodes to use"}
     )
 
     # Dry run
@@ -51,7 +50,9 @@ class LaunchArgs:
     # --------------------------------------------
     final_model_name: Optional[str] = field(
         default=None,
-        metadata={"help": "Name or path of the model (used for export and checkpoint paths)"}
+        metadata={
+            "help": "Name or path of the model (used for export and checkpoint paths)"
+        },
     )
     enable_hf_upload: Optional[bool] = field(
         default=False,
@@ -62,15 +63,19 @@ class LaunchArgs:
     )
     hf_repo_name: Optional[str] = field(
         default=None,
-        metadata={"help": "Hugging Face repository name (default: DCAgent/{final_model_name})"}
+        metadata={
+            "help": "Hugging Face repository name (default: DCAgent/{final_model_name})"
+        },
     )
     hf_token: Optional[str] = field(
         default=os.getenv("HF_TOKEN"),
-        metadata={"help": "Hugging Face token for authentication"}
+        metadata={"help": "Hugging Face token for authentication"},
     )
     watchdog_check_interval: Optional[int] = field(
         default=300,
-        metadata={"help": "Check interval in seconds for job status monitoring (default: 300)"}
+        metadata={
+            "help": "Check interval in seconds for job status monitoring (default: 300)"
+        },
     )
 
     # --------------------------------------------------------------
@@ -96,15 +101,16 @@ class LaunchArgs:
     # The policy model (i.e. the base model to start the training from).
     # Corresponds to `trainer.policy.model.path` in SkyRL.
     model_path: Optional[str] = field(
-        default=None,
-        metadata={"help": "Path to the model for training (policy model)"}
+        default=None, metadata={"help": "Path to the model for training (policy model)"}
     )
 
     # The entrypoint for the SkyRL job. This is not an argument of SkyRL, but rather the script to run
     # We will do python -m <skyrl_entrypoint> <skyrl_args> in the generated sbatch script.
     skyrl_entrypoint: str = field(
         default=None,
-        metadata={"help": "Entrypoint for the SkyRL job. E.g. `skyrl_train.entrypoints.main_base`"}
+        metadata={
+            "help": "Entrypoint for the SkyRL job. E.g. `skyrl_train.entrypoints.main_base`"
+        },
     )
 
 
@@ -132,21 +138,23 @@ def _add_dataclass_arguments(arg_group, dataclass_type, exclude_fields=None):
         # Optional/Union types
         if origin is Union:
             return any(
-                _is_list_of_str(arg) for arg in get_args(annotation) if arg is not type(None)
+                _is_list_of_str(arg)
+                for arg in get_args(annotation)
+                if arg is not type(None)
             )
         return False
 
     def str_to_bool(v):
         if isinstance(v, bool):
             return v
-        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        if v.lower() in ("yes", "true", "t", "y", "1"):
             return True
-        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        elif v.lower() in ("no", "false", "f", "n", "0"):
             return False
         else:
-            raise argparse.ArgumentTypeError('Boolean value expected.')
+            raise argparse.ArgumentTypeError("Boolean value expected.")
 
-    for field in dataclasses.fields(dataclass_type):
+    for field in dataclasses.fields(dataclass_type):  # noqa: F402
         if field.name in exclude_fields:
             continue
 
@@ -167,7 +175,9 @@ def _add_dataclass_arguments(arg_group, dataclass_type, exclude_fields=None):
                 help=field.metadata.get("help"),
                 default=field.default,
             )
-        elif field.type == bool or (field.type is Optional[bool] and field.default is not None):
+        elif field.type == bool or (  # noqa: E721
+            field.type is Optional[bool] and field.default is not None
+        ):
             arg_group.add_argument(
                 f"--{field.name}",
                 type=str_to_bool,
@@ -184,7 +194,9 @@ def _add_dataclass_arguments(arg_group, dataclass_type, exclude_fields=None):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Launch HPC jobs for OpenThoughts-Agent experiment")
+    parser = argparse.ArgumentParser(
+        description="Launch HPC jobs for OpenThoughts-Agent experiment"
+    )
 
     # Create argument groups for better organization
     launch_group = parser.add_argument_group("Launch Arguments")
@@ -205,7 +217,7 @@ def parse_args():
         "total_partition_nodes",
         "qos",
     ]
-    for field in hpc_fields:
+    for field in hpc_fields:  # noqa: F402
         hpc_group.add_argument(
             f"--{field}",
             type=(
@@ -233,7 +245,13 @@ def parse_args():
     args = parser.parse_args()
 
     # Validate required arguments
-    required_args = ['job_name', 'train_data', 'val_data', 'model_path', 'skyrl_entrypoint']
+    required_args = [
+        "job_name",
+        "train_data",
+        "val_data",
+        "model_path",
+        "skyrl_entrypoint",
+    ]
     for arg_name in required_args:
         if getattr(args, arg_name) is None:
             parser.error(f"the following argument is required: --{arg_name}")
@@ -243,7 +261,9 @@ def parse_args():
     skyrl_args: Dict[str, Any] = {}
     for item in args_dict.pop("skyrl_set", []):
         if "=" not in item:
-            raise argparse.ArgumentTypeError(f"Invalid --set entry (expected key=value): {item}")
+            raise argparse.ArgumentTypeError(
+                f"Invalid --set entry (expected key=value): {item}"
+            )
         key, value = item.split("=", 1)
         skyrl_args[key.strip()] = value.strip()
     args_dict["skyrl_args"] = skyrl_args

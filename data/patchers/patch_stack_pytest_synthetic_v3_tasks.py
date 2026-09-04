@@ -58,6 +58,7 @@ patcher only fixes pip's --break-system-packages, which is orthogonal
 to what we filter here. Either order is fine. Target HF repo:
 ``laion/exp_rpt_stack-pytest-synthetic-gpt5nano-v3``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -66,7 +67,6 @@ import py_compile
 import re
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -76,23 +76,25 @@ from pathlib import Path
 
 STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest",
-    "_pytest",
-    "py",
-    "pluggy",
-    "iniconfig",
-    "packaging",
-    "tomli",
-    "exceptiongroup",
-    # Conventional agent-provided entrypoint module: tests in this corpus
-    # almost universally do ``from solution import X`` to import what the
-    # agent produced at /app/solution.py. Treat these as always-allowed
-    # so we don't drop tasks that follow the convention.
-    "solution",
-    "app",
-    "src",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+        # Conventional agent-provided entrypoint module: tests in this corpus
+        # almost universally do ``from solution import X`` to import what the
+        # agent produced at /app/solution.py. Treat these as always-allowed
+        # so we don't drop tasks that follow the convention.
+        "solution",
+        "app",
+        "src",
+    }
+)
 
 # Top-level imports we know are present after pip install in the v2
 # verifier's pre-test step. (The v2 test.sh of pytest-synthetic only
@@ -128,13 +130,32 @@ WHITELIST_IMPORTS: frozenset[str] = frozenset(
 
 # Built-in pytest fixtures (pytest 7+/8+/9+). Any test param matching
 # one of these is fine; anything else needs a conftest.py.
-PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset({
-    "cache", "capfd", "capfdbinary", "caplog", "capsys", "capsysbinary",
-    "capteesys", "doctest_namespace", "monkeypatch", "pytestconfig",
-    "record_property", "record_testsuite_property", "record_xml_attribute",
-    "recwarn", "subtests", "tmp_path", "tmp_path_factory", "tmpdir",
-    "tmpdir_factory", "request", "testdir", "pytester",
-})
+PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset(
+    {
+        "cache",
+        "capfd",
+        "capfdbinary",
+        "caplog",
+        "capsys",
+        "capsysbinary",
+        "capteesys",
+        "doctest_namespace",
+        "monkeypatch",
+        "pytestconfig",
+        "record_property",
+        "record_testsuite_property",
+        "record_xml_attribute",
+        "recwarn",
+        "subtests",
+        "tmp_path",
+        "tmp_path_factory",
+        "tmpdir",
+        "tmpdir_factory",
+        "request",
+        "testdir",
+        "pytester",
+    }
+)
 
 
 def _normalize_token(s: str) -> str:
@@ -180,11 +201,23 @@ def _conftest_fixtures(test_dir: Path) -> set[str]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for dec in node.decorator_list:
                 # @pytest.fixture or @fixture
-                if (isinstance(dec, ast.Attribute) and dec.attr == "fixture") or \
-                   (isinstance(dec, ast.Name) and dec.id == "fixture") or \
-                   (isinstance(dec, ast.Call) and (
-                       (isinstance(dec.func, ast.Attribute) and dec.func.attr == "fixture") or
-                       (isinstance(dec.func, ast.Name) and dec.func.id == "fixture"))):
+                if (
+                    (isinstance(dec, ast.Attribute) and dec.attr == "fixture")
+                    or (isinstance(dec, ast.Name) and dec.id == "fixture")
+                    or (
+                        isinstance(dec, ast.Call)
+                        and (
+                            (
+                                isinstance(dec.func, ast.Attribute)
+                                and dec.func.attr == "fixture"
+                            )
+                            or (
+                                isinstance(dec.func, ast.Name)
+                                and dec.func.id == "fixture"
+                            )
+                        )
+                    )
+                ):
                     fixtures.add(node.name)
                     break
     return fixtures
@@ -194,8 +227,9 @@ def _test_function_param_names(tree: ast.AST) -> dict[str, list[str]]:
     """Return ``{test_name: [param_names]}`` for top-level test_* functions."""
     out: dict[str, list[str]] = {}
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
-                node.name.startswith("test_"):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.name.startswith("test_"):
             params: list[str] = []
             args = node.args
             for a in args.posonlyargs + args.args + args.kwonlyargs:
@@ -209,6 +243,7 @@ def _test_function_param_names(tree: ast.AST) -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 # Filter passes
 # ---------------------------------------------------------------------------
+
 
 def syntax_passes(test_solution: Path) -> tuple[bool, str]:
     try:
@@ -269,6 +304,7 @@ def fixtures_pass(test_solution: Path) -> tuple[bool, str]:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def filter_one_task(task_dir: Path) -> tuple[str, str]:
     """Run all three passes. Return ``(verdict, reason)``.
 
@@ -314,8 +350,13 @@ def main() -> int:
     if args.limit:
         task_dirs = task_dirs[: args.limit]
 
-    counts = {"keep": 0, "drop_syntax": 0, "drop_import": 0,
-              "drop_fixture": 0, "drop_other": 0}
+    counts = {
+        "keep": 0,
+        "drop_syntax": 0,
+        "drop_import": 0,
+        "drop_fixture": 0,
+        "drop_other": 0,
+    }
     drop_log_lines: list[str] = []
     examples: dict[str, list[str]] = {}
 

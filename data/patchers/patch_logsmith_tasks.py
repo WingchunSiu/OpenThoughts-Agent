@@ -110,7 +110,10 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict:
     """Patch a single task. Returns ``{"status": ..., "reason": ...}``."""
     dockerfile = task_dir / "environment" / "Dockerfile"
     if not dockerfile.exists():
-        return {"status": "skipped_no_dockerfile", "reason": "no environment/Dockerfile"}
+        return {
+            "status": "skipped_no_dockerfile",
+            "reason": "no environment/Dockerfile",
+        }
 
     seed_data = task_dir / "setup_files" / "data"
     if not seed_data.is_dir():
@@ -163,7 +166,9 @@ def main() -> None:
     if not root.is_dir():
         raise SystemExit(f"[patcher] --root not a directory: {root}")
 
-    task_dirs = sorted(p for p in root.iterdir() if p.is_dir() and (p / "environment").exists())
+    task_dirs = sorted(
+        p for p in root.iterdir() if p.is_dir() and (p / "environment").exists()
+    )
     if args.limit is not None:
         task_dirs = task_dirs[: args.limit]
 

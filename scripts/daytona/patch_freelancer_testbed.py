@@ -22,8 +22,6 @@ Usage:
 """
 
 import argparse
-import os
-import re
 import sys
 from pathlib import Path
 
@@ -70,10 +68,17 @@ def patch_test_sh(test_sh: Path) -> bool:
 
 def patch_tasks(tasks_dir: Path, dry_run: bool = False) -> dict:
     """Patch all task Dockerfiles and test.sh scripts in tasks_dir."""
-    stats = {"dockerfile_patched": 0, "testsh_patched": 0, "skipped": 0, "errors": 0, "total": 0}
+    stats = {
+        "dockerfile_patched": 0,
+        "testsh_patched": 0,
+        "skipped": 0,
+        "errors": 0,
+        "total": 0,
+    }
 
     task_dirs = sorted(
-        d for d in tasks_dir.iterdir()
+        d
+        for d in tasks_dir.iterdir()
         if d.is_dir() and d.name.startswith("freelancer_ta_rl_nano-")
     )
     stats["total"] = len(task_dirs)
@@ -113,7 +118,10 @@ def fetch_from_hf(repo_id: str, output_dir: Path):
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        print("ERROR: huggingface_hub not installed. Run: pip install huggingface_hub", file=sys.stderr)
+        print(
+            "ERROR: huggingface_hub not installed. Run: pip install huggingface_hub",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"Downloading {repo_id} to {output_dir}...")
@@ -126,12 +134,21 @@ def fetch_from_hf(repo_id: str, output_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Patch freelancer tasks for /testbed + miniconda")
+    parser = argparse.ArgumentParser(
+        description="Patch freelancer tasks for /testbed + miniconda"
+    )
     parser.add_argument("tasks_dir", type=Path, help="Path to tasks directory")
-    parser.add_argument("--from-hf", type=str, default=None,
-                        help="HuggingFace repo ID to download first")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be patched without writing")
+    parser.add_argument(
+        "--from-hf",
+        type=str,
+        default=None,
+        help="HuggingFace repo ID to download first",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be patched without writing",
+    )
     args = parser.parse_args()
 
     if args.from_hf:
@@ -144,9 +161,11 @@ def main():
     print(f"Patching tasks in {args.tasks_dir}...")
     stats = patch_tasks(args.tasks_dir, dry_run=args.dry_run)
 
-    print(f"\nResults: {stats['dockerfile_patched']} Dockerfiles patched, "
-          f"{stats['testsh_patched']} test.sh patched, "
-          f"{stats['errors']} errors, {stats['total']} total")
+    print(
+        f"\nResults: {stats['dockerfile_patched']} Dockerfiles patched, "
+        f"{stats['testsh_patched']} test.sh patched, "
+        f"{stats['errors']} errors, {stats['total']} total"
+    )
 
     if args.dry_run:
         print("(dry run — no files were modified)")

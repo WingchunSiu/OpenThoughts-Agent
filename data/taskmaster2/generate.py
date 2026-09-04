@@ -5,16 +5,18 @@ Generate Taskmaster2 dataset in sandboxes style
 
 import json
 import urllib.request
-import tempfile
-import sys
-from pathlib import Path
 from typing import List, Dict, Any
 
 # Import from parent package
-from data.commons import upload_tasks_to_hf, generate_tasks_from_questions, subsample_tasks_directory
+from data.commons import (
+    upload_tasks_to_hf,
+    generate_tasks_from_questions,
+    subsample_tasks_directory,
+)
 from scripts.harbor.run_and_export_traces import run_dataset_to_traces
 from data.commons import upload_traces_to_hf
 from data.gcs_cache import gcs_cache
+
 
 @gcs_cache()
 def download_taskmaster2_data() -> List[Dict[str, Any]]:
@@ -29,7 +31,7 @@ def download_taskmaster2_data() -> List[Dict[str, Any]]:
         "movies",
         "music",
         "restaurant-search",
-        "sports"
+        "sports",
     ]
 
     base_url = "https://raw.githubusercontent.com/google-research-datasets/Taskmaster/master/TM-2-2020/data"
@@ -41,11 +43,11 @@ def download_taskmaster2_data() -> List[Dict[str, Any]]:
 
         # Download the JSON file
         response = urllib.request.urlopen(url)
-        data = json.loads(response.read().decode('utf-8'))
+        data = json.loads(response.read().decode("utf-8"))
 
         # Add domain information to each conversation
         for conversation in data:
-            conversation['domain'] = domain
+            conversation["domain"] = domain
             all_conversations.append(conversation)
 
         print(f"Loaded {len(data)} conversations from {domain} domain")
@@ -53,18 +55,22 @@ def download_taskmaster2_data() -> List[Dict[str, Any]]:
     print(f"Total conversations loaded: {len(all_conversations)}")
     return all_conversations
 
+
 def extract_user_utterances(conversation: Dict[str, Any]) -> List[str]:
     """Extract all user utterances from a conversation"""
     user_utterances = []
 
-    for utterance in conversation['utterances']:
-        if utterance['speaker'] == 'USER':
-            user_utterances.append(utterance['text'])
+    for utterance in conversation["utterances"]:
+        if utterance["speaker"] == "USER":
+            user_utterances.append(utterance["text"])
 
     return user_utterances
 
+
 @gcs_cache()
-def extract_questions_from_conversations(conversations_data: List[Dict[str, Any]]) -> List[str]:
+def extract_questions_from_conversations(
+    conversations_data: List[Dict[str, Any]],
+) -> List[str]:
     """Extract question strings from conversation data"""
     questions = []
     for conversation_data in conversations_data:
@@ -74,7 +80,9 @@ def extract_questions_from_conversations(conversations_data: List[Dict[str, Any]
         user_utterances = extract_user_utterances(conversation_data)
 
         # Create instruction.md with all user utterances
-        user_dialogue = "\n".join([f"{i+1}. {utterance}" for i, utterance in enumerate(user_utterances)])
+        user_dialogue = "\n".join(
+            [f"{i + 1}. {utterance}" for i, utterance in enumerate(user_utterances)]
+        )
 
         question = f"""# Taskmaster2 Conversation: {domain.title()} Domain
 
@@ -99,9 +107,20 @@ def main() -> None:
     questions = extract_questions_from_conversations(conversations)
     final_dataset_dir = generate_tasks_from_questions(questions, "taskmaster2")
     subsampled_dataset_dir = subsample_tasks_directory(final_dataset_dir, 10_000)
-    upload_tasks_to_hf(subsampled_dataset_dir, "mlfoundations-dev/taskmaster2-sandboxes")
-    hf_dataset = run_dataset_to_traces(subsampled_dataset_dir, model_name="gpt-5-nano-2025-08-07", agent_name="terminus-2", n_concurrent=256, agent_kwargs={"max_episodes": 8})
-    upload_traces_to_hf(hf_dataset, "mlfoundations-dev/taskmaster2-sandboxes-traces-terminus-2", "SFT")
-    
+    upload_tasks_to_hf(
+        subsampled_dataset_dir, "mlfoundations-dev/taskmaster2-sandboxes"
+    )
+    hf_dataset = run_dataset_to_traces(
+        subsampled_dataset_dir,
+        model_name="gpt-5-nano-2025-08-07",
+        agent_name="terminus-2",
+        n_concurrent=256,
+        agent_kwargs={"max_episodes": 8},
+    )
+    upload_traces_to_hf(
+        hf_dataset, "mlfoundations-dev/taskmaster2-sandboxes-traces-terminus-2", "SFT"
+    )
+
+
 if __name__ == "__main__":
     main()

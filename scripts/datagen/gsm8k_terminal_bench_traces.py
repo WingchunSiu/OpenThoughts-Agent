@@ -119,7 +119,9 @@ class GSM8KTerminalBenchTraceGenerator(BaseDataGenerator):
             if cached_dir.exists():
                 return cached_dir
 
-        explicit_tasks = request.tasks_input or getattr(context.args, "tasks_input", None)
+        explicit_tasks = request.tasks_input or getattr(
+            context.args, "tasks_input", None
+        )
         if explicit_tasks:
             tasks_dir = Path(explicit_tasks)
             if not tasks_dir.exists():
@@ -134,9 +136,7 @@ class GSM8KTerminalBenchTraceGenerator(BaseDataGenerator):
         if local_override:
             tasks_dir = Path(local_override).expanduser().resolve()
             if not tasks_dir.exists():
-                raise InputValidationError(
-                    f"--local-tasks-path not found: {tasks_dir}"
-                )
+                raise InputValidationError(f"--local-tasks-path not found: {tasks_dir}")
             metadata["resolved_tasks_path"] = str(tasks_dir)
             request.metadata = metadata
             return tasks_dir

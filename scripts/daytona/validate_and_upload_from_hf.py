@@ -32,18 +32,6 @@ Example:
         --oracle_check \
         --timeout 600 \
         --target_repo org/validated-dataset
-
-Inspect failures:
-    export SEARCHPATH=./experiments/codeforces-GLM-4.6-traces-32ep-32k-1-2-4-dv/trace_jobs/chunk_000/2025-11-13__16-23-33
-    ls -lh "$SEARCHPATH" | wc -l
-    find "$SEARCHPATH" -type f -name "exception.txt" | wc -l
-    find "$SEARCHPATH" -type f -name "exception.txt" -print0 \
-        | tee >(while IFS= read -r -d '' file; do \
-            grep -o "harbor.trial.trial.AgentTimeoutError:" "$file"; \
-          done | wc -l > ./agenttimeoutcount.txt) \
-        | tr '\0' '\n'
-    echo "agent timeout error count:"
-    cat ./agenttimeoutcount.txt
 """
 
 from __future__ import annotations
@@ -77,10 +65,10 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from datasets import load_dataset
+from datasets import load_dataset  # noqa: E402
 
-from scripts.harbor import tasks_parquet_converter as tpc
-from data.commons import upload_tasks_to_hf
+from scripts.harbor import tasks_parquet_converter as tpc  # noqa: E402
+from data.commons import upload_tasks_to_hf  # noqa: E402
 
 CONSOLE = Console()
 
@@ -104,8 +92,8 @@ PROGRESS_COLUMNS = (
 
 
 # ---- Daytona imports (lazy within worker as well) ----
-from daytona import AsyncDaytona, CreateSandboxFromImageParams, Image, Resources
-from daytona.common.errors import DaytonaError
+from daytona import AsyncDaytona, CreateSandboxFromImageParams, Image, Resources  # noqa: E402
+from daytona.common.errors import DaytonaError  # noqa: E402
 
 
 def _extract_hf_dataset(repo_id: str, revision: Optional[str], base_dir: Path) -> Path:
@@ -116,11 +104,17 @@ def _extract_hf_dataset(repo_id: str, revision: Optional[str], base_dir: Path) -
     """
     # Skip extraction if tasks already exist in target directory
     base_dir.mkdir(parents=True, exist_ok=True)
-    existing_tasks = [d for d in base_dir.iterdir() if d.is_dir() and (d / "environment" / "Dockerfile").exists()]
+    existing_tasks = [
+        d
+        for d in base_dir.iterdir()
+        if d.is_dir() and (d / "environment" / "Dockerfile").exists()
+    ]
     if existing_tasks:
-        CONSOLE.print(f"[cyan][extract][/cyan] Found {len(existing_tasks)} existing tasks in {base_dir}; skipping extraction")
+        CONSOLE.print(
+            f"[cyan][extract][/cyan] Found {len(existing_tasks)} existing tasks in {base_dir}; skipping extraction"
+        )
         return base_dir
-    
+
     ds = load_dataset(repo_id, revision=revision)
     # Pick a split (prefer train)
     if hasattr(ds, "keys"):
@@ -137,10 +131,18 @@ def _extract_hf_dataset(repo_id: str, revision: Optional[str], base_dir: Path) -
     return base_dir
 
 
-async def _try_build_once(dockerfile: Path, *, cpu: int, memory_gb: int, disk_gb: int, gpu: int, timeout: int) -> bool:
+async def _try_build_once(
+    dockerfile: Path, *, cpu: int, memory_gb: int, disk_gb: int, gpu: int, timeout: int
+) -> bool:
     """Attempt a single Daytona build for a Dockerfile."""
-    resources = Resources(cpu=max(cpu, 1), memory=max(memory_gb, 1), disk=max(disk_gb, 1), gpu=max(gpu, 0))
-    params = CreateSandboxFromImageParams(image=Image.from_dockerfile(dockerfile), auto_delete_interval=0, resources=resources)
+    resources = Resources(
+        cpu=max(cpu, 1), memory=max(memory_gb, 1), disk=max(disk_gb, 1), gpu=max(gpu, 0)
+    )
+    params = CreateSandboxFromImageParams(
+        image=Image.from_dockerfile(dockerfile),
+        auto_delete_interval=0,
+        resources=resources,
+    )
 
     daytona = AsyncDaytona()
     sandbox = None
@@ -156,7 +158,9 @@ async def _try_build_once(dockerfile: Path, *, cpu: int, memory_gb: int, disk_gb
             await daytona.close()
 
 
-def _validate_task_worker(args: Tuple[Path, int, int, int, int, int]) -> Tuple[str, bool]:
+def _validate_task_worker(
+    args: Tuple[Path, int, int, int, int, int],
+) -> Tuple[str, bool]:
     """Worker function for multiprocessing.
 
     Args tuple: (task_dir, cpu, memory_gb, disk_gb, gpu, timeout)
@@ -171,7 +175,16 @@ def _validate_task_worker(args: Tuple[Path, int, int, int, int, int]) -> Tuple[s
     backoffs = [2, 4, 8, 16, 32]
     for i, delay in enumerate(backoffs):
         try:
-            ok = asyncio.run(_try_build_once(dockerfile, cpu=cpu, memory_gb=memory_gb, disk_gb=disk_gb, gpu=gpu, timeout=timeout))
+            ok = asyncio.run(
+                _try_build_once(
+                    dockerfile,
+                    cpu=cpu,
+                    memory_gb=memory_gb,
+                    disk_gb=disk_gb,
+                    gpu=gpu,
+                    timeout=timeout,
+                )
+            )
             if ok:
                 return name, True
         except (DaytonaError, Exception):  # broad catch: any failure triggers retry
@@ -218,6 +231,7 @@ def _copy_successes(task_dirs: Iterable[Path], dest_root: Path) -> Path:
         shutil.copytree(task, dest_root / task.name, dirs_exist_ok=True)
     return dest_root
 
+
 def _relocate_staged_output(staged_dir: Path, target_dir: Path) -> Path:
     """Move the staged successes directory into target_dir and return the new path."""
     target_dir = target_dir.expanduser()
@@ -241,9 +255,7 @@ def _run_daytona_validation(
         return [], []
 
     name_to_path: Dict[str, Path] = {path.name: path for path in task_dirs}
-    worker_args = [
-        (task, cpu, memory_gb, disk_gb, gpu, timeout) for task in task_dirs
-    ]
+    worker_args = [(task, cpu, memory_gb, disk_gb, gpu, timeout) for task in task_dirs]
 
     successes: List[Path] = []
     failures: List[Path] = []
@@ -376,7 +388,7 @@ def _run_harbor_smoke_test(
     EnvironmentConfig = components["EnvironmentConfig"]
     LocalDatasetConfig = components["LocalDatasetConfig"]
     VerifierConfig = components["VerifierConfig"]
-    OrchestratorEvent = components["OrchestratorEvent"]
+    components["OrchestratorEvent"]
     add_trial_completed_hook = components["add_trial_completed_hook"]
     set_orchestrator_field = components["set_orchestrator_field"]
     create_job = components["create_job"]
@@ -389,9 +401,13 @@ def _run_harbor_smoke_test(
     job_config.n_attempts = 1
     job_config.timeout_multiplier = 1.0
     effective_concurrency = (
-        len(tasks) if concurrency is None or concurrency <= 0 else min(concurrency, len(tasks))
+        len(tasks)
+        if concurrency is None or concurrency <= 0
+        else min(concurrency, len(tasks))
     )
-    set_orchestrator_field(job_config, "n_concurrent_trials", max(1, effective_concurrency))
+    set_orchestrator_field(
+        job_config, "n_concurrent_trials", max(1, effective_concurrency)
+    )
     set_orchestrator_field(job_config, "quiet", True)
     set_orchestrator_field(job_config, "retry", _make_retry_config(components))
     agent_model = "gpt-5-codex" if filter_successful else "gpt-5-nano"
@@ -447,7 +463,9 @@ def _run_harbor_smoke_test(
 
     with progress:
         task_id = progress.add_task(
-            "Stage 2: Harbor filter" if filter_successful else "Stage 2: Harbor smoke test",
+            "Stage 2: Harbor filter"
+            if filter_successful
+            else "Stage 2: Harbor smoke test",
             total=total,
             success=0,
             failed=0,
@@ -461,7 +479,9 @@ def _run_harbor_smoke_test(
             rewards = None
             if trial_result is not None and trial_result.verifier_result is not None:
                 rewards = trial_result.verifier_result.rewards
-            is_infra_ok = trial_result is not None and trial_result.exception_info is None
+            is_infra_ok = (
+                trial_result is not None and trial_result.exception_info is None
+            )
             is_solved = is_infra_ok and _reward_positive(rewards)
             if is_infra_ok:
                 infra_ok_count += 1
@@ -490,7 +510,7 @@ def _run_harbor_smoke_test(
 
         try:
             asyncio.run(job.run())
-        except Exception as exc:  # pragma: no cover - dependent on Harbor env
+        except Exception:  # pragma: no cover - dependent on Harbor env
             CONSOLE.print(
                 f"[red]Harbor validation encountered an error. Logs retained at {job_dir}.[/red]"
             )
@@ -532,7 +552,7 @@ def _run_oracle_solution_check(
     EnvironmentConfig = components["EnvironmentConfig"]
     LocalDatasetConfig = components["LocalDatasetConfig"]
     VerifierConfig = components["VerifierConfig"]
-    OrchestratorEvent = components["OrchestratorEvent"]
+    components["OrchestratorEvent"]
     add_trial_completed_hook = components["add_trial_completed_hook"]
     set_orchestrator_field = components["set_orchestrator_field"]
     create_job = components["create_job"]
@@ -551,14 +571,20 @@ def _run_oracle_solution_check(
 
     jobs_root = Path(tempfile.mkdtemp(prefix="harbor_oracle_jobs_"))
     job_config = JobConfig()
-    job_config.job_name = f"harbor-oracle-check-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    job_config.job_name = (
+        f"harbor-oracle-check-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
     job_config.jobs_dir = jobs_root
     job_config.n_attempts = 1
     job_config.timeout_multiplier = 1.0
     effective_concurrency = (
-        len(candidates) if concurrency is None or concurrency <= 0 else min(concurrency, len(candidates))
+        len(candidates)
+        if concurrency is None or concurrency <= 0
+        else min(concurrency, len(candidates))
     )
-    set_orchestrator_field(job_config, "n_concurrent_trials", max(1, effective_concurrency))
+    set_orchestrator_field(
+        job_config, "n_concurrent_trials", max(1, effective_concurrency)
+    )
     set_orchestrator_field(job_config, "quiet", True)
     set_orchestrator_field(job_config, "retry", _make_retry_config(components))
     job_config.agents = [
@@ -586,9 +612,7 @@ def _run_oracle_solution_check(
     job = create_job(Job, job_config)
     job_dir = job.job_dir
 
-    CONSOLE.print(
-        f"[stage3] Oracle job directory: [underline]{job_dir}[/underline]"
-    )
+    CONSOLE.print(f"[stage3] Oracle job directory: [underline]{job_dir}[/underline]")
 
     stage_status: Dict[str, bool] = {}
     success_count = 0
@@ -671,26 +695,52 @@ def _run_oracle_solution_check(
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Validate Daytona builds for HF task dataset and upload successes")
+    p = argparse.ArgumentParser(
+        description="Validate Daytona builds for HF task dataset and upload successes"
+    )
     p.add_argument("--repo_id", required=True, help="HF dataset repo id (org/name)")
     p.add_argument("--revision", default=None, help="Optional dataset revision/commit")
-    p.add_argument("--extract_dir", default=None, help="Directory to extract tasks to (default: temp)")
-    p.add_argument("--processes", type=int, default=32, help="Parallel processes for validation (default: 32)")
+    p.add_argument(
+        "--extract_dir",
+        default=None,
+        help="Directory to extract tasks to (default: temp)",
+    )
+    p.add_argument(
+        "--processes",
+        type=int,
+        default=32,
+        help="Parallel processes for validation (default: 32)",
+    )
     p.add_argument("--cpu", type=int, default=2)
     p.add_argument("--memory_gb", type=int, default=4)
     p.add_argument("--disk_gb", type=int, default=10)
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--timeout", type=int, default=600, help="Per-build timeout seconds")
-    p.add_argument("--target_repo", default=None, help="Target HF repo for upload (default: same as --repo_id)")
-    p.add_argument("--private", action="store_true", help="Create target repo as private")
+    p.add_argument(
+        "--target_repo",
+        default=None,
+        help="Target HF repo for upload (default: same as --repo_id)",
+    )
+    p.add_argument(
+        "--private", action="store_true", help="Create target repo as private"
+    )
     p.add_argument("--token", default=None, help="HF token (defaults to HF_TOKEN env)")
-    p.add_argument("--keep_failed_dir", default=None, help="If set, copy failed tasks here for inspection")
+    p.add_argument(
+        "--keep_failed_dir",
+        default=None,
+        help="If set, copy failed tasks here for inspection",
+    )
     p.add_argument(
         "--final_output_dir",
         default=None,
         help="If set, move the successful staged tasks into this directory after upload",
     )
-    p.add_argument("--limit", type=int, default=None, help="Optionally limit number of tasks validated")
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optionally limit number of tasks validated",
+    )
     p.add_argument(
         "--harbor_concurrency",
         type=int,
@@ -789,21 +839,37 @@ def _save_failures_for_inspection(
 def main(argv: Optional[Iterable[str]] = None) -> None:
     args = parse_args(argv)
     stages = _resolve_stages(args)
-    extract_dir = Path(args.extract_dir) if args.extract_dir else Path(tempfile.mkdtemp(prefix="tasks_extracted_"))
+    extract_dir = (
+        Path(args.extract_dir)
+        if args.extract_dir
+        else Path(tempfile.mkdtemp(prefix="tasks_extracted_"))
+    )
 
-    CONSOLE.print(f"[bold cyan][extract][/bold cyan] Repo: {args.repo_id} rev={args.revision or '<latest>'}")
+    CONSOLE.print(
+        f"[bold cyan][extract][/bold cyan] Repo: {args.repo_id} rev={args.revision or '<latest>'}"
+    )
     CONSOLE.print(f"[bold cyan][extract][/bold cyan] Target directory: {extract_dir}")
-    CONSOLE.print(f"[bold cyan][stages][/bold cyan] Running: {', '.join(stages) if stages else '(none — upload-only)'}")
+    CONSOLE.print(
+        f"[bold cyan][stages][/bold cyan] Running: {', '.join(stages) if stages else '(none — upload-only)'}"
+    )
     _extract_hf_dataset(args.repo_id, args.revision, extract_dir)
 
     tasks = _discover_tasks(extract_dir)
     CONSOLE.print(f"[cyan][validate][/cyan] Found {len(tasks)} candidate tasks")
 
-    if args.sample_size is not None and args.sample_size > 0 and args.sample_size < len(tasks):
+    if (
+        args.sample_size is not None
+        and args.sample_size > 0
+        and args.sample_size < len(tasks)
+    ):
         rng = random.Random(args.sample_seed)
         tasks = sorted(rng.sample(tasks, args.sample_size), key=lambda p: p.name)
-        seed_note = f" (seed={args.sample_seed})" if args.sample_seed is not None else ""
-        CONSOLE.print(f"[cyan][validate][/cyan] Random sample: {len(tasks)} tasks{seed_note}")
+        seed_note = (
+            f" (seed={args.sample_seed})" if args.sample_seed is not None else ""
+        )
+        CONSOLE.print(
+            f"[cyan][validate][/cyan] Random sample: {len(tasks)} tasks{seed_note}"
+        )
 
     if args.limit is not None:
         tasks = tasks[: max(0, int(args.limit))]
@@ -864,19 +930,21 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             f"infra_ok: {harbor_stats['infra_ok']}/{harbor_stats['total']} ({infra_rate:.3f})  "
             f"solved: {harbor_stats['solved']}/{harbor_stats['total']} ({solved_rate:.3f})"
         )
-        _save_failures_for_inspection(failures, args.keep_failed_dir, "harbor", fallback_source_root=extract_dir)
+        _save_failures_for_inspection(
+            failures, args.keep_failed_dir, "harbor", fallback_source_root=extract_dir
+        )
         for task_dir in failures:
             shutil.rmtree(task_dir, ignore_errors=True)
         if harbor_job_dir is not None:
-            # Always retain the Harbor job dir (per-trial agent trajectories + verifier outputs).
-            # batch_validate_from_md.sh greps this path from the log to sync the traces into
-            # the per-dataset output dir. Never auto-delete on success — those traces are the
-            # whole point of running the smoke test.
+            # Retain the Harbor job dir (per-trial agent trajectories + verifier outputs);
+            # batch_validate_from_md.sh greps this path from the log to sync the traces.
             CONSOLE.print(
                 f"[harbor] Harbor job logs retained at [underline]{harbor_job_dir}[/underline]"
             )
         if not successes:
-            CONSOLE.print("[yellow][harbor] No tasks passed Harbor stage; exiting[/yellow]")
+            CONSOLE.print(
+                "[yellow][harbor] No tasks passed Harbor stage; exiting[/yellow]"
+            )
             return
 
     if STAGE_ORACLE in stages:
@@ -896,7 +964,12 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             f"Missing: [yellow]{len(missing)}[/yellow]"
         )
         all_failures = list(dict.fromkeys(failures + missing))
-        _save_failures_for_inspection(all_failures, args.keep_failed_dir, "oracle", fallback_source_root=extract_dir)
+        _save_failures_for_inspection(
+            all_failures,
+            args.keep_failed_dir,
+            "oracle",
+            fallback_source_root=extract_dir,
+        )
         for task_dir in all_failures:
             shutil.rmtree(task_dir, ignore_errors=True)
         if oracle_job_dir is not None:
@@ -909,12 +982,16 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 f"[yellow][oracle] Missing solution/solve.sh for: {missing_names}[/yellow]"
             )
         if not successes:
-            CONSOLE.print("[yellow][oracle] No tasks passed oracle validation; exiting[/yellow]")
+            CONSOLE.print(
+                "[yellow][oracle] No tasks passed oracle validation; exiting[/yellow]"
+            )
             return
 
     final_tasks = _discover_tasks(staged)
     if not final_tasks:
-        CONSOLE.print("[yellow][upload] No tasks remain after staging; exiting[/yellow]")
+        CONSOLE.print(
+            "[yellow][upload] No tasks remain after staging; exiting[/yellow]"
+        )
         return
 
     if args.skip_upload:
@@ -925,9 +1002,15 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     else:
         target_repo = args.target_repo or args.repo_id
         token = args.token or os.environ.get("HF_TOKEN")
-        CONSOLE.print(f"[bold magenta][upload][/bold magenta] Uploading {len(final_tasks)} tasks to {target_repo}")
-        upload_tasks_to_hf(str(staged), target_repo, private=bool(args.private), token=token)
-        CONSOLE.print(f"[bold magenta][upload][/bold magenta] Done: https://huggingface.co/datasets/{target_repo}")
+        CONSOLE.print(
+            f"[bold magenta][upload][/bold magenta] Uploading {len(final_tasks)} tasks to {target_repo}"
+        )
+        upload_tasks_to_hf(
+            str(staged), target_repo, private=bool(args.private), token=token
+        )
+        CONSOLE.print(
+            f"[bold magenta][upload][/bold magenta] Done: https://huggingface.co/datasets/{target_repo}"
+        )
 
     if args.final_output_dir:
         try:

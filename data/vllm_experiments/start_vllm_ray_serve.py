@@ -20,7 +20,7 @@ try:
     from ray import serve
     from ray.serve.llm import LLMConfig, LLMServingArgs, build_openai_app
     from ray.serve.config import ProxyLocation
-except ImportError as exc:  # pragma: no cover - defensive guard for misconfigured envs
+except ImportError:  # pragma: no cover - defensive guard for misconfigured envs
     print(
         "[start_vllm_ray_serve] Ray Serve LLM components are unavailable. "
         "Install a Ray version that includes ray.serve.llm before using the "
@@ -185,7 +185,10 @@ def _await_serve_ready(app_name: str, timeout_s: int = 300) -> bool:
     while time.time() < deadline:
         status = serve.status()
         app_status = status.applications.get(app_name)
-        if app_status and getattr(app_status.status, "name", str(app_status.status)) == "RUNNING":
+        if (
+            app_status
+            and getattr(app_status.status, "name", str(app_status.status)) == "RUNNING"
+        ):
             return True
         if STOP_REQUESTED:
             return False
@@ -194,10 +197,18 @@ def _await_serve_ready(app_name: str, timeout_s: int = 300) -> bool:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Start a Ray Serve-hosted vLLM deployment.")
-    parser.add_argument("--ray-address", required=True, help="Ray head address (host:port)")
-    parser.add_argument("--host", default="0.0.0.0", help="HTTP host for the Ray Serve endpoint")
-    parser.add_argument("--port", type=int, default=8000, help="HTTP port for the Ray Serve endpoint")
+    parser = argparse.ArgumentParser(
+        description="Start a Ray Serve-hosted vLLM deployment."
+    )
+    parser.add_argument(
+        "--ray-address", required=True, help="Ray head address (host:port)"
+    )
+    parser.add_argument(
+        "--host", default="0.0.0.0", help="HTTP host for the Ray Serve endpoint"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000, help="HTTP port for the Ray Serve endpoint"
+    )
     parser.add_argument(
         "--endpoint-json",
         type=Path,
@@ -236,12 +247,18 @@ def main() -> None:
 
     model_path = os.environ.get("VLLM_MODEL_PATH")
     if not model_path:
-        raise ValueError("VLLM_MODEL_PATH environment variable is required for ray_serve backend.")
+        raise ValueError(
+            "VLLM_MODEL_PATH environment variable is required for ray_serve backend."
+        )
 
     model_name = os.environ.get("VLLM_CUSTOM_MODEL_NAME") or Path(model_path).name
 
-    env_tensor_parallel = _safe_cast(os.environ.get("VLLM_TENSOR_PARALLEL_SIZE"), int) or 1
-    env_pipeline_parallel = _safe_cast(os.environ.get("VLLM_PIPELINE_PARALLEL_SIZE"), int) or 1
+    env_tensor_parallel = (
+        _safe_cast(os.environ.get("VLLM_TENSOR_PARALLEL_SIZE"), int) or 1
+    )
+    env_pipeline_parallel = (
+        _safe_cast(os.environ.get("VLLM_PIPELINE_PARALLEL_SIZE"), int) or 1
+    )
 
     tensor_parallel_size = args.tensor_parallel_size or env_tensor_parallel
     pipeline_parallel_size = args.pipeline_parallel_size or env_pipeline_parallel
@@ -292,17 +309,21 @@ def main() -> None:
         f"[start_vllm_ray_serve] Starting Ray Serve HTTP proxy on "
         f"{args.host}:{args.port} (app: {args.app_name}, location: {args.proxy_location})"
     )
-    serve.start(http_options={
-        "host": args.host,
-        "port": args.port,
-        "location": proxy_location,
-    })
+    serve.start(
+        http_options={
+            "host": args.host,
+            "port": args.port,
+            "location": proxy_location,
+        }
+    )
 
     llm_app = build_openai_app(serving_args)
     serve.run(llm_app, name=args.app_name)
 
     if not _await_serve_ready(args.app_name):
-        raise RuntimeError("Timed out waiting for Ray Serve application to become healthy.")
+        raise RuntimeError(
+            "Timed out waiting for Ray Serve application to become healthy."
+        )
 
     # For endpoint JSON, use the actual head node IP if host is 0.0.0.0
     endpoint_host = args.host
@@ -327,7 +348,9 @@ def main() -> None:
         ray_address=args.ray_address,
     )
 
-    print("[start_vllm_ray_serve] Ray Serve deployment is live. Waiting for shutdown signal.")
+    print(
+        "[start_vllm_ray_serve] Ray Serve deployment is live. Waiting for shutdown signal."
+    )
     try:
         while not STOP_REQUESTED:
             time.sleep(5)

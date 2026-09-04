@@ -29,7 +29,9 @@ def wandb_init(kwargs: dict[str, Any]) -> None:
     wandb.init(project=wandb_project, name=wandb_run_name, config=kwargs)
 
 
-def fetch_wandb_times(entity: str, project: str, run_name: str) -> Tuple[Optional[str], Optional[str]]:
+def fetch_wandb_times(
+    entity: str, project: str, run_name: str
+) -> Tuple[Optional[str], Optional[str]]:
     """Return ISO timestamps for a wandb run, if accessible."""
 
     if not (entity and project and run_name):
@@ -43,7 +45,9 @@ def fetch_wandb_times(entity: str, project: str, run_name: str) -> Tuple[Optiona
             run_name_attr = getattr(run, "name", None)
             if run_display == run_name or run_name_attr == run_name:
                 start = getattr(run, "created_at", None)
-                end = getattr(run, "finished_at", None) or getattr(run, "updated_at", None)
+                end = getattr(run, "finished_at", None) or getattr(
+                    run, "updated_at", None
+                )
                 start_iso = start.isoformat() if hasattr(start, "isoformat") else start
                 end_iso = end.isoformat() if hasattr(end, "isoformat") else end
                 return start_iso, end_iso
@@ -52,7 +56,9 @@ def fetch_wandb_times(entity: str, project: str, run_name: str) -> Tuple[Optiona
     return None, None
 
 
-def collect_wandb_metadata(exp_args: dict, train_config: dict) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def collect_wandb_metadata(
+    exp_args: dict, train_config: dict
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return wandb link plus training start/end timestamps if wandb logging is enabled."""
 
     report_to = train_config.get("report_to", "")
@@ -136,7 +142,9 @@ def ensure_wandb_dir(
     fallback_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        print(f"[wandb_utils] Warning: {target_dir} not writable, using fallback: {fallback_dir}")
+        print(
+            f"[wandb_utils] Warning: {target_dir} not writable, using fallback: {fallback_dir}"
+        )
 
     return str(fallback_dir)
 

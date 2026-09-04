@@ -20,11 +20,13 @@ import subprocess
 from pathlib import Path
 import os
 
-from datasets import load_dataset, get_dataset_split_names
+from datasets import get_dataset_split_names
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Batch filter + summarize across subdirectories")
+    p = argparse.ArgumentParser(
+        description="Batch filter + summarize across subdirectories"
+    )
     p.add_argument(
         "--root",
         default="/scratch/08134/negin/OpenThoughts-Agent-shared/OpenThoughts-Agent/eval/tacc/jobs/to_upload",
@@ -150,9 +152,11 @@ def main() -> None:
 
     for f in sorted(out_dir.glob("*.jsonl")):
         print(f"[summary] {f}")
-        subprocess.run([
-            "python", "scripts/analysis/summarize_conversations.py", str(f)
-        ], check=False, env=summarize_env)
+        subprocess.run(
+            ["python", "scripts/analysis/summarize_conversations.py", str(f)],
+            check=False,
+            env=summarize_env,
+        )
 
     print("[batch] Done.")
 

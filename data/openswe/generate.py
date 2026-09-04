@@ -29,11 +29,15 @@ import argparse
 import json
 import re
 import stat
-import tempfile
 from pathlib import Path
 from typing import Optional
 
 from tqdm import tqdm
+
+from data.patchers.trusted_test_patch import (
+    trusted_test_patch_command,
+    write_trusted_test_patch_installer,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +67,7 @@ timeout_sec = 1800.0
 # Dockerfile transformation
 # ---------------------------------------------------------------------------
 
+
 def _extract_python_version(dockerfile: str) -> str:
     """Return the Python version from 'FROM openswe-python-X.Y', defaulting to 3.11."""
     m = re.search(r"FROM\s+openswe-python-(\d+\.\d+)", dockerfile)
@@ -74,7 +79,7 @@ def _post_workdir_content(dockerfile: str) -> str:
     # Match 'WORKDIR /testbed' with optional trailing slash/whitespace
     m = re.search(r"^WORKDIR\s+/testbed[/\s]*$", dockerfile, re.MULTILINE)
     if m:
-        return dockerfile[m.end():].strip()
+        return dockerfile[m.end() :].strip()
 
     # Fallback: drop known boilerplate lines at the top
     skip_prefixes = (
@@ -147,6 +152,7 @@ WORKDIR /testbed/
 # test.sh construction
 # ---------------------------------------------------------------------------
 
+
 def _extract_test_section(eval_script: str) -> str:
     """
     Extract the test execution block from an OpenSWE eval_script.
@@ -210,13 +216,14 @@ def _extract_test_section(eval_script: str) -> str:
             if not line.rstrip().endswith("\\"):
                 break  # end of (possibly multiline) command
 
-    return "\n".join(test_cmd_lines).strip() if test_cmd_lines else (
-        "echo 'WARNING: no test command found in eval_script'\n"
-        "exit 1"
+    return (
+        "\n".join(test_cmd_lines).strip()
+        if test_cmd_lines
+        else ("echo 'WARNING: no test command found in eval_script'\nexit 1")
     )
 
 
-def create_test_sh(eval_script: str, test_patch: str) -> str:
+def create_test_sh(eval_script: str, test_patch: str, base_commit: str) -> str:
     """
     Build Harbor test.sh.
 
@@ -232,12 +239,13 @@ def create_test_sh(eval_script: str, test_patch: str) -> str:
 
     patch_block = ""
     if has_patch:
-        patch_block = """\
+        install_command = trusted_test_patch_command(base_commit)
+        patch_block = f"""\
 
-# Apply test patch (adds new test files; does NOT contain the golden fix)
-if [ -f /tests/test_patch.diff ]; then
-    git apply -v --allow-empty /tests/test_patch.diff || \\
-    git apply -v --allow-empty --reject /tests/test_patch.diff || true
+# Restore every hidden-test path from the immutable base commit before applying
+# the trusted patch. Agent edits to product paths remain untouched.
+if ! {install_command}; then
+    exit 1
 fi
 """
 
@@ -271,6 +279,7 @@ fi
 # Instruction and solution
 # ---------------------------------------------------------------------------
 
+
 def create_instruction_md(datum: dict) -> str:
     problem = datum.get("problem_statement", "").strip()
     repo = datum.get("repo", "")
@@ -302,6 +311,7 @@ git apply --verbose /testbed/fix_patch.diff
 # Per-task directory creation
 # ---------------------------------------------------------------------------
 
+
 def create_task_dir(datum: dict, out_root: Path, idx: int, prefix: str) -> None:
     """Write one Harbor-format task directory."""
     d = out_root / f"{prefix}-{idx:05d}"
@@ -328,16 +338,24 @@ def create_task_dir(datum: dict, out_root: Path, idx: int, prefix: str) -> None:
     eval_script = datum.get("eval_script") or ""
     test_patch = datum.get("test_patch") or ""
     test_sh_path = d / "tests" / "test.sh"
-    test_sh_path.write_text(create_test_sh(eval_script, test_patch), encoding="utf-8")
-    test_sh_path.chmod(test_sh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    test_sh_path.write_text(
+        create_test_sh(eval_script, test_patch, base_commit), encoding="utf-8"
+    )
+    test_sh_path.chmod(
+        test_sh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
+    )
 
     # tests/test_patch.diff
     if test_patch:
         (d / "tests" / "test_patch.diff").write_text(test_patch, encoding="utf-8")
+        write_trusted_test_patch_installer(
+            d / "tests" / "install_trusted_test_patch.sh"
+        )
 
     # tests/config.json — metadata without large blobs (stored elsewhere)
     config = {
-        k: v for k, v in datum.items()
+        k: v
+        for k, v in datum.items()
         if k not in ("Dockerfile", "eval_script", "patch", "test_patch")
     }
     (d / "tests" / "config.json").write_text(
@@ -349,12 +367,15 @@ def create_task_dir(datum: dict, out_root: Path, idx: int, prefix: str) -> None:
     if patch:
         solve_path = d / "solution" / "solve.sh"
         solve_path.write_text(create_solution_sh(patch), encoding="utf-8")
-        solve_path.chmod(solve_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        solve_path.chmod(
+            solve_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
+        )
 
 
 # ---------------------------------------------------------------------------
 # Dataset loading
 # ---------------------------------------------------------------------------
+
 
 def _load_jsonl(path: Path) -> list[dict]:
     rows = []
@@ -371,7 +392,7 @@ def _load_jsonl(path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _SPLIT_FILES = {
-    "oss":   "openswe_oss.jsonl",
+    "oss": "openswe_oss.jsonl",
     "other": "openswe_other.jsonl",
 }
 
@@ -412,13 +433,15 @@ def generate(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Generate Harbor-format tasks from GAIR/OpenSWE",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path("/Users/benjaminfeuer/Documents/openswe-tasks"),
         help="Directory to write task subdirectories into",

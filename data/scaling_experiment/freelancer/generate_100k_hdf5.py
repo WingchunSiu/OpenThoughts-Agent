@@ -1,24 +1,13 @@
 #!/usr/bin/env python3
 
-from data.commons import (
-    generate_tasks_from_questions_hdf5,
-    upsample_tasks_hdf5,
-    extract_hdf5_to_task_paths,
-    upload_tasks_to_hf,
-    upload_traces_to_hf
-)
-import time
-from data.freelancer.generate import scrape_freelancer_projects
-from scripts.sandboxes.run_and_export_traces import run_dataset_to_traces, only_export_traces, force_resume
+from data.commons import upload_traces_to_hf
+from scripts.sandboxes.run_and_export_traces import force_resume
 
 
 def main() -> None:
     """Main function - coordinates the pipeline using HDF5 format"""
 
-
-
     ## I AM SO SORRY< I HAD TO FORCE RESUME THIS JOB, THIS WAS THE CODE, THIS WAS BEFORE RUN_DATASET_TO_TRACES_HDF5 WORKED
-
 
     # print("=" * 80)
     # print("FREELANCER DATASET GENERATION - HDF5 OPTIMIZED (100k)")
@@ -77,11 +66,7 @@ def main() -> None:
     # print(f"Tasks uploaded to: DCAgent/freelancer-projects-100k")
 
     hf_dataset = force_resume("jobs/2025-11-10__21-43-17")
-    upload_traces_to_hf(
-        hf_dataset,
-        "DCAgent2/freelancer-projects-100k-traces",
-        "SFT"
-    )
+    upload_traces_to_hf(hf_dataset, "DCAgent2/freelancer-projects-100k-traces", "SFT")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,12 @@
 """Convert allenai/Sera-4.5A-Full-T1 to shareGPT format + upload to laion/Sera-4.5A-Full-T1-v2 + size subsets.
 Memory-bounded: writes to parquet in 500-row chunks, then loads via pyarrow for upload.
 """
-import os, json, sys, argparse, random, gc
+
+import os
+import json
+import argparse
+import random
+import gc
 from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -73,15 +78,23 @@ def to_sharegpt(raw_messages_json):
     return turns
 
 
-SCHEMA = pa.schema([
-    ("conversations", pa.list_(pa.struct([("role", pa.string()), ("content", pa.string())]))),
-    ("source", pa.string()),
-    ("instance_id", pa.string()),
-])
+SCHEMA = pa.schema(
+    [
+        (
+            "conversations",
+            pa.list_(pa.struct([("role", pa.string()), ("content", pa.string())])),
+        ),
+        ("source", pa.string()),
+        ("instance_id", pa.string()),
+    ]
+)
 
 
 def write_full_parquet(out_path):
-    print(f"[sera] Parsing JSONL and writing to {out_path} (chunk_size={CHUNK_SIZE})", flush=True)
+    print(
+        f"[sera] Parsing JSONL and writing to {out_path} (chunk_size={CHUNK_SIZE})",
+        flush=True,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists():
         out_path.unlink()
@@ -91,7 +104,10 @@ def write_full_parquet(out_path):
     with open(SERA_JSONL) as f:
         for i, line in enumerate(f):
             if i % 5000 == 0 and i > 0:
-                print(f"  parsed {i} rows ({total} valid, {len(chunk)} in buffer)", flush=True)
+                print(
+                    f"  parsed {i} rows ({total} valid, {len(chunk)} in buffer)",
+                    flush=True,
+                )
             try:
                 row = json.loads(line)
             except Exception:
@@ -99,11 +115,13 @@ def write_full_parquet(out_path):
             convo = to_sharegpt(row.get("messages", ""))
             if not convo or len(convo) < 2:
                 continue
-            chunk.append({
-                "conversations": convo,
-                "source": SOURCE_TAG,
-                "instance_id": row.get("instance_id") or f"sera-{i}",
-            })
+            chunk.append(
+                {
+                    "conversations": convo,
+                    "source": SOURCE_TAG,
+                    "instance_id": row.get("instance_id") or f"sera-{i}",
+                }
+            )
             if len(chunk) >= CHUNK_SIZE:
                 tbl = pa.Table.from_pylist(chunk, schema=SCHEMA)
                 writer.write_table(tbl)
@@ -122,7 +140,9 @@ def write_full_parquet(out_path):
 
 def write_subset_parquet(full_path, subset_path, indices):
     index_set = set(indices)
-    print(f"[sera] Writing subset {subset_path.name} ({len(index_set)} rows)", flush=True)
+    print(
+        f"[sera] Writing subset {subset_path.name} ({len(index_set)} rows)", flush=True
+    )
     writer = pq.ParquetWriter(subset_path, SCHEMA, compression="snappy")
     pf = pq.ParquetFile(full_path)
     cursor = 0
@@ -146,6 +166,7 @@ def write_subset_parquet(full_path, subset_path, indices):
 
 def push(path, repo_id, token, private=False):
     from datasets import Dataset
+
     print(f"[sera] Loading {path.name} for push to {repo_id}", flush=True)
     ds = Dataset.from_parquet(str(path))
     print(f"[sera]  -> {len(ds)} rows, pushing...", flush=True)

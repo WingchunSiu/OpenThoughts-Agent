@@ -3,6 +3,12 @@
 
 Fetches a trace dataset, bins rows by timestamp, and computes comparative
 statistics across time bins to track agent improvement over training.
+
+Tracks reward / turns / error-rate per-bin, plus the behavioral features
+extracted by :mod:`scripts.analysis.behavioral_delta`: tool-call frequency,
+tool-error rate, think-token ratio, response verbosity, code-block density,
+and self-correction frequency. Each behavioral feature is rendered as its
+own small-multiple subplot on the same time axis as the reward curve.
 """
 
 from __future__ import annotations
@@ -16,7 +22,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from scripts.analysis.utils import (
+    SCALAR_BEHAVIORAL_FIELDS,
     count_turns,
+    extract_behavioral_features,
     extract_conversation_text,
     extract_date,
     extract_error_type,
@@ -90,7 +98,10 @@ def _floor_datetime(dt: datetime, bin_hours: float) -> datetime:
 # only touches cheap Python ints/floats/strings.
 # ---------------------------------------------------------------------------
 
-def _precompute_rows(dataset, encoder, max_text_chars: int = 500_000) -> List[Dict[str, Any]]:
+
+def _precompute_rows(
+    dataset, encoder, max_text_chars: int = 500_000
+) -> List[Dict[str, Any]]:
     """Extract text, tokenize in batch, and derive all per-row fields.
 
     Args:
@@ -113,7 +124,11 @@ def _precompute_rows(dataset, encoder, max_text_chars: int = 500_000) -> List[Di
         full_lengths.append(len(text))
         # Truncate for tokenizer; we'll estimate the remainder below
         texts.append(text[:max_text_chars])
-        records.append({
+        # Behavioral features. We pass the same encoder used by the global
+        # tokenization phase, so think-token / assistant-token counts stay
+        # consistent across the pipeline.
+        bf = extract_behavioral_features(row_dict, encoder=encoder)
+        rec = {
             "turns": count_turns(row_dict),
             "task": row_dict.get("task"),
             "episode": row_dict.get("episode"),
@@ -121,12 +136,21 @@ def _precompute_rows(dataset, encoder, max_text_chars: int = 500_000) -> List[Di
             "error_type": extract_error_type(row_dict),
             "date": extract_date(row_dict),
             "has_parsing_error": PARSING_ERROR_MARKER in text,
-        })
+        }
+        # Stamp each scalar behavioral field into the record so binning
+        # is a flat dict scan, no nested attribute lookups.
+        for fname in SCALAR_BEHAVIORAL_FIELDS:
+            rec[f"b_{fname}"] = getattr(bf, fname)
+        rec["b_premature_stop"] = bf.premature_stop
+        records.append(rec)
 
     n_truncated = sum(1 for fl in full_lengths if fl > max_text_chars)
     if n_truncated:
-        print(f"  Note: {n_truncated} texts truncated from >{max_text_chars} chars "
-              f"(token counts estimated for overflow portion).", flush=True)
+        print(
+            f"  Note: {n_truncated} texts truncated from >{max_text_chars} chars "
+            f"(token counts estimated for overflow portion).",
+            flush=True,
+        )
 
     # --- Phase 2: batch tokenisation (parallelised in Rust by tiktoken) ----
     #     Small chunks with a per-chunk timeout so one bad sample can't block.
@@ -138,6 +162,7 @@ def _precompute_rows(dataset, encoder, max_text_chars: int = 500_000) -> List[Di
     n_timed_out = 0
     try:
         from tqdm import tqdm
+
         pbar = tqdm(total=n, desc="  Tokenizing", unit="row")
     except ImportError:
         pbar = None
@@ -167,8 +192,11 @@ def _precompute_rows(dataset, encoder, max_text_chars: int = 500_000) -> List[Di
     if pbar is not None:
         pbar.close()
     if n_timed_out:
-        print(f"  Warning: {n_timed_out} rows in timed-out chunks "
-              f"(token counts estimated from char length).", flush=True)
+        print(
+            f"  Warning: {n_timed_out} rows in timed-out chunks "
+            f"(token counts estimated from char length).",
+            flush=True,
+        )
 
     # Adjust token counts for truncated texts
     for idx in range(n):
@@ -185,6 +213,7 @@ def _precompute_rows(dataset, encoder, max_text_chars: int = 500_000) -> List[Di
 # ---------------------------------------------------------------------------
 # Aggregate stats from pre-computed rows (cheap — no text / tokenisation)
 # ---------------------------------------------------------------------------
+
 
 def _aggregate_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compute aggregate statistics over pre-computed row dicts."""
@@ -204,6 +233,8 @@ def _aggregate_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "null_result_count": 0,
             "parsing_error_count": 0,
             "parsing_error_rate": 0.0,
+            "behavioral": {fname: None for fname in SCALAR_BEHAVIORAL_FIELDS},
+            "premature_stop_rate": None,
         }
 
     turns_list: List[int] = []
@@ -215,6 +246,12 @@ def _aggregate_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     n_parsing_errors = 0
     tasks: set = set()
     episodes: set = set()
+
+    # Behavioral feature accumulators. None values are skipped (eligible-only
+    # mean), matching behavioral_delta.summarize().
+    bvals: Dict[str, List[float]] = {fname: [] for fname in SCALAR_BEHAVIORAL_FIELDS}
+    premature_hits = 0
+    premature_eligible = 0
 
     for r in rows:
         turns_list.append(r["turns"])
@@ -241,6 +278,19 @@ def _aggregate_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             else:
                 n_null_result += 1
 
+        for fname in SCALAR_BEHAVIORAL_FIELDS:
+            v = r.get(f"b_{fname}")
+            if v is not None:
+                bvals[fname].append(v)
+
+        # Premature-stop rate is over traces with assistant_msgs > 0, which
+        # is most rows; we approximate as "rows where the row has a stop
+        # flag set and the assistant_msgs scalar is positive".
+        if (r.get("b_assistant_msgs") or 0) > 0:
+            premature_eligible += 1
+            if r.get("b_premature_stop"):
+                premature_hits += 1
+
     def _safe_stats(vals: List) -> Dict[str, Optional[float]]:
         if not vals:
             return {"min": None, "max": None, "avg": None}
@@ -248,6 +298,12 @@ def _aggregate_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     reward_stats = _safe_stats(rewards)
     reward_rate = sum(1 for r in rewards if r > 0) / n if n else 0.0
+
+    behavioral_means = {
+        fname: (sum(vals) / len(vals) if vals else None)
+        for fname, vals in bvals.items()
+    }
+    premature_rate = premature_hits / premature_eligible if premature_eligible else None
 
     return {
         "count": n,
@@ -263,6 +319,8 @@ def _aggregate_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "null_result_count": n_null_result,
         "parsing_error_count": n_parsing_errors,
         "parsing_error_rate": n_parsing_errors / n if n else 0.0,
+        "behavioral": behavioral_means,
+        "premature_stop_rate": premature_rate,
     }
 
 
@@ -289,10 +347,63 @@ def _print_summary_table(bin_stats: Dict[str, Dict[str, Any]]) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Plot configuration: list of behavioral metrics to render as small-multiples
+# alongside the reward curve. Each entry = (panel_title, accessor, color,
+# y_lim_or_None). The accessor returns a float per bin or None.
+# ---------------------------------------------------------------------------
+
+
+def _bin_accessor(field_name: str):
+    """Return an accessor that extracts a behavioral mean from a bin dict."""
+
+    def _get(s: Dict[str, Any]) -> Optional[float]:
+        v = (s.get("behavioral") or {}).get(field_name)
+        return v
+
+    return _get
+
+
+_BEHAVIORAL_PANELS = [
+    ("Tool calls / trace", _bin_accessor("tool_calls_total"), "tab:green", None),
+    ("Tool error rate", _bin_accessor("tool_error_rate"), "tab:red", (-0.02, 1.02)),
+    ("Tool errors / trace", _bin_accessor("tool_errors"), "tab:brown", None),
+    (
+        "Mean tokens / asst msg",
+        _bin_accessor("mean_assistant_tokens"),
+        "tab:blue",
+        None,
+    ),
+    ("Asst msgs / trace", _bin_accessor("assistant_msgs"), "tab:cyan", None),
+    ("Think tokens / trace", _bin_accessor("think_tokens"), "tab:olive", None),
+    (
+        "Think / asst ratio",
+        _bin_accessor("think_token_ratio"),
+        "tab:gray",
+        (-0.02, 1.02),
+    ),
+    ("Code fences / trace", _bin_accessor("code_fence_blocks"), "tab:purple", None),
+    (
+        "Self-correction / trace",
+        _bin_accessor("self_correction_hits"),
+        "darkorange",
+        None,
+    ),
+]
+
+
 def _generate_plot(bin_stats: Dict[str, Dict[str, Any]], output_path: Path) -> None:
-    """Generate a 4-panel plot of key metrics over time."""
+    """Generate a small-multiples plot of reward + behavioral metrics over time.
+
+    Each subplot shares an x axis (time bin). Reward / turns / error rate
+    occupy the top three panels for backward compatibility. The remaining
+    panels render the behavioral features extracted by
+    :func:`extract_behavioral_features` so reward shifts can be visually
+    attributed to behavior changes.
+    """
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -305,48 +416,71 @@ def _generate_plot(bin_stats: Dict[str, Dict[str, Any]], output_path: Path) -> N
         return
 
     x_labels = sorted_keys
-    x = range(len(x_labels))
+    x = list(range(len(x_labels)))
 
     reward_rates = [bin_stats[k]["reward_rate"] for k in sorted_keys]
     avg_turns = [bin_stats[k]["turns"]["avg"] or 0 for k in sorted_keys]
     error_rates = [bin_stats[k]["error_rate"] for k in sorted_keys]
     parse_err_rates = [bin_stats[k]["parsing_error_rate"] for k in sorted_keys]
+    premature_rates = [
+        (bin_stats[k].get("premature_stop_rate") or 0.0) for k in sorted_keys
+    ]
 
-    fig, axes = plt.subplots(4, 1, figsize=(14, 13), sharex=True)
+    # Top-level (legacy) panels + behavioral panels. We render in a tight
+    # 4-column grid: column-major ordering pairs reward/behavioral side-by-
+    # side. Total panels = 4 legacy + 1 premature + len(_BEHAVIORAL_PANELS) = 14.
+    legacy_panels = [
+        ("Reward rate", reward_rates, "tab:blue", (-0.05, 1.05)),
+        ("Avg conversation turns", avg_turns, "tab:orange", None),
+        ("Error rate", error_rates, "tab:red", (-0.05, 1.05)),
+        ("Parse error rate", parse_err_rates, "tab:purple", (-0.05, 1.05)),
+        ("Premature stop rate", premature_rates, "tab:pink", (-0.05, 1.05)),
+    ]
+    behavioral_panels = []
+    for title, accessor, color, ylim in _BEHAVIORAL_PANELS:
+        values = [accessor(bin_stats[k]) or 0.0 for k in sorted_keys]
+        behavioral_panels.append((title, values, color, ylim))
 
-    axes[0].plot(x, reward_rates, marker="o", markersize=3, linewidth=1.2)
-    axes[0].set_ylabel("Reward Rate")
-    axes[0].set_title("Reward Rate Over Time")
-    axes[0].set_ylim(-0.05, 1.05)
-    axes[0].grid(True, alpha=0.3)
+    all_panels = legacy_panels + behavioral_panels
+    n_panels = len(all_panels)
+    n_cols = 2
+    n_rows = (n_panels + n_cols - 1) // n_cols
 
-    axes[1].plot(x, avg_turns, marker="o", markersize=3, linewidth=1.2, color="tab:orange")
-    axes[1].set_ylabel("Avg Turns")
-    axes[1].set_title("Average Conversation Turns Over Time")
-    axes[1].grid(True, alpha=0.3)
+    fig, axes_grid = plt.subplots(
+        n_rows, n_cols, figsize=(16, 2.6 * n_rows), sharex=True
+    )
+    # Flatten in row-major order so iteration matches panel order.
+    axes = axes_grid.flatten() if n_rows > 1 else list(axes_grid)
 
-    axes[2].plot(x, error_rates, marker="o", markersize=3, linewidth=1.2, color="tab:red")
-    axes[2].set_ylabel("Error Rate")
-    axes[2].set_title("Error Rate Over Time")
-    axes[2].set_ylim(-0.05, 1.05)
-    axes[2].grid(True, alpha=0.3)
+    for ax, (title, values, color, ylim) in zip(axes, all_panels):
+        ax.plot(x, values, marker="o", markersize=3, linewidth=1.2, color=color)
+        ax.set_ylabel(title, fontsize=8)
+        ax.set_title(title, fontsize=9)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis="y", labelsize=7)
 
-    axes[3].plot(x, parse_err_rates, marker="o", markersize=3, linewidth=1.2, color="tab:purple")
-    axes[3].set_ylabel("Parse Error Rate")
-    axes[3].set_title("Parsing Error Rate Over Time")
-    axes[3].set_ylim(-0.05, 1.05)
-    axes[3].grid(True, alpha=0.3)
+    # Hide any unused axes.
+    for ax in axes[len(all_panels) :]:
+        ax.set_visible(False)
 
-    # Show a subset of x-tick labels to avoid crowding
-    n_ticks = min(len(x_labels), 15)
+    # Show a subset of x-tick labels to avoid crowding (on the bottom row).
+    n_ticks = min(len(x_labels), 12)
     step = max(len(x_labels) // n_ticks, 1)
     tick_positions = list(range(0, len(x_labels), step))
     tick_labels = [x_labels[i] for i in tick_positions]
-    axes[3].set_xticks(tick_positions)
-    axes[3].set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=7)
+    for ax in axes[-n_cols:]:
+        if ax.get_visible():
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=7)
 
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
+    fig.suptitle(
+        "RL temporal analysis: reward + behavioral features per bin",
+        fontsize=12,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(output_path, dpi=140)
     print(f"Saved plot to {output_path}")
 
 
@@ -396,8 +530,10 @@ def main() -> None:
     if len(dated_keys) > 1:
         dropped_key = dated_keys[-1]
         dropped_rows = bins.pop(dropped_key)
-        print(f"Dropped last bin '{dropped_key}' ({len(dropped_rows)} rows, likely partial).",
-              flush=True)
+        print(
+            f"Dropped last bin '{dropped_key}' ({len(dropped_rows)} rows, likely partial).",
+            flush=True,
+        )
 
     print(f"Computing statistics for {len(bins)} bins...", flush=True)
     bin_stats: Dict[str, Dict[str, Any]] = {}
@@ -416,11 +552,13 @@ def main() -> None:
     # Print table
     _print_summary_table(bin_stats)
     print()
-    print(f"Global: {global_stats['count']} rows, "
-          f"reward_rate={global_stats['reward_rate']:.3f}, "
-          f"error_rate={global_stats['error_rate']:.3f}, "
-          f"parsing_errors={global_stats['parsing_error_count']} "
-          f"({global_stats['parsing_error_rate']:.3f})")
+    print(
+        f"Global: {global_stats['count']} rows, "
+        f"reward_rate={global_stats['reward_rate']:.3f}, "
+        f"error_rate={global_stats['error_rate']:.3f}, "
+        f"parsing_errors={global_stats['parsing_error_count']} "
+        f"({global_stats['parsing_error_rate']:.3f})"
+    )
     if all_error_counts:
         print("Error breakdown:")
         for err_type, cnt in sorted(all_error_counts.items(), key=lambda x: -x[1]):

@@ -54,6 +54,7 @@ Usage:
       --root /path/to/exp_rpt_stack-csharp-v4 \
       [--dry-run] [--limit N] [--drop-log path.tsv]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -306,65 +307,37 @@ _V2_NAMESPACE_TO_PACKAGE: dict[str, str | None] = {
 #    `Microsoft.EntityFrameworkCore.InMemory` package.
 _V4_NAMESPACE_TO_PACKAGE_ADDITIONS: dict[str, str | None] = {
     # --- Microsoft.Extensions family (sub-packages not in v2) ---
-    "Microsoft.Extensions.DependencyInjection.Abstractions":
-        "Microsoft.Extensions.DependencyInjection.Abstractions",
-    "Microsoft.Extensions.Hosting.Abstractions":
-        "Microsoft.Extensions.Hosting.Abstractions",
-    "Microsoft.Extensions.Options.ConfigurationExtensions":
-        "Microsoft.Extensions.Options.ConfigurationExtensions",
-    "Microsoft.Extensions.Caching.Distributed":
-        "Microsoft.Extensions.Caching.Abstractions",
-    "Microsoft.Extensions.Caching.Abstractions":
-        "Microsoft.Extensions.Caching.Abstractions",
-    "Microsoft.Extensions.Configuration.Binder":
-        "Microsoft.Extensions.Configuration.Binder",
-    "Microsoft.Extensions.Configuration.EnvironmentVariables":
-        "Microsoft.Extensions.Configuration.EnvironmentVariables",
-    "Microsoft.Extensions.Configuration.UserSecrets":
-        "Microsoft.Extensions.Configuration.UserSecrets",
-    "Microsoft.Extensions.Configuration.CommandLine":
-        "Microsoft.Extensions.Configuration.CommandLine",
-    "Microsoft.Extensions.Logging.Debug":
-        "Microsoft.Extensions.Logging.Debug",
+    "Microsoft.Extensions.DependencyInjection.Abstractions": "Microsoft.Extensions.DependencyInjection.Abstractions",
+    "Microsoft.Extensions.Hosting.Abstractions": "Microsoft.Extensions.Hosting.Abstractions",
+    "Microsoft.Extensions.Options.ConfigurationExtensions": "Microsoft.Extensions.Options.ConfigurationExtensions",
+    "Microsoft.Extensions.Caching.Distributed": "Microsoft.Extensions.Caching.Abstractions",
+    "Microsoft.Extensions.Caching.Abstractions": "Microsoft.Extensions.Caching.Abstractions",
+    "Microsoft.Extensions.Configuration.Binder": "Microsoft.Extensions.Configuration.Binder",
+    "Microsoft.Extensions.Configuration.EnvironmentVariables": "Microsoft.Extensions.Configuration.EnvironmentVariables",
+    "Microsoft.Extensions.Configuration.UserSecrets": "Microsoft.Extensions.Configuration.UserSecrets",
+    "Microsoft.Extensions.Configuration.CommandLine": "Microsoft.Extensions.Configuration.CommandLine",
+    "Microsoft.Extensions.Logging.Debug": "Microsoft.Extensions.Logging.Debug",
     # --- Azure SDK (legacy + cosmos sub-packages) ---
-    "Microsoft.Azure.Services.AppAuthentication":
-        "Microsoft.Azure.Services.AppAuthentication",
-    "Microsoft.Azure.KeyVault":
-        "Microsoft.Azure.KeyVault",
-    "Microsoft.Azure.Storage":
-        "Microsoft.Azure.Storage.Common",
+    "Microsoft.Azure.Services.AppAuthentication": "Microsoft.Azure.Services.AppAuthentication",
+    "Microsoft.Azure.KeyVault": "Microsoft.Azure.KeyVault",
+    "Microsoft.Azure.Storage": "Microsoft.Azure.Storage.Common",
     # --- ASP.NET Core (extra subpaths missing in v2) ---
-    "Microsoft.AspNetCore.Builder":
-        "Microsoft.AspNetCore.App.Ref",
-    "Microsoft.AspNetCore.Mvc.Core":
-        "Microsoft.AspNetCore.Mvc.Core",
-    "Microsoft.AspNetCore.Mvc.ViewFeatures":
-        "Microsoft.AspNetCore.Mvc.ViewFeatures",
-    "Microsoft.AspNetCore.Mvc.RazorPages":
-        "Microsoft.AspNetCore.Mvc.RazorPages",
-    "Microsoft.AspNetCore.Mvc.Abstractions":
-        "Microsoft.AspNetCore.Mvc.Abstractions",
-    "Microsoft.AspNetCore.Mvc.Filters":
-        "Microsoft.AspNetCore.Mvc.Core",
-    "Microsoft.AspNetCore.Http.Abstractions":
-        "Microsoft.AspNetCore.Http.Abstractions",
-    "Microsoft.AspNetCore.Http.Features":
-        "Microsoft.AspNetCore.Http.Features",
-    "Microsoft.AspNetCore.DataProtection":
-        "Microsoft.AspNetCore.DataProtection",
-    "Microsoft.AspNetCore.Diagnostics":
-        "Microsoft.AspNetCore.Diagnostics.Abstractions",
+    "Microsoft.AspNetCore.Builder": "Microsoft.AspNetCore.App.Ref",
+    "Microsoft.AspNetCore.Mvc.Core": "Microsoft.AspNetCore.Mvc.Core",
+    "Microsoft.AspNetCore.Mvc.ViewFeatures": "Microsoft.AspNetCore.Mvc.ViewFeatures",
+    "Microsoft.AspNetCore.Mvc.RazorPages": "Microsoft.AspNetCore.Mvc.RazorPages",
+    "Microsoft.AspNetCore.Mvc.Abstractions": "Microsoft.AspNetCore.Mvc.Abstractions",
+    "Microsoft.AspNetCore.Mvc.Filters": "Microsoft.AspNetCore.Mvc.Core",
+    "Microsoft.AspNetCore.Http.Abstractions": "Microsoft.AspNetCore.Http.Abstractions",
+    "Microsoft.AspNetCore.Http.Features": "Microsoft.AspNetCore.Http.Features",
+    "Microsoft.AspNetCore.DataProtection": "Microsoft.AspNetCore.DataProtection",
+    "Microsoft.AspNetCore.Diagnostics": "Microsoft.AspNetCore.Diagnostics.Abstractions",
     # --- EntityFrameworkCore providers ---
-    "Microsoft.EntityFrameworkCore.InMemory":
-        "Microsoft.EntityFrameworkCore.InMemory",
-    "Microsoft.EntityFrameworkCore.SqlServer":
-        "Microsoft.EntityFrameworkCore.SqlServer",
-    "Microsoft.EntityFrameworkCore.Sqlite":
-        "Microsoft.EntityFrameworkCore.Sqlite",
-    "Microsoft.EntityFrameworkCore.Design":
-        "Microsoft.EntityFrameworkCore.Design",
-    "Microsoft.EntityFrameworkCore.Relational":
-        "Microsoft.EntityFrameworkCore.Relational",
+    "Microsoft.EntityFrameworkCore.InMemory": "Microsoft.EntityFrameworkCore.InMemory",
+    "Microsoft.EntityFrameworkCore.SqlServer": "Microsoft.EntityFrameworkCore.SqlServer",
+    "Microsoft.EntityFrameworkCore.Sqlite": "Microsoft.EntityFrameworkCore.Sqlite",
+    "Microsoft.EntityFrameworkCore.Design": "Microsoft.EntityFrameworkCore.Design",
+    "Microsoft.EntityFrameworkCore.Relational": "Microsoft.EntityFrameworkCore.Relational",
     # --- Classic EF6 (separate package) ---
     "EntityFramework": "EntityFramework",
     "System.Data.Entity": "EntityFramework",
@@ -405,8 +378,7 @@ _V4_NAMESPACE_TO_PACKAGE_ADDITIONS: dict[str, str | None] = {
     "MSTest.TestFramework": "MSTest.TestFramework",
     "MSTest.TestAdapter": "MSTest.TestAdapter",
     # --- AutoMapper sub-packages ---
-    "AutoMapper.Extensions.Microsoft.DependencyInjection":
-        "AutoMapper.Extensions.Microsoft.DependencyInjection",
+    "AutoMapper.Extensions.Microsoft.DependencyInjection": "AutoMapper.Extensions.Microsoft.DependencyInjection",
     "AutoMapper.QueryableExtensions": "AutoMapper",
     # --- FluentAssertions extras ---
     "FluentAssertions.Execution": "FluentAssertions",
@@ -425,8 +397,7 @@ _V4_NAMESPACE_TO_PACKAGE_ADDITIONS: dict[str, str | None] = {
     "Serilog.Extensions.Logging": "Serilog.Extensions.Logging",
     "Serilog.AspNetCore": "Serilog.AspNetCore",
     # --- MediatR extras ---
-    "MediatR.Extensions.Microsoft.DependencyInjection":
-        "MediatR.Extensions.Microsoft.DependencyInjection",
+    "MediatR.Extensions.Microsoft.DependencyInjection": "MediatR.Extensions.Microsoft.DependencyInjection",
     # --- Newtonsoft helpers ---
     "Newtonsoft.Json.Linq": "Newtonsoft.Json",
     "Newtonsoft.Json.Schema": "Newtonsoft.Json.Schema",
@@ -461,8 +432,7 @@ _NS_MAP_SORTED: list[tuple[str, str | None]] = sorted(
 
 # How many v4-NEW NuGet entries did we add (used by the report)?
 N_V4_PACKAGE_ADDITIONS: int = sum(
-    1 for k in _V4_NAMESPACE_TO_PACKAGE_ADDITIONS
-    if k not in _V2_NAMESPACE_TO_PACKAGE
+    1 for k in _V4_NAMESPACE_TO_PACKAGE_ADDITIONS if k not in _V2_NAMESPACE_TO_PACKAGE
 )
 
 
@@ -486,9 +456,7 @@ def _is_drop(ns: str) -> bool:
 
 
 def _is_project_internal(ns: str) -> bool:
-    return any(
-        ns == p or ns.startswith(p + ".") for p in _V4_PROJECT_INTERNAL_PREFIXES
-    )
+    return any(ns == p or ns.startswith(p + ".") for p in _V4_PROJECT_INTERNAL_PREFIXES)
 
 
 def map_using_to_package(ns: str) -> str | None:
@@ -560,9 +528,7 @@ def _packages_already_in_v2_block(testsh: str) -> set[str]:
 # --------------------------------------------------------------------------- #
 
 
-def patch_test_sh(
-    original: str, packages: list[str]
-) -> tuple[str | None, dict]:
+def patch_test_sh(original: str, packages: list[str]) -> tuple[str | None, dict]:
     """Apply the v4 test.sh patches: extra-package block + AllowUnsafeBlocks.
 
     Returns (new_contents, info_dict). `new_contents` is None if no change
@@ -603,11 +569,9 @@ def patch_test_sh(
             )
             for pkg in delta:
                 block_lines.append(
-                    f'    dotnet add package {pkg} >/dev/null 2>&1 || dotnet add package {pkg}'
+                    f"    dotnet add package {pkg} >/dev/null 2>&1 || dotnet add package {pkg}"
                 )
-            block_lines.append(
-                "    dotnet restore >/dev/null 2>&1 || true"
-            )
+            block_lines.append("    dotnet restore >/dev/null 2>&1 || true")
             block_lines.append(f"    {_V4_TESTSH_PKG_END_MARKER}")
             block_lines.append("")
             block = "\n".join(block_lines)

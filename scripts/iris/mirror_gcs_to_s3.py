@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """Copy one or more GCS prefixes into an S3-compatible bucket, one file at a time.
 
-Designed as a workaround for the missing GCS HMAC keys that vLLM's
-``runai_streamer`` requires. Iris workers have native GCS read auth via
-workload identity, and we have AWS-style S3 creds for the LAION /
-mmlaion bucket at Jülich — so we can pull from GCS (gcsfs) and push to
-S3 (boto3) in a streaming script, never holding more than one shard on
-local disk.
+Iris workers have native GCS read auth via workload identity, and we have AWS-style
+S3 creds for the LAION / mmlaion bucket at Jülich — so we pull from GCS (gcsfs) and
+push to S3 (boto3) in a streaming script, never holding more than one shard on local
+disk.
 
-Idempotent: skips files already present at the destination with a
-matching size.
+Idempotent: skips files already present at the destination with a matching size.
 
 Usage::
 
@@ -44,6 +41,7 @@ MANIFEST_FILENAME = ".mirror_manifest.json"
 
 def _gcs_fs():
     import gcsfs
+
     return gcsfs.GCSFileSystem()
 
 
@@ -98,8 +96,7 @@ def mirror_repo(
     dst_prefix = f"{s3_prefix.rstrip('/')}/{repo_id}"
 
     if verbose:
-        print(f"[gcs2s3] {src_prefix} -> s3://{s3_bucket}/{dst_prefix}",
-              flush=True)
+        print(f"[gcs2s3] {src_prefix} -> s3://{s3_bucket}/{dst_prefix}", flush=True)
 
     # gcsfs.ls returns full paths including bucket; strip back to the
     # relative basename so we can rebuild the S3 key.
@@ -128,21 +125,29 @@ def mirror_repo(
         existing = _s3_head(s3, s3_bucket, dst_key)
         if existing is not None and existing == src_size:
             if verbose:
-                print(f"[gcs2s3] [{idx}/{len(src_files)}] skip "
-                      f"(matched size {existing} bytes): {rel_name}",
-                      flush=True)
+                print(
+                    f"[gcs2s3] [{idx}/{len(src_files)}] skip "
+                    f"(matched size {existing} bytes): {rel_name}",
+                    flush=True,
+                )
             files_mirrored.append((rel_name, src_size))
             continue
 
         with tempfile.TemporaryDirectory(prefix="gcs2s3_") as tmp:
             local_path = Path(tmp) / rel_name
             if verbose:
-                print(f"[gcs2s3] [{idx}/{len(src_files)}] download "
-                      f"({src_size} bytes): {rel_name}", flush=True)
+                print(
+                    f"[gcs2s3] [{idx}/{len(src_files)}] download "
+                    f"({src_size} bytes): {rel_name}",
+                    flush=True,
+                )
             gcs_fs.get(src_uri, str(local_path))
             if verbose:
-                print(f"[gcs2s3] [{idx}/{len(src_files)}] upload: "
-                      f"s3://{s3_bucket}/{dst_key}", flush=True)
+                print(
+                    f"[gcs2s3] [{idx}/{len(src_files)}] upload: "
+                    f"s3://{s3_bucket}/{dst_key}",
+                    flush=True,
+                )
             s3.upload_file(str(local_path), s3_bucket, dst_key)
             files_mirrored.append((rel_name, src_size))
             try:
@@ -162,40 +167,62 @@ def mirror_repo(
     }
     manifest_key = f"{dst_prefix}/{MANIFEST_FILENAME}"
     s3.put_object(
-        Bucket=s3_bucket, Key=manifest_key,
+        Bucket=s3_bucket,
+        Key=manifest_key,
         Body=json.dumps(manifest, indent=2).encode("utf-8"),
         ContentType="application/json",
     )
     if verbose:
         total = sum(sz for _, sz in files_mirrored)
-        print(f"[gcs2s3] done: {repo_id} -> s3://{s3_bucket}/{dst_prefix} "
-              f"({len(files_mirrored)} files, {total} bytes); manifest at "
-              f"s3://{s3_bucket}/{manifest_key}", flush=True)
+        print(
+            f"[gcs2s3] done: {repo_id} -> s3://{s3_bucket}/{dst_prefix} "
+            f"({len(files_mirrored)} files, {total} bytes); manifest at "
+            f"s3://{s3_bucket}/{manifest_key}",
+            flush=True,
+        )
 
 
-def main() -> int:
+def _legacy_main() -> int:
     p = argparse.ArgumentParser(
         description="Stream files from a GCS prefix into an S3-compatible bucket.",
     )
-    p.add_argument("--repo", action="append", required=True,
-                   help="HF model repo id (org/name), repeatable.")
-    p.add_argument("--gcs-prefix", required=True,
-                   help="Source GCS prefix; src paths are <prefix>/<repo>/...")
-    p.add_argument("--s3-bucket", required=True,
-                   help="Destination S3 bucket name (no s3:// scheme).")
-    p.add_argument("--s3-prefix", required=True,
-                   help="Destination prefix inside the bucket; dst paths are "
-                        "s3://<bucket>/<prefix>/<repo>/...")
-    p.add_argument("--s3-endpoint", default=os.environ.get("AWS_ENDPOINT_URL"),
-                   help="S3-compatible endpoint URL (e.g. MinIO). "
-                        "Defaults to $AWS_ENDPOINT_URL; omit / leave unset "
-                        "for real AWS S3.")
+    p.add_argument(
+        "--repo",
+        action="append",
+        required=True,
+        help="HF model repo id (org/name), repeatable.",
+    )
+    p.add_argument(
+        "--gcs-prefix",
+        required=True,
+        help="Source GCS prefix; src paths are <prefix>/<repo>/...",
+    )
+    p.add_argument(
+        "--s3-bucket",
+        required=True,
+        help="Destination S3 bucket name (no s3:// scheme).",
+    )
+    p.add_argument(
+        "--s3-prefix",
+        required=True,
+        help="Destination prefix inside the bucket; dst paths are "
+        "s3://<bucket>/<prefix>/<repo>/...",
+    )
+    p.add_argument(
+        "--s3-endpoint",
+        default=os.environ.get("AWS_ENDPOINT_URL"),
+        help="S3-compatible endpoint URL (e.g. MinIO). "
+        "Defaults to $AWS_ENDPOINT_URL; omit / leave unset "
+        "for real AWS S3.",
+    )
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
 
     if not args.gcs_prefix.startswith("gs://"):
-        print(f"error: --gcs-prefix must start with gs:// (got {args.gcs_prefix!r})",
-              file=sys.stderr)
+        print(
+            f"error: --gcs-prefix must start with gs:// (got {args.gcs_prefix!r})",
+            file=sys.stderr,
+        )
         return 2
 
     for repo in args.repo:
@@ -208,6 +235,13 @@ def main() -> int:
             verbose=not args.quiet,
         )
     return 0
+
+
+def main() -> int:
+    """Compatibility entrypoint; use ``mirror_models gcs-to-s3`` for new calls."""
+    from scripts.iris.mirror_models import main as unified_main
+
+    return unified_main(["gcs-to-s3", *sys.argv[1:]])
 
 
 if __name__ == "__main__":

@@ -1,37 +1,3 @@
-# MiniMax-M2.7-AWQ-4bit — AWQ 4-bit quantized (~229B params)
-# https://huggingface.co/cyankiwi/MiniMax-M2.7-AWQ-4bit
-#
-# 32K context — Jupiter GH200 2-node TP=4 / DP=2 variant.
-#
-# Hardware: 2 nodes × 4× GH200 96GB = 8 GPUs total (~768 GB VRAM)
-#   - Each DP replica owns one full node (TP=4 within node):
-#     * AWQ 4-bit weights ~115 GB → TP=4 → ~29 GB/GPU
-#     * 96 GB - 29 GB ≈ 67 GB/GPU for KV + activations (very roomy,
-#       same as the proven dp=1 single-node baseline)
-#   - 2 DP replicas → 2× throughput at the cost of one extra node
-#   - All TP cross-rank traffic stays within a node (no cross-node TP
-#     RPC, no IB-bandwidth pressure on the hot path)
-#   - DP coordination IS cross-node (TCPStore between the two engine
-#     replicas), but it's only metadata (request routing) — not the
-#     hot sample_tokens RPC path that breaks at TP-across-nodes
-#
-# Compared to the 1node_32k_dp2 sibling (TP=2 DP=2 single-node):
-#   - TP=4 → less memory pressure per GPU, no need to drop
-#     gpu_memory_utilization to 0.85
-#   - DP coordination now goes through the inter-node fabric (was
-#     loopback for single-node), which is a different test surface
-#   - More representative of the long-context configs we want to ramp
-#     to next (TP=4 leaves room for ≥64K context per the memory math)
-#
-# Compared to the 1node_32k baseline (TP=4 DP=1):
-#   - Adds DP=2 → 2x throughput once dp>1 is validated
-#   - Tests vLLM's mp DP coordinator across nodes (replaces the
-#     known-bad single-node Ray-DP path that hit Bug E + the
-#     known-bad single-node mp-DP path that hit Bug F's c10d
-#     IPv6 hostname leak)
-#
-# Required launch flags:
-#   --num_nodes 2 --gpus_per_node 4
 
 engine:
   type: vllm_local
@@ -58,23 +24,6 @@ vllm_server:
   max_model_len: 32768
   max_num_seqs: 32
   gpu_memory_utilization: 0.9
-  # enable_expert_parallel: true — 2026-05-22 (revised): matches the
-  # GLM-4.7 4-node config that we just proved healthy under load on the
-  # current Jupiter wheel (job 493343: 4 engines × ~32 tok/s sustained,
-  # 21 trials in 32 min, ZERO shm_broadcast / TCPStore warnings).
-  #
-  # Earlier (prior comment, pre-2026-05-22) we had EP=false here to avoid
-  # the apparent cross-node all2all hang in job 483664. The v6 GLM-4.7
-  # run showed that hang was a confound: the actual cross-node fragility
-  # on the current Jupiter wheel is CUDA-graph capture + MoE all-to-all
-  # inside FULL_AND_PIECEWISE cudagraph_mode (gpu_model_runner.py:6098 →
-  # "CUDA error: an illegal memory access" in profile_cudagraph_memory).
-  # --enforce-eager (already in extra_args below) skips graph capture
-  # entirely and the all-to-all then runs cleanly cross-node.
-  #
-  # Memory: AWQ 4-bit experts ~115 GB / 8 EP ranks = ~14 GB/GPU experts,
-  # well within 96 GB GH200 even at 0.9 utilization. Same memory math as
-  # GLM-4.7 worked at.
   enable_expert_parallel: true
   enable_auto_tool_choice: true
   tool_call_parser: minimax_m2
@@ -91,52 +40,13 @@ vllm_server:
   - --enforce-eager
   - --chat-template-content-format
   - string
-  # max-num-batched-tokens 4096 vs the default 32768: NIXL itself uses
-  # size_t internally (no INT_MAX cap), but Buffer.get_rdma_size_hint()
-  # has the same shape as DeepEP — 4096 is known-safe per the deepepll
-  # variant. mnbt < max_model_len is OK with chunked prefill enabled
-  # (the OT-Agent _DEFAULT_OFF_BOOLEAN_FLAGS removal lets vLLM's per-
-  # model default win, and MiniMax-M2 wants chunked prefill on).
   - --max-num-batched-tokens
   - '4096'
   - --all2all-backend
   - nixl_ep
-  # NIXL EP is the Elastic-EP backend. The vLLM regular GroupCoordinator
-  # path constructs CudaCommunicator without tcp_store_group (parallel_state.py:376-381)
-  # which then fails NixlEPAll2AllManager's assert. Only the
-  # StatelessGroupCoordinator path (stateless_coordinator.py:170-178) passes
-  # tcp_store_group through, and that path is gated on `enable_elastic_ep`,
-  # which in turn requires `enable_eplb`. Both must be on for NIXL_EP to init.
   - --enable-eplb
   - --enable-elastic-ep
-  # ----- DP backend selection (2026-05-21) -----
-  # Use the Ray actor data-parallel backend. The default (`mp`) path
-  # spawns ALL `data_parallel_size` engine procs locally on the API-server
-  # node (vllm/v1/engine/utils.py: CoreEngineProcManager + set_device_control_env_var)
-  # and then calls get_device_indices(local_dp_rank=1, world_size=4) →
-  # slices CUDA_VISIBLE_DEVICES="0,1,2,3" at [4:8) → IndexError. That's
-  # the job-482406 failure mode for 2-node DP=2 TP=4. The Ray actor
-  # backend instead uses CoreEngineActorManager + placement groups so
-  # each engine actor lands on its own node, with `local_dp_rank` reset
-  # to 0 per node (verified in create_dp_placement_groups: local_dp_ranks
-  # is built from range(dp_size_to_allocate) per node, not globally).
-  #
-  # `--data-parallel-size-local 1` is required because the default
-  # (data_parallel_size_local = data_parallel_size = 2) would still try
-  # to fit two DP ranks on one node = 8 GPUs > 4 per node.
-  #
-  # Bug E (DPMoEEngineCoreActor placed on the CPU-only control bundle →
-  # empty get_accelerator_ids() → previously fail-loud) is patched in
-  # our local vLLM at vllm/v1/engine/core.py:_set_visible_devices:
-  # the empty-gpu_ids path now falls back to the legacy
-  # _set_cuda_visible_devices slice. With local_dp_rank=0 per node and
-  # world_size=4, that slice is [0,4) = "0,1,2,3" = the per-node GPU
-  # set. ✓
   - --data-parallel-backend
   - ray
   - --data-parallel-size-local
   - '1'
-  # vllm_utils.VLLMServer.start() auto-injects
-  # `--data-parallel-address <ray_cluster.head_ip>` when
-  # data_parallel_size > 1, so the DP master URL is always an IPv4
-  # literal.

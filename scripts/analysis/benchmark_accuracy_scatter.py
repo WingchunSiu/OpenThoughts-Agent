@@ -217,9 +217,7 @@ def get_model_names(client: Client, model_ids: set[str]) -> dict[str, str]:
     return names
 
 
-def resolve_model_ids_by_name(
-    client: Client, model_names: list[str]
-) -> dict[str, str]:
+def resolve_model_ids_by_name(client: Client, model_names: list[str]) -> dict[str, str]:
     """Find model IDs by exact name match.
 
     Returns {model_id: model_name} for all matches.
@@ -254,12 +252,23 @@ def plot_scatter(
         dates = [p["date"] for p in model_pts]
         accs = [p["accuracy"] for p in model_pts]
         label = model_names.get(mid, mid[:12])
-        ax.scatter(dates, accs, color=model_color[mid], label=label, s=40, alpha=0.8, edgecolors="k", linewidths=0.3)
+        ax.scatter(
+            dates,
+            accs,
+            color=model_color[mid],
+            label=label,
+            s=40,
+            alpha=0.8,
+            edgecolors="k",
+            linewidths=0.3,
+        )
 
     if label_points:
         for p in points:
             label = model_names.get(p["model_id"], p["job_name"][:20])
-            ax.annotate(label, (p["date"], p["accuracy"]), fontsize=5, alpha=0.6, rotation=30)
+            ax.annotate(
+                label, (p["date"], p["accuracy"]), fontsize=5, alpha=0.6, rotation=30
+            )
 
     ax.set_xlabel("Date Added")
     ax.set_ylabel("Accuracy")
@@ -270,7 +279,9 @@ def plot_scatter(
     ax.grid(True, alpha=0.3)
 
     if len(unique_models) > 10:
-        ax.legend(fontsize=6, loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+        ax.legend(
+            fontsize=6, loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0
+        )
         fig.subplots_adjust(right=0.75)
     else:
         ax.legend(fontsize=7, loc="best")
@@ -333,34 +344,70 @@ def plot_radar(
                 else:
                     continue
                 break
-            wrapped_names.append(bn[:best + 1].rstrip() + "\n" + bn[best + 1:].lstrip())
+            wrapped_names.append(
+                bn[: best + 1].rstrip() + "\n" + bn[best + 1 :].lstrip()
+            )
         else:
             wrapped_names.append(bn)
 
     fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
-    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3",
-              "#937860", "#DA8BC3", "#8C8C8C", "#CCB974", "#64B5CD"]
-    cmap_colors = colors[:max(len(model_scores), 1)]
+    colors = [
+        "#4C72B0",
+        "#DD8452",
+        "#55A868",
+        "#C44E52",
+        "#8172B3",
+        "#937860",
+        "#DA8BC3",
+        "#8C8C8C",
+        "#CCB974",
+        "#64B5CD",
+    ]
+    cmap_colors = colors[: max(len(model_scores), 1)]
 
-    for i, (mid, scores) in enumerate(sorted(model_scores.items(), key=lambda x: model_display_names.get(x[0], ""))):
+    for i, (mid, scores) in enumerate(
+        sorted(model_scores.items(), key=lambda x: model_display_names.get(x[0], ""))
+    ):
         values = [scores[bn] for bn in benchmark_names]
         values += values[:1]  # close
         label = model_display_names.get(mid, mid[:12])
         color = cmap_colors[i % len(cmap_colors)]
-        ax.plot(angles, values, "o-", linewidth=2, label=label, color=color,
-                markersize=5, markeredgecolor="white", markeredgewidth=0.5)
+        ax.plot(
+            angles,
+            values,
+            "o-",
+            linewidth=2,
+            label=label,
+            color=color,
+            markersize=5,
+            markeredgecolor="white",
+            markeredgewidth=0.5,
+        )
         ax.fill(angles, values, alpha=0.12, color=color)
 
-    ax.set_thetagrids(np.degrees(angles[:-1]), wrapped_names, fontsize=9, fontweight="medium")
+    ax.set_thetagrids(
+        np.degrees(angles[:-1]), wrapped_names, fontsize=9, fontweight="medium"
+    )
     # Push labels outward so they don't overlap the data area
     ax.set_rlabel_position(30)
     ax.set_ylim(y_min, y_max)
     ax.set_yticks(y_ticks)
-    ax.set_yticklabels([f"{v:.1f}" if v < 1 else "1.0" for v in y_ticks], fontsize=7, color="#555555")
-    ax.set_title("Model Comparison Across Benchmarks", y=1.12, fontsize=14, fontweight="bold")
-    ax.legend(fontsize=9, loc="upper left", bbox_to_anchor=(-0.15, -0.08),
-              ncol=min(len(model_scores), 3), frameon=True, fancybox=True,
-              shadow=False, edgecolor="#cccccc")
+    ax.set_yticklabels(
+        [f"{v:.1f}" if v < 1 else "1.0" for v in y_ticks], fontsize=7, color="#555555"
+    )
+    ax.set_title(
+        "Model Comparison Across Benchmarks", y=1.12, fontsize=14, fontweight="bold"
+    )
+    ax.legend(
+        fontsize=9,
+        loc="upper left",
+        bbox_to_anchor=(-0.15, -0.08),
+        ncol=min(len(model_scores), 3),
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        edgecolor="#cccccc",
+    )
     ax.grid(True, alpha=0.3, linewidth=0.5)
     ax.spines["polar"].set_visible(True)
     ax.spines["polar"].set_linewidth(1.2)
@@ -376,18 +423,28 @@ def main():
     parser = argparse.ArgumentParser(
         description="Scatterplot of accuracy over time, and radar plot across benchmarks."
     )
-    parser.add_argument("--benchmark-id", required=True, help="UUID of the benchmark for the scatter plot.")
+    parser.add_argument(
+        "--benchmark-id",
+        required=True,
+        help="UUID of the benchmark for the scatter plot.",
+    )
     parser.add_argument("--output", default=None, help="Output path for scatter plot.")
-    parser.add_argument("--label-points", action="store_true", help="Label scatter points with model name.")
+    parser.add_argument(
+        "--label-points",
+        action="store_true",
+        help="Label scatter points with model name.",
+    )
     parser.add_argument(
         "--radar-models",
         nargs="+",
         default=None,
         metavar="NAME",
         help="Exact model names for radar plot (e.g. 'Qwen/Qwen3-32B' 'allenai/SERA-32B'). "
-             "Only benchmarks with results for ALL listed models are included.",
+        "Only benchmarks with results for ALL listed models are included.",
     )
-    parser.add_argument("--radar-output", default=None, help="Output path for radar plot.")
+    parser.add_argument(
+        "--radar-output", default=None, help="Output path for radar plot."
+    )
     args = parser.parse_args()
 
     client = create_supabase_client()
@@ -406,12 +463,14 @@ def main():
         if acc is None:
             continue
         dt = datetime.fromisoformat(job["created_at"].replace("Z", "+00:00"))
-        points.append({
-            "date": dt,
-            "accuracy": acc,
-            "job_name": job.get("job_name", ""),
-            "model_id": job.get("model_id", ""),
-        })
+        points.append(
+            {
+                "date": dt,
+                "accuracy": acc,
+                "job_name": job.get("job_name", ""),
+                "model_id": job.get("model_id", ""),
+            }
+        )
         if job.get("model_id"):
             model_ids.add(job["model_id"])
 
@@ -427,11 +486,13 @@ def main():
             safe_name = benchmark_name.replace(" ", "_").replace("/", "_")
             scatter_path = os.path.join(FIGURES_DIR, f"{safe_name}_accuracy.png")
 
-        plot_scatter(points, model_names, benchmark_name, scatter_path, args.label_points)
+        plot_scatter(
+            points, model_names, benchmark_name, scatter_path, args.label_points
+        )
 
     # ---- Radar plot ----
     if args.radar_models:
-        print(f"\n=== Radar Plot ===")
+        print("\n=== Radar Plot ===")
         print(f"Matching models for: {args.radar_models}")
 
         matched_models = resolve_model_ids_by_name(client, args.radar_models)
@@ -446,7 +507,9 @@ def main():
         n_raw = len(id_to_canonical)
         n_canonical = len(canonical_names)
         if n_raw != n_canonical:
-            print(f"Resolved {n_raw} benchmark rows to {n_canonical} canonical benchmarks (duplicates unified)")
+            print(
+                f"Resolved {n_raw} benchmark rows to {n_canonical} canonical benchmarks (duplicates unified)"
+            )
         print(f"Fetching jobs across {n_canonical} canonical benchmarks...")
 
         all_jobs = fetch_all_jobs(client)
@@ -467,7 +530,10 @@ def main():
                 continue
             bname = id_to_canonical[bid]
             # Keep the highest score in case of multiple runs / duplicates
-            if bname not in model_bench_scores[mid] or acc > model_bench_scores[mid][bname]:
+            if (
+                bname not in model_bench_scores[mid]
+                or acc > model_bench_scores[mid][bname]
+            ):
                 model_bench_scores[mid][bname] = acc
 
         # Only include benchmarks where ALL matched models have results
@@ -476,7 +542,8 @@ def main():
             all_bench_names.update(scores.keys())
 
         common_benchmarks = sorted(
-            bn for bn in all_bench_names
+            bn
+            for bn in all_bench_names
             if all(bn in model_bench_scores.get(mid, {}) for mid in matched_ids)
         )
 
@@ -487,7 +554,9 @@ def main():
         # Report which benchmarks were dropped
         dropped = sorted(all_bench_names - set(common_benchmarks))
         if dropped:
-            print(f"Dropped benchmarks (missing results for some models): {', '.join(dropped)}")
+            print(
+                f"Dropped benchmarks (missing results for some models): {', '.join(dropped)}"
+            )
         print(f"Radar axes ({len(common_benchmarks)}): {', '.join(common_benchmarks)}")
 
         radar_path = args.radar_output

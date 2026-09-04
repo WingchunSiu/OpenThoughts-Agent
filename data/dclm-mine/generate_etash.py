@@ -16,10 +16,18 @@ from tqdm import tqdm
 from tqdm.asyncio import tqdm_asyncio
 from openai import AsyncOpenAI
 
-from data.commons import create_task_from_dockerfiles_and_questions, create_standard_dockerfile
+from data.commons import (
+    create_task_from_dockerfiles_and_questions,
+    create_standard_dockerfile,
+)
 from Step1_filter_dclm_baseline.download_dclm.make_dclm_urls import DCLMShardDownloader
-from Step1_filter_dclm_baseline.grep_terminal_like.bash_finder import BashDetector, process_single_shard
-from Step2_classify.classify_tasks import TaskExtraction as ClassifySchema, SYSTEM_PROMPT as CLASSIFY_PROMPT
+from Step1_filter_dclm_baseline.grep_terminal_like.bash_finder import (
+    process_single_shard,
+)
+from Step2_classify.classify_tasks import (
+    TaskExtraction as ClassifySchema,
+    SYSTEM_PROMPT as CLASSIFY_PROMPT,
+)
 
 # =============================================================================
 # Configuration
@@ -35,7 +43,10 @@ def main() -> None:
     print("Step 1a: Getting DCLM shard URLs...")
     downloader = DCLMShardDownloader()
     shard_paths = downloader.list_all_shards()
-    urls = [f"https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/main/{p}" for p in shard_paths]
+    urls = [
+        f"https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/main/{p}"
+        for p in shard_paths
+    ]
 
     print("Step 1b: Filtering bash sequences...")
     bash_sequences = filter_bash_sequences(urls, BASH_THRESHOLD, LIMIT)
@@ -43,7 +54,9 @@ def main() -> None:
 
     # Step 2: Classify shell tasks
     print("\nStep 2: Classifying shell tasks...")
-    classified = asyncio.run(classify_all(bash_sequences, CLASSIFY_PROMPT, ClassifySchema))
+    classified = asyncio.run(
+        classify_all(bash_sequences, CLASSIFY_PROMPT, ClassifySchema)
+    )
     print(f"  -> {len(classified)} classified as shell tasks")
 
     if not classified:
@@ -57,14 +70,14 @@ def main() -> None:
     questions = [(c.get("task_description", ""), None, None) for c in classified]
 
     final_dir = create_task_from_dockerfiles_and_questions(dockerfiles, questions)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Generated {len(classified)} tasks at: {final_dir}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def filter_bash_sequences(urls, threshold, limit, max_concurrent=32):
     import requests
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor
 
     cache_dir = Path(tempfile.mkdtemp(prefix="dclm_cache_"))
     results = []
@@ -77,16 +90,16 @@ def filter_bash_sequences(urls, threshold, limit, max_concurrent=32):
             try:
                 resp = requests.get(url, stream=True)
                 resp.raise_for_status()
-                with open(local_path, 'wb') as f:
+                with open(local_path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
                         f.write(chunk)
-            except:
+            except:  # noqa: E722
                 return []
 
         try:
             result = process_single_shard(local_path, threshold)
             return result.bash_results
-        except:
+        except:  # noqa: E722
             return []
 
     # Process in batches to allow early stopping
@@ -132,6 +145,7 @@ def filter_bash_sequences(urls, threshold, limit, max_concurrent=32):
 
 def wait_first(futures):
     from concurrent.futures import FIRST_COMPLETED, wait
+
     done, pending = wait(futures, return_when=FIRST_COMPLETED)
     return done, pending
 
@@ -145,17 +159,22 @@ async def classify_all(sequences, prompt, schema):
             try:
                 resp = await client.beta.chat.completions.parse(
                     model=MODEL,
-                    messages=[{"role": "system", "content": prompt}, {"role": "user", "content": seq.get("text", "")}],
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": seq.get("text", "")},
+                    ],
                     response_format=schema,
                 )
                 r = resp.choices[0].message.parsed
                 if r.has_shell_task and r.task_description:
                     return {**seq, "task_description": r.task_description}
-            except:
+            except:  # noqa: E722
                 pass
             return None
 
-    results = await tqdm_asyncio.gather(*[classify_one(s) for s in sequences], desc="Classifying")
+    results = await tqdm_asyncio.gather(
+        *[classify_one(s) for s in sequences], desc="Classifying"
+    )
     return [r for r in results if r]
 
 

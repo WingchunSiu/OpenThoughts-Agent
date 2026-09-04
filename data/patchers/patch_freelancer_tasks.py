@@ -8,6 +8,7 @@ Patch every tests/test.sh under a Harbor task tree so that:
   - /logs/verifier/reward.txt is always written, even when the script crashes
     before reaching parser.py (no more VerifierRuntimeError: No reward file)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,7 +84,7 @@ def patch_test_sh(text: str) -> tuple[str, bool]:
         if "e" in rest.split()[0]:
             return match.group(0)
         # rest starts with e.g. "uo pipefail -x"; insert e after first flag char
-        first = rest[:rest.index("o")] + "e" + rest[rest.index("o"):]
+        first = rest[: rest.index("o")] + "e" + rest[rest.index("o") :]
         return f"{indent}set -{first}"
 
     text = SET_LINE_RE.sub(_ensure_e, text)
@@ -94,7 +95,7 @@ def patch_test_sh(text: str) -> tuple[str, bool]:
     # 3. Prepend the preamble right after the shebang line (or at top if none).
     m = SHEBANG_RE.match(text)
     if m:
-        text = m.group(1) + PREAMBLE + text[m.end():]
+        text = m.group(1) + PREAMBLE + text[m.end() :]
     else:
         text = "#!/bin/bash\n" + PREAMBLE + text
 
@@ -105,7 +106,9 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True, help="Tasks dir (extracted parquet)")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--limit", type=int, default=0, help="Patch at most N tasks (0 = all)")
+    p.add_argument(
+        "--limit", type=int, default=0, help="Patch at most N tasks (0 = all)"
+    )
     args = p.parse_args()
 
     root = Path(args.root).expanduser().resolve()

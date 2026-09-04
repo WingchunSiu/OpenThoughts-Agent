@@ -62,11 +62,13 @@ from pathlib import Path
 
 # Modules pre-installed in the task's daytona container OR provided by /app.
 # Anything here is treated as "no install needed".
-EXTRA_ALLOWED = frozenset({
-    "pytest",
-    "_pytest",   # part of the pytest install
-    "solution",  # /app/solution.py — agent's canonical output
-})
+EXTRA_ALLOWED = frozenset(
+    {
+        "pytest",
+        "_pytest",  # part of the pytest install
+        "solution",  # /app/solution.py — agent's canonical output
+    }
+)
 
 # Common import-name → PyPI-package-name mismatches.
 # Only entries where `import X` is satisfied by `pip install Y` with X != Y.
@@ -127,7 +129,6 @@ PIP_NAME_MAP = {
     "oslo_rootwrap": "oslo.rootwrap",
     "oslo_service": "oslo.service",
     "oslo_versionedobjects": "oslo.versionedobjects",
-    "google.cloud": "google-cloud-storage",
     "requests_mock": "requests-mock",
     "all_repos": "all-repos",
     "pre_commit": "pre-commit",
@@ -136,20 +137,43 @@ PIP_NAME_MAP = {
 # Names that look like project-internal packages (almost certainly NOT on
 # PyPI even if a HEAD check accidentally returns 200 — there's a long tail
 # of squatted/generic package names). These map to "drop the task".
-PROJECT_INTERNAL_HEADS = frozenset({
-    # Plainly project-internal
-    "tests", "test", "_tests", "test_framework", "testing",
-    "conftest",
-    "app", "myapp", "myproject", "mypackage", "mymodule",
-    # Generic names — exist on PyPI as squatted/abandoned packages but
-    # almost never the real intent (a test asking to `import helpers`
-    # almost certainly means the project's local helpers module).
-    "src", "lib", "core", "utils", "util",
-    "model", "models", "helpers", "helper", "common",
-    "config", "configs", "settings",
-    "main", "module", "package",
-    "scripts", "tools",
-})
+PROJECT_INTERNAL_HEADS = frozenset(
+    {
+        # Plainly project-internal
+        "tests",
+        "test",
+        "_tests",
+        "test_framework",
+        "testing",
+        "conftest",
+        "app",
+        "myapp",
+        "myproject",
+        "mypackage",
+        "mymodule",
+        # Generic names — exist on PyPI as squatted/abandoned packages but
+        # almost never the real intent (a test asking to `import helpers`
+        # almost certainly means the project's local helpers module).
+        "src",
+        "lib",
+        "core",
+        "utils",
+        "util",
+        "model",
+        "models",
+        "helpers",
+        "helper",
+        "common",
+        "config",
+        "configs",
+        "settings",
+        "main",
+        "module",
+        "package",
+        "scripts",
+        "tools",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +236,10 @@ def pypi_exists(pkg_name: str, no_check: bool = False, retries: int = 2) -> bool
     # Network died on us — assume the package exists (fail-open).
     # If it really doesn't exist, the runtime `pip install` will fail and
     # pytest will then fail on the missing import (correct semantic).
-    print(f"  warning: PyPI check for {pkg_name!r} failed after retries: {last_err}",
-          file=sys.stderr)
+    print(
+        f"  warning: PyPI check for {pkg_name!r} failed after retries: {last_err}",
+        file=sys.stderr,
+    )
     _PYPI_CACHE[pkg_name] = True
     return True
 
@@ -221,6 +247,7 @@ def pypi_exists(pkg_name: str, no_check: bool = False, retries: int = 2) -> bool
 # ---------------------------------------------------------------------------
 # Stdlib + import parsing
 # ---------------------------------------------------------------------------
+
 
 def stdlib_names() -> frozenset[str]:
     if hasattr(sys, "stdlib_module_names"):
@@ -269,6 +296,7 @@ def parse_top_level_imports(test_path: Path) -> set[str]:
 # ---------------------------------------------------------------------------
 # Per-import classification
 # ---------------------------------------------------------------------------
+
 
 def _looks_project_internal(name: str) -> bool:
     """Heuristic: an import head that's clearly NOT a published PyPI package.
@@ -357,9 +385,12 @@ def patch_test_sh(test_sh_path: Path, pip_packages: list[str]) -> bool:
     insert_at = None
     for i, line in enumerate(lines):
         stripped = line.lstrip()
-        if stripped.startswith("pytest ") or stripped.startswith("pytest\t") \
-                or stripped.startswith("python -m pytest") \
-                or stripped.startswith("python3 -m pytest"):
+        if (
+            stripped.startswith("pytest ")
+            or stripped.startswith("pytest\t")
+            or stripped.startswith("python -m pytest")
+            or stripped.startswith("python3 -m pytest")
+        ):
             insert_at = i
             break
 
@@ -380,6 +411,7 @@ def patch_test_sh(test_sh_path: Path, pip_packages: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 # Per-task evaluation
 # ---------------------------------------------------------------------------
+
 
 def evaluate_task(
     task_dir: Path,
@@ -437,20 +469,39 @@ def evaluate_task(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Auto-install patcher for softwareheritage-large tasks.",
     )
-    parser.add_argument("--root", type=Path, required=True,
-                        help="Directory containing swh-XXXX task folders")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Report what would happen without modifying anything")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Process only the first N tasks (sanity)")
-    parser.add_argument("--no-pypi-check", action="store_true",
-                        help="Skip the PyPI HEAD check (treat all unmapped names as known)")
-    parser.add_argument("--examples", type=int, default=5,
-                        help="Number of example tasks to print per bucket")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        required=True,
+        help="Directory containing swh-XXXX task folders",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would happen without modifying anything",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process only the first N tasks (sanity)",
+    )
+    parser.add_argument(
+        "--no-pypi-check",
+        action="store_true",
+        help="Skip the PyPI HEAD check (treat all unmapped names as known)",
+    )
+    parser.add_argument(
+        "--examples",
+        type=int,
+        default=5,
+        help="Number of example tasks to print per bucket",
+    )
     args = parser.parse_args()
 
     if not args.root.is_dir():
@@ -460,14 +511,16 @@ def main():
     stdlib = stdlib_names()
     task_dirs = sorted(d for d in args.root.iterdir() if d.is_dir())
     if args.limit:
-        task_dirs = task_dirs[:args.limit]
+        task_dirs = task_dirs[: args.limit]
 
     counts = {"keep": 0, "syntax": 0, "internal": 0, "no_pypi": 0, "error": 0}
     examples = {k: [] for k in counts}
     install_freq: dict[str, int] = {}
 
     for i, td in enumerate(task_dirs):
-        verdict, pip_packages, drop_reasons = evaluate_task(td, stdlib, args.no_pypi_check)
+        verdict, pip_packages, drop_reasons = evaluate_task(
+            td, stdlib, args.no_pypi_check
+        )
         counts[verdict] += 1
 
         if len(examples[verdict]) < args.examples:
@@ -492,11 +545,21 @@ def main():
     total = sum(counts.values())
     action = "Would keep / drop" if args.dry_run else "Kept / dropped"
     print(f"\n=== {action} (total={total}) ===")
-    print(f"  keep                  : {counts['keep']:>5} ({counts['keep']/total*100:.1f}%)")
-    print(f"  drop (syntax)         : {counts['syntax']:>5} ({counts['syntax']/total*100:.1f}%)")
-    print(f"  drop (internal import): {counts['internal']:>5} ({counts['internal']/total*100:.1f}%)")
-    print(f"  drop (not on PyPI)    : {counts['no_pypi']:>5} ({counts['no_pypi']/total*100:.1f}%)")
-    print(f"  drop (error)          : {counts['error']:>5} ({counts['error']/total*100:.1f}%)")
+    print(
+        f"  keep                  : {counts['keep']:>5} ({counts['keep'] / total * 100:.1f}%)"
+    )
+    print(
+        f"  drop (syntax)         : {counts['syntax']:>5} ({counts['syntax'] / total * 100:.1f}%)"
+    )
+    print(
+        f"  drop (internal import): {counts['internal']:>5} ({counts['internal'] / total * 100:.1f}%)"
+    )
+    print(
+        f"  drop (not on PyPI)    : {counts['no_pypi']:>5} ({counts['no_pypi'] / total * 100:.1f}%)"
+    )
+    print(
+        f"  drop (error)          : {counts['error']:>5} ({counts['error'] / total * 100:.1f}%)"
+    )
 
     print("\nTop 20 most-common installed packages:")
     for pkg, n in sorted(install_freq.items(), key=lambda kv: -kv[1])[:20]:

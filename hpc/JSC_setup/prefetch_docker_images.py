@@ -18,6 +18,7 @@ def pull_image(image_name):
     client = docker.from_env()
     client.images.pull(image_name)
 
+
 def save_image_as_tar(image_name, tar_path):
     client = docker.from_env()
     image = client.images.get(image_name)
@@ -25,9 +26,11 @@ def save_image_as_tar(image_name, tar_path):
         for chunk in image.save(named=True):
             f.write(chunk)
 
+
 def load_image(tar_path):
     cmd = ["docker", "load", "-i", tar_path]
     sp.run(cmd)
+
 
 def main(args):
 
@@ -50,15 +53,27 @@ def main(args):
     for base_image in tqdm(base_images):
         try:
             pull_image(base_image)
-            save_image_as_tar(base_image, os.path.join(tars_save_dir, f"{base_image.replace('/', '_')}.tar"))
-            load_image(os.path.join(tars_save_dir, f"{base_image.replace('/', '_')}.tar"))
+            save_image_as_tar(
+                base_image,
+                os.path.join(tars_save_dir, f"{base_image.replace('/', '_')}.tar"),
+            )
+            load_image(
+                os.path.join(tars_save_dir, f"{base_image.replace('/', '_')}.tar")
+            )
         except Exception as e:
             print(f"[error] Failed to process {base_image}: {e}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prefetch Docker images")
-    parser.add_argument("--tars_save_dir", type=str, required=True, help="Directory to save tar files")
-    parser.add_argument("--tbench_dir", type=str, required=True, help="Directory of the terminal benchmark")
+    parser.add_argument(
+        "--tars_save_dir", type=str, required=True, help="Directory to save tar files"
+    )
+    parser.add_argument(
+        "--tbench_dir",
+        type=str,
+        required=True,
+        help="Directory of the terminal benchmark",
+    )
     args = parser.parse_args()
     main(args)

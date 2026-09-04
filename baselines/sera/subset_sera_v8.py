@@ -68,8 +68,11 @@ def generate(
             print(f"[src] reading {src_path} …")
         else:
             from huggingface_hub import hf_hub_download
+
             print(f"[src] downloading {SRC_REPO}/{fname} …")
-            src_path = Path(hf_hub_download(SRC_REPO, fname, repo_type="dataset", token=token))
+            src_path = Path(
+                hf_hub_download(SRC_REPO, fname, repo_type="dataset", token=token)
+            )
 
         rows = _load_jsonl(src_path)
         print(f"      {len(rows)} rows")
@@ -82,7 +85,9 @@ def generate(
 
     max_size = max(sizes)
     if max_size > len(all_rows):
-        print(f"[warn] requested size {max_size} > dataset size {len(all_rows)}; clamping")
+        print(
+            f"[warn] requested size {max_size} > dataset size {len(all_rows)}; clamping"
+        )
 
     for size in sorted(sizes):
         n = min(size, len(all_rows))
@@ -99,7 +104,8 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path("/e/data1/datasets/playground/ot-baf/sera_subset/subsets"),
         help="Directory to write sera_subset_mixed_*.jsonl files",
@@ -133,6 +139,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     import os
+
     token = args.token or os.environ.get("HF_TOKEN")
     generate(
         output_dir=args.output_dir,

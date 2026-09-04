@@ -94,7 +94,9 @@ def _convert(row: dict, source_dataset: str, *, row_idx: int) -> HarborTask | No
     for i, inst in enumerate(instructions):
         if not isinstance(inst, str):
             return None
-        san_instructions.append(sanitize_text(inst, field_name=f"instruction_id_list[{i}]", max_len=256))
+        san_instructions.append(
+            sanitize_text(inst, field_name=f"instruction_id_list[{i}]", max_len=256)
+        )
     kwargs_list = _sanitize_kwargs(row.get("kwargs"), field_name="kwargs")
     uuid = row.get("uuid") if isinstance(row.get("uuid"), str) else None
     rid = row.get("id")

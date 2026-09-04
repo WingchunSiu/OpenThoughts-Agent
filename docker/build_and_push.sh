@@ -44,17 +44,18 @@ PLATFORMS="linux/amd64,linux/arm64"
 
 # Available image variants
 # gpu-Nx: Standard images with N GPUs configured
-# gpu-rl: RL training image with SkyRL and separate RL environment
 # tpu:    Cloud TPU image (vLLM-TPU 0.20.0 + Harbor[daytona]); slice size is a
 #         submit-time argument so we don't fan out to {1x,4x,8x}.
-VARIANTS=("gpu-1x" "gpu-4x" "gpu-8x" "gpu-rl" "tpu")
+# (The gpu-rl RL image is built/pushed from MarinSkyRL — docker/Dockerfile.gpu-rl
+#  + docker/build_gpu_rl_kaniko.sh there — NOT this script.)
+VARIANTS=("gpu-1x" "gpu-4x" "gpu-8x" "tpu")
 
 # Per-variant platform override. Cloud TPU host VMs are all linux/amd64,
 # so the tpu image is built single-arch (avoids a wasted arm64 QEMU pass).
 platforms_for_variant() {
     case "$1" in
-        tpu) echo "linux/amd64" ;;
-        *)   echo "$PLATFORMS" ;;
+        tpu)    echo "linux/amd64" ;;
+        *)      echo "$PLATFORMS" ;;
     esac
 }
 

@@ -186,6 +186,7 @@ git clone https://github.com/{repo}.git . && git checkout {base_commit}
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def sanitize_requirements(requirements: str) -> str:
     """Fix lines from pip freeze / conda export that won't work in a fresh container.
 
@@ -275,6 +276,7 @@ def build_test_cmd(config: dict) -> str:
 # Patching logic
 # ---------------------------------------------------------------------------
 
+
 def patch_task(
     task_dir: Path,
     output_dir: Path | None = None,
@@ -322,7 +324,9 @@ def patch_task(
         changes["requirements.txt"] = bool(requirements)
     else:
         reqs_path.parent.mkdir(parents=True, exist_ok=True)
-        reqs_path.write_text(requirements if requirements.strip() else "# no pinned requirements\n")
+        reqs_path.write_text(
+            requirements if requirements.strip() else "# no pinned requirements\n"
+        )
         changes["requirements.txt"] = True
 
     # --- 3. instruction.md (prepend setup preamble) ---
@@ -371,7 +375,9 @@ def patch_task(
 
     # --- 6. solve.sh (prepend environment setup for oracle agent) ---
     solve_sh_path = target / "solution" / "solve.sh"
-    already_patched_solve_marker = "# --- Environment setup (for generic base images) ---"
+    already_patched_solve_marker = (
+        "# --- Environment setup (for generic base images) ---"
+    )
 
     if solve_sh_path.exists():
         original_solve = solve_sh_path.read_text()
@@ -393,7 +399,11 @@ def patch_task(
             insert_idx = 0
             for i, line in enumerate(lines):
                 stripped = line.strip()
-                if stripped and not stripped.startswith("#") and not stripped.startswith("!"):
+                if (
+                    stripped
+                    and not stripped.startswith("#")
+                    and not stripped.startswith("!")
+                ):
                     insert_idx = i
                     break
             patched_solve = (
@@ -421,7 +431,9 @@ def main():
         default=None,
         help="Write patched tasks to this directory (default: patch in-place)",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would change without writing"
+    )
     args = parser.parse_args()
 
     tasks_root = Path(args.tasks_dir)
@@ -429,7 +441,8 @@ def main():
         raise SystemExit(f"Not a directory: {tasks_root}")
 
     task_dirs = sorted(
-        d for d in tasks_root.iterdir()
+        d
+        for d in tasks_root.iterdir()
         if d.is_dir() and (d / "instruction.md").exists()
     )
     print(f"Found {len(task_dirs)} tasks in {tasks_root}")

@@ -74,6 +74,22 @@ elif [ -n "${DCFT:-}" ]; then
 else
   WORKDIR="$PWD"
 fi
+
+# --- WORKDIR sanity guard (HARD FAIL — do not remove) ---
+# If WORKDIR does not point at the OpenThoughts-Agent repo root, every downstream
+# `source "$WORKDIR/hpc/..."` and `python -m hpc....` fails cryptically and the job
+# dies instantly. This happens when a job is submitted from outside the repo with
+# DCFT/DCFT_PRIVATE unset, so the fallback resolves WORKDIR=$PWD (the wrong dir).
+# Fail loudly and immediately instead of running from the wrong place.
+if [ ! -f "$WORKDIR/hpc/shell_utils/triton_cache.sh" ]; then
+  echo "FATAL: WORKDIR='$WORKDIR' is not the OpenThoughts-Agent repo root." >&2
+  echo "       (marker hpc/shell_utils/triton_cache.sh not found under it)." >&2
+  echo "       Submit the job FROM the repo dir with DCFT exported — on Jupiter:" >&2
+  echo "         cd /e/scratch/jureap59/feuer1/OpenThoughts-Agent && export DCFT=\$PWD" >&2
+  echo "       or pass --chdir <repo> to sbatch. Do NOT submit from \$HOME or a scratch subdir." >&2
+  echo "       See .agents/skills/sft-launch (+ .agents/ops/<cluster>/ops.md §SFT) for the correct launch procedure." >&2
+  exit 1
+fi
 cd "$WORKDIR"
 
 if [ -z "${DCFT:-}" ]; then
@@ -118,16 +134,68 @@ export NUM_GPUS=$((NUM_GPUS_PER_NODE*SLURM_NNODES))
 
 # --- HuggingFace/WandB paths ---
 export HF_HOME="${HF_HOME:-${HF_HUB_CACHE:-/tmp/hf_home}}"
-export WANDB_DIR="${DCFT_WANDB_DIR:-$DCFT/{experiments_dir}/wandb}"
+export WANDB_DIR="${DCFT_WANDB_DIR:-{experiments_dir}/wandb}"
 
 # --- Triton/TorchInductor cache settings (node-local to avoid shared FS issues) ---
 export TRITON_CACHE_VERBOSE=1
 source "$WORKDIR/hpc/shell_utils/triton_cache.sh"
 
 # --- Create experiment directories ---
-mkdir -p "$DCFT/{experiments_dir}"
-mkdir -p "$DCFT/{experiments_dir}/logs"
-mkdir -p "$DCFT/{experiments_dir}/tmp"
+mkdir -p "{experiments_dir}"
+mkdir -p "{experiments_dir}/logs"
+mkdir -p "{experiments_dir}/tmp"
+
+# --- write-cache location guard (two regimes) ---
+# EVERY per-rank WRITE cache (HF-datasets arrow build+lock, Triton/TorchInductor
+# autotune, Ray, TMPDIR spill, XDG) must live on a filesystem that is (a) large enough
+# and (b) does not break flock under N-way concurrency. Two regimes:
+#
+#   * SHARED (default): redirect off a TINY node-local /tmp (Leonardo ~9.6G LV, which
+#     OSError [Errno 28]s during dataset.map — job 46313225) onto the per-job experiment
+#     work area on the shared FS. Relies on the axolotl FileLockLoader's SHARED lock
+#     (keyed by dataset_prepared_path) to serialize the dataset build to one rank.
+#
+#   * NODE-LOCAL (SFT_KEEP_TMPDIR_LOCAL=1): put every write cache on node-local /tmp.
+#     Use on LARGE-/tmp clusters (TACC Vista gh = 261G XFS) whose SHARED Lustre flock
+#     BREAKS under 16-way concurrency (ENOLCK "No locks available" + ESTALE "Stale file
+#     handle" — killed SFT 815251/815508/815530: both the FileLockLoader lock AND the HF
+#     `datasets` builder lock at builder.py:821 race on Lustre). Each rank builds its OWN
+#     caches uncontended; the shared FS stays READ-ONLY (model + HF_HUB_CACHE raw data +
+#     dataset). HF_HUB_CACHE stays shared+populated so node-local arrow builds read the
+#     cached raw files (NO 16x re-download).
+if [ "${SFT_KEEP_TMPDIR_LOCAL:-0}" = "1" ]; then
+  _TMPROOT="/tmp/otsft_${SLURM_JOB_ID:-$$}"
+  _CACHE_NODE_LOCAL=1
+else
+  _TMPROOT="{experiments_dir}/tmp/${SLURM_JOB_ID:-$$}"
+  _CACHE_NODE_LOCAL=0
+fi
+# TMPDIR MUST be a path slurmstepd can create with a SINGLE mkdir at EVERY step's init on
+# EVERY node. Use _TMPROOT ITSELF (node-local: parent /tmp exists on every node; shared: parent
+# {experiments_dir}/tmp is pre-created at line ~146). A DEEPER TMPDIR (_TMPROOT/tmp) breaks the
+# node-local regime: slurmstepd single-mkdirs it per-node but the parent _TMPROOT does not exist
+# yet, so the step dies BEFORE the process starts -- "slurmstepd: error: Unable to create TMPDIR
+# [/tmp/otsft_<jid>/tmp]: No such file or directory" on all 16 nodes (job 816129).
+export TMPDIR="$_TMPROOT"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
+export TRITON_CACHE_DIR="$_TMPROOT/triton_cache"
+export TORCHINDUCTOR_CACHE_DIR="$_TMPROOT/inductor_cache"
+export RAY_TMPDIR="$_TMPROOT/ray"
+export XDG_CACHE_HOME="$_TMPROOT/xdg_cache"
+export HF_DATASETS_CACHE="$_TMPROOT/hf_datasets_cache"
+if [ "$_CACHE_NODE_LOCAL" = "1" ]; then
+  # node-local: slurmstepd creates TMPDIR (=_TMPROOT) per-node at step-init (parent /tmp exists).
+  # The cache SUBDIRS are created on demand by their consumers (HF-datasets / Triton / TorchInductor
+  # all mkdir(exist_ok=True)); a separate pre-mkdir step is NOT used -- it would itself die at the
+  # same slurmstepd TMPDIR check, and per-step TMPDIR cleanup could wipe pre-created subdirs anyway.
+  :
+else
+  # shared FS: pre-create the whole tree from the batch node (visible to all nodes).
+  mkdir -p "$TMPDIR" "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$RAY_TMPDIR" "$XDG_CACHE_HOME" "$HF_DATASETS_CACHE"
+fi
+echo "[tmpfix] node_local=$_CACHE_NODE_LOCAL _TMPROOT=$_TMPROOT HF_DATASETS_CACHE=$HF_DATASETS_CACHE TMPDIR=$TMPDIR"
+# --- end write-cache location guard ---
 
 # --- Supabase environment variables for DB registration ---
 for _supabase_var in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do

@@ -125,6 +125,7 @@ Usage:
   python data/patchers/patch_exp_rpt_defects4j_v3_v3_tasks.py \\
       --root /path/to/extracted-tasks [--dry-run] [--limit N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -155,35 +156,98 @@ _V4_REPORT_FILENAME = "_LAION_V4_PATCH_REPORT.txt"
 #       in the analysis) ∩ used \ imported \ declared-in-file.
 #     - Drop if bad_external OR bad_unimported is non-empty.
 # --------------------------------------------------------------------------- #
-_UNSOLVABLE_BY_TEST_HARNESS = frozenset({
-    # The full 82-entry drop list, computed offline by static analysis
-    # of laion/exp_rpt_defects4j-v3-v3 (the algorithm is documented in
-    # this file's top docstring). Reproducible: re-run the same
-    # imports / unimported-JDK scan against the v3-v3 parquet and you
-    # should get exactly this set back. Hermetic: no live HF query at
-    # patch-apply time.
-    "defects4j-0004", "defects4j-0007", "defects4j-0008", "defects4j-0010",
-    "defects4j-0017", "defects4j-0019", "defects4j-0021", "defects4j-0025",
-    "defects4j-0026", "defects4j-0034", "defects4j-0041", "defects4j-0043",
-    "defects4j-0045", "defects4j-0049", "defects4j-0051", "defects4j-0053",
-    "defects4j-0058", "defects4j-0071", "defects4j-0077", "defects4j-0086",
-    "defects4j-0088", "defects4j-0091", "defects4j-0100", "defects4j-0104",
-    "defects4j-0110", "defects4j-0112", "defects4j-0122", "defects4j-0137",
-    "defects4j-0139", "defects4j-0142", "defects4j-0143", "defects4j-0147",
-    "defects4j-0150", "defects4j-0154", "defects4j-0162", "defects4j-0163",
-    "defects4j-0167", "defects4j-0168", "defects4j-0173", "defects4j-0174",
-    "defects4j-0176", "defects4j-0183", "defects4j-0184", "defects4j-0185",
-    "defects4j-0187", "defects4j-0200", "defects4j-0204", "defects4j-0213",
-    "defects4j-0219", "defects4j-0226", "defects4j-0228", "defects4j-0244",
-    "defects4j-0250", "defects4j-0252", "defects4j-0267", "defects4j-0273",
-    "defects4j-0289", "defects4j-0291", "defects4j-0292", "defects4j-0298",
-    "defects4j-0304", "defects4j-0314", "defects4j-0317", "defects4j-0318",
-    "defects4j-0322", "defects4j-0331", "defects4j-0333", "defects4j-0335",
-    "defects4j-0340", "defects4j-0354", "defects4j-0364", "defects4j-0367",
-    "defects4j-0372", "defects4j-0385", "defects4j-0387", "defects4j-0396",
-    "defects4j-0398", "defects4j-0401", "defects4j-0405", "defects4j-0407",
-    "defects4j-0420", "defects4j-0454",
-})
+_UNSOLVABLE_BY_TEST_HARNESS = frozenset(
+    {
+        # The full 82-entry drop list, computed offline by static analysis
+        # of laion/exp_rpt_defects4j-v3-v3 (the algorithm is documented in
+        # this file's top docstring). Reproducible: re-run the same
+        # imports / unimported-JDK scan against the v3-v3 parquet and you
+        # should get exactly this set back. Hermetic: no live HF query at
+        # patch-apply time.
+        "defects4j-0004",
+        "defects4j-0007",
+        "defects4j-0008",
+        "defects4j-0010",
+        "defects4j-0017",
+        "defects4j-0019",
+        "defects4j-0021",
+        "defects4j-0025",
+        "defects4j-0026",
+        "defects4j-0034",
+        "defects4j-0041",
+        "defects4j-0043",
+        "defects4j-0045",
+        "defects4j-0049",
+        "defects4j-0051",
+        "defects4j-0053",
+        "defects4j-0058",
+        "defects4j-0071",
+        "defects4j-0077",
+        "defects4j-0086",
+        "defects4j-0088",
+        "defects4j-0091",
+        "defects4j-0100",
+        "defects4j-0104",
+        "defects4j-0110",
+        "defects4j-0112",
+        "defects4j-0122",
+        "defects4j-0137",
+        "defects4j-0139",
+        "defects4j-0142",
+        "defects4j-0143",
+        "defects4j-0147",
+        "defects4j-0150",
+        "defects4j-0154",
+        "defects4j-0162",
+        "defects4j-0163",
+        "defects4j-0167",
+        "defects4j-0168",
+        "defects4j-0173",
+        "defects4j-0174",
+        "defects4j-0176",
+        "defects4j-0183",
+        "defects4j-0184",
+        "defects4j-0185",
+        "defects4j-0187",
+        "defects4j-0200",
+        "defects4j-0204",
+        "defects4j-0213",
+        "defects4j-0219",
+        "defects4j-0226",
+        "defects4j-0228",
+        "defects4j-0244",
+        "defects4j-0250",
+        "defects4j-0252",
+        "defects4j-0267",
+        "defects4j-0273",
+        "defects4j-0289",
+        "defects4j-0291",
+        "defects4j-0292",
+        "defects4j-0298",
+        "defects4j-0304",
+        "defects4j-0314",
+        "defects4j-0317",
+        "defects4j-0318",
+        "defects4j-0322",
+        "defects4j-0331",
+        "defects4j-0333",
+        "defects4j-0335",
+        "defects4j-0340",
+        "defects4j-0354",
+        "defects4j-0364",
+        "defects4j-0367",
+        "defects4j-0372",
+        "defects4j-0385",
+        "defects4j-0387",
+        "defects4j-0396",
+        "defects4j-0398",
+        "defects4j-0401",
+        "defects4j-0405",
+        "defects4j-0407",
+        "defects4j-0420",
+        "defects4j-0454",
+    }
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -345,7 +409,9 @@ def main() -> int:
             f.write(f"total_task_dirs_seen = {n_total}\n")
             for k in sorted(counts):
                 f.write(f"{k} = {counts[k]}\n")
-            f.write("\n# Dropped (TestSolution.java doesn't compile in /app:/tests:/junit/* classpath):\n")
+            f.write(
+                "\n# Dropped (TestSolution.java doesn't compile in /app:/tests:/junit/* classpath):\n"
+            )
             for name in dropped_names:
                 f.write(name + "\n")
 

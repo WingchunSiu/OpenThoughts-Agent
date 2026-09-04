@@ -31,10 +31,7 @@ def filter_instances_with_docker(
     instances: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Keep only instances that have a pre-built Docker image."""
-    filtered = [
-        inst for inst in instances
-        if inst.get("docker_image")
-    ]
+    filtered = [inst for inst in instances if inst.get("docker_image")]
     print(f"Filtered to {len(filtered)}/{len(instances)} instances with docker_image")
     return filtered
 
@@ -44,6 +41,7 @@ def get_test_cmd(instance: dict[str, Any]) -> str:
     install_config = instance.get("install_config", {})
     if isinstance(install_config, str):
         import json
+
         try:
             install_config = json.loads(install_config)
         except (json.JSONDecodeError, TypeError):

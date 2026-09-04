@@ -153,7 +153,9 @@ def _render_template_file(path: Path, replacements: Dict[str, str]) -> str:
     return content
 
 
-def build_pre_task_assets(example: ExampleBundle, mutated: MutatedExample) -> PreTaskAssets:
+def build_pre_task_assets(
+    example: ExampleBundle, mutated: MutatedExample
+) -> PreTaskAssets:
     """Create assets for the teacher pre-task using on-disk templates."""
 
     original_nl = example.nl.strip()
@@ -182,7 +184,9 @@ def build_pre_task_assets(example: ExampleBundle, mutated: MutatedExample) -> Pr
         PRE_TASK_TEMPLATE_DIR / "instruction_template.md", replacements
     )
     dockerfile = (PRE_TASK_TEMPLATE_DIR / "Dockerfile").read_text(encoding="utf-8")
-    task_toml = (PRE_TASK_TEMPLATE_DIR / "task_template.toml").read_text(encoding="utf-8")
+    task_toml = (PRE_TASK_TEMPLATE_DIR / "task_template.toml").read_text(
+        encoding="utf-8"
+    )
     solution = _render_template_file(
         PRE_TASK_TEMPLATE_DIR / "solution_template.sh", replacements
     )
@@ -192,7 +196,9 @@ def build_pre_task_assets(example: ExampleBundle, mutated: MutatedExample) -> Pr
 
     tooling_files = {
         "schema.md": (TOOLING_TEMPLATE_DIR / "schema.md").read_text(encoding="utf-8"),
-        "generate_task.py": (TOOLING_TEMPLATE_DIR / "generate_task.py").read_text(encoding="utf-8"),
+        "generate_task.py": (TOOLING_TEMPLATE_DIR / "generate_task.py").read_text(
+            encoding="utf-8"
+        ),
     }
 
     return PreTaskAssets(

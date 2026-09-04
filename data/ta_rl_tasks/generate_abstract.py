@@ -58,11 +58,15 @@ def _build_trace_lookup(traces: Dataset) -> Dict[str, Dict[str, any]]:
     for row in traces:
         trial_name = row.get("trial_name") or row.get("task_path") or row.get("path")
         if not isinstance(trial_name, str) or not trial_name.strip():
-            LOGGER.debug("Skipping trace row lacking task identifier: %s", sorted(row.keys()))
+            LOGGER.debug(
+                "Skipping trace row lacking task identifier: %s", sorted(row.keys())
+            )
             continue
         key = _normalize_key(trial_name)
         if key in lookup:
-            LOGGER.debug("Duplicate trace detected for %s; keeping the first occurrence", key)
+            LOGGER.debug(
+                "Duplicate trace detected for %s; keeping the first occurrence", key
+            )
             continue
         lookup[key] = row
     LOGGER.info("Indexed %s traces", len(lookup))
@@ -74,7 +78,9 @@ def _discover_task_dirs(tasks_root: Path) -> List[Path]:
     return sorted({path.parent for path in tasks_root.rglob("instruction.md")})
 
 
-def _write_solution(dest_dir: Path, *, commands: List[str], trace: Dict[str, any]) -> Dict[str, any]:
+def _write_solution(
+    dest_dir: Path, *, commands: List[str], trace: Dict[str, any]
+) -> Dict[str, any]:
     """Write solution script from extracted commands."""
     if not commands:
         return {}
@@ -88,7 +94,9 @@ def _write_solution(dest_dir: Path, *, commands: List[str], trace: Dict[str, any
         "",
         f"# Commands reconstructed from trace '{trace.get('trial_name')}'",
     ]
-    body.append(f"# Trace success: {trace.get('success')} | command lines: {len(commands)}")
+    body.append(
+        f"# Trace success: {trace.get('success')} | command lines: {len(commands)}"
+    )
     body.append("")
     body.extend(commands)
     body_text = "\n".join(body)
@@ -188,7 +196,9 @@ def _has_final_tests(dest_dir: Path) -> bool:
 class TARLTaskGenerator(BaseDataGenerator):
     """Generate RL test harnesses for existing Harbor tasks using their traces."""
 
-    parser_description = "Generate TA RL tasks with RL test harnesses from Harbor tasks and traces"
+    parser_description = (
+        "Generate TA RL tasks with RL test harnesses from Harbor tasks and traces"
+    )
     default_target_repo = None  # Must be specified via CLI
 
     def requires_engine_for_stage(self, stage: str) -> bool:
@@ -263,7 +273,9 @@ class TARLTaskGenerator(BaseDataGenerator):
         tasks_repo = getattr(args, "tasks_repo", None)
         traces_repo = getattr(args, "traces_repo", None)
         traces_split = getattr(args, "traces_split", "train")
-        max_concurrency = self._resolve_concurrency(getattr(args, "max_concurrency", None))
+        max_concurrency = self._resolve_concurrency(
+            getattr(args, "max_concurrency", None)
+        )
         min_completed = getattr(args, "min_completed_tasks", 0)
 
         if not tasks_repo or not traces_repo:
@@ -277,7 +289,9 @@ class TARLTaskGenerator(BaseDataGenerator):
         repo_dir = Path(snapshot_download(repo_id=tasks_repo, repo_type="dataset"))
         parquet_files = sorted(repo_dir.glob("**/*.parquet"))
         if not parquet_files:
-            raise FileNotFoundError(f"No parquet artifact found in dataset repo {tasks_repo}")
+            raise FileNotFoundError(
+                f"No parquet artifact found in dataset repo {tasks_repo}"
+            )
 
         tasks_root = Path(tempfile.mkdtemp(prefix="ta_rl_tasks_source_"))
         LOGGER.info("Extracting %s to %s", parquet_files[0], tasks_root)
@@ -362,7 +376,9 @@ class TARLTaskGenerator(BaseDataGenerator):
                     success = future.result()
                     if success:
                         completed_count += 1
-                except Exception as exc:  # pragma: no cover - depends on external service
+                except (
+                    Exception
+                ) as exc:  # pragma: no cover - depends on external service
                     LOGGER.error(
                         "LLM test generation failed for %s: %s",
                         dest_dir.name,
@@ -430,4 +446,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

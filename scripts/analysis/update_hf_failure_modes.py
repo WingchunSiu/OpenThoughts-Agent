@@ -10,20 +10,28 @@ import os
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from openai import OpenAI
+
+from scripts.analysis.failure_mode_judge import batched, request_json_array
 
 
 logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Annotate HF dataset rows with failure-mode analyses")
-    parser.add_argument("repo_id", help="HF dataset repo id (e.g. penfever/DCAgent_...)")
-    parser.add_argument("--split", default="train", help="Dataset split to load/push (default: train)")
+    parser = argparse.ArgumentParser(
+        description="Annotate HF dataset rows with failure-mode analyses"
+    )
+    parser.add_argument(
+        "repo_id", help="HF dataset repo id (e.g. penfever/DCAgent_...)"
+    )
+    parser.add_argument(
+        "--split", default="train", help="Dataset split to load/push (default: train)"
+    )
     parser.add_argument(
         "--output-column",
         default="failure_mode_analysis",
@@ -43,6 +51,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", default="gpt-5.1", help="Judge model id")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--judge-max-attempts",
+        type=int,
+        default=3,
+        help="Maximum attempts for a transient judge request failure (default: 3)",
+    )
     parser.add_argument(
         "--max-output-tokens",
         type=int,
@@ -156,50 +170,31 @@ def build_prompt(batch: Sequence[RowContext]) -> str:
     )
 
 
-def batched(seq: Sequence[RowContext], size: int) -> Iterable[Sequence[RowContext]]:
-    for start in range(0, len(seq), size):
-        yield seq[start : start + size]
-
-
 def judge_batch(
     client: OpenAI,
     model: str,
     temperature: float,
     batch: Sequence[RowContext],
     max_output_tokens: int | None,
+    max_attempts: int = 3,
 ) -> list[str]:
-    prompt = build_prompt(batch)
-    completion_kwargs = {}
-    if max_output_tokens:
-        completion_kwargs["max_completion_tokens"] = max_output_tokens
-    resp = client.chat.completions.create(
+    parsed = request_json_array(
         model=model,
         temperature=temperature,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-        **completion_kwargs,
+        client=client,
+        system_prompt=SYSTEM_PROMPT,
+        user_prompt=build_prompt(batch),
+        max_output_tokens=max_output_tokens,
+        max_attempts=max_attempts,
+        on_retry=lambda attempt, exc: logger.warning(
+            "Judge request failed on attempt %d/%d: %s", attempt, max_attempts, exc
+        ),
     )
-    content = resp.choices[0].message.content or "[]"
-    content = content.strip()
-    if content.startswith("```"):
-        # strip code fence
-        parts = content.split("```", 2)
-        if len(parts) >= 2:
-            snippet = parts[1]
-            if "\n" in snippet:
-                snippet = snippet.split("\n", 1)[1]
-            content = snippet.strip()
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse model output: %s\nPayload: %s", exc, content)
-        raise
 
     analyses: dict[str, str] = {}
-    if isinstance(parsed, list):
-        for item in parsed:
-            if isinstance(item, dict):
-                name = str(item.get("trial_name", "")).strip()
-                analyses[name] = item.get("analysis", "")
+    for item in parsed:
+        name = str(item.get("trial_name", "")).strip()
+        analyses[name] = item.get("analysis", "")
 
     results = []
     for row in batch:
@@ -218,7 +213,9 @@ def truncate_text(text: str, limit: int | None) -> str:
 
 def main() -> None:
     args = parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     ds = load_dataset(args.repo_id, split=args.split)
     df = ds.to_pandas()
@@ -227,11 +224,17 @@ def main() -> None:
 
     # Prep contexts
     contexts: list[RowContext] = []
-    conv_limit = args.conversation_char_limit if args.conversation_char_limit > 0 else None
+    conv_limit = (
+        args.conversation_char_limit if args.conversation_char_limit > 0 else None
+    )
     verifier_limit = conv_limit
 
     for idx, row in df.iterrows():
-        if args.resume and isinstance(row.get(args.output_column), str) and row[args.output_column].strip():
+        if (
+            args.resume
+            and isinstance(row.get(args.output_column), str)
+            and row[args.output_column].strip()
+        ):
             continue
         conv_data = row.get("conversations")
         if isinstance(conv_data, list):
@@ -288,6 +291,7 @@ def main() -> None:
             args.temperature,
             batch,
             max_output_tokens=args.max_output_tokens,
+            max_attempts=args.judge_max_attempts,
         )
         for row, text in zip(batch, outputs):
             analyses[row.idx] = text or ""
@@ -296,12 +300,20 @@ def main() -> None:
     updated = Dataset.from_pandas(df, preserve_index=False)
 
     if args.push:
-        hf_token = args.hf_token or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        hf_token = (
+            args.hf_token
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        )
         if not hf_token:
-            raise RuntimeError("HF token required to push (set HF_TOKEN env or --hf-token)")
+            raise RuntimeError(
+                "HF token required to push (set HF_TOKEN env or --hf-token)"
+            )
         api = HfApi(token=hf_token)
         logger.info("Pushing updated dataset to %s", args.repo_id)
-        updated.push_to_hub(args.repo_id, token=hf_token, commit_message=args.commit_message)
+        updated.push_to_hub(
+            args.repo_id, token=hf_token, commit_message=args.commit_message
+        )
         try:
             api.update_repo_settings(
                 repo_id=args.repo_id,

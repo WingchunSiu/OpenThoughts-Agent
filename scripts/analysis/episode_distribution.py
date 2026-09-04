@@ -90,7 +90,7 @@ def _gaussian_kernel(sigma: float) -> np.ndarray:
     # Ensure kernel is large enough to capture most of the Gaussian mass
     radius = max(int(3 * sigma), 1)
     x = np.arange(-radius, radius + 1)
-    kernel = np.exp(-(x ** 2) / (2 * sigma ** 2))
+    kernel = np.exp(-(x**2) / (2 * sigma**2))
     kernel /= kernel.sum()
     return kernel
 
@@ -100,7 +100,9 @@ def _smooth_counts(counts: np.ndarray, sigma: float) -> np.ndarray:
     return np.convolve(counts, kernel, mode="same")
 
 
-def _prepare_series(episodes: Sequence[int], sigma: float) -> Tuple[np.ndarray, np.ndarray]:
+def _prepare_series(
+    episodes: Sequence[int], sigma: float
+) -> Tuple[np.ndarray, np.ndarray]:
     if not episodes:
         raise ValueError("No valid episodes found in dataset")
     episodes_arr = np.array(episodes, dtype=int)
@@ -131,17 +133,25 @@ def main() -> None:
     for repo in args.repos:
         dataset = _load_dataset(repo, split=args.split)
         if "episode" not in dataset.column_names:
-            raise ValueError(f"Dataset {repo} split {args.split} lacks an 'episode' column")
+            raise ValueError(
+                f"Dataset {repo} split {args.split} lacks an 'episode' column"
+            )
         if "conversations" not in dataset.column_names:
-            raise ValueError(f"Dataset {repo} split {args.split} lacks a 'conversations' column")
+            raise ValueError(
+                f"Dataset {repo} split {args.split} lacks a 'conversations' column"
+            )
 
         episodes = _extract_episode_numbers(dataset["episode"])
         if not episodes:
-            raise ValueError(f"Dataset {repo} split {args.split} has no parseable episodes")
+            raise ValueError(
+                f"Dataset {repo} split {args.split} has no parseable episodes"
+            )
 
         token_counts = _extract_token_counts(dataset["conversations"], token_encoder)
         if not token_counts:
-            raise ValueError(f"Dataset {repo} split {args.split} has no tokenizable turns")
+            raise ValueError(
+                f"Dataset {repo} split {args.split} has no tokenizable turns"
+            )
 
         repo_data.append(
             {
@@ -188,7 +198,9 @@ def main() -> None:
     n_repos = len(repo_data)
     if n_repos == 0:
         raise ValueError("No repositories processed.")
-    combined_counts = np.concatenate([np.asarray(entry["token_counts"], dtype=float) for entry in repo_data])
+    combined_counts = np.concatenate(
+        [np.asarray(entry["token_counts"], dtype=float) for entry in repo_data]
+    )
     percentile = min(max(args.token_max_percentile, 0.0), 100.0)
     if percentile < 100.0:
         token_cap = float(np.percentile(combined_counts, percentile))

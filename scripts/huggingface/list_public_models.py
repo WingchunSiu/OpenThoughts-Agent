@@ -56,7 +56,9 @@ def main(argv: list[str] | None = None) -> None:
 
     public_model_ids.sort()
 
-    output_path.write_text("\n".join(public_model_ids) + ("\n" if public_model_ids else ""))
+    output_path.write_text(
+        "\n".join(public_model_ids) + ("\n" if public_model_ids else "")
+    )
     print(
         f"Wrote {len(public_model_ids)} public model(s) "
         f"from organization '{org}' to {output_path}"

@@ -18,43 +18,92 @@ from pathlib import Path
 # slug-on-disk → HF repo name (kebab-case)
 DATASETS: list[tuple[str, str, str]] = [
     # (parquet_filename, hf_repo, source_dataset_url)
-    ("competitive_coding.parquet", "laion/nemotron-gym-competitive-coding",
-     "nvidia/Nemotron-RL-coding-competitive_coding"),
-    ("math_openmathreasoning.parquet", "laion/nemotron-gym-math-openmathreasoning",
-     "nvidia/Nemotron-RL-math-OpenMathReasoning"),
-    ("math_advanced_calculations.parquet", "laion/nemotron-gym-math-advanced-calculations",
-     "nvidia/Nemotron-RL-math-advanced_calculations"),
-    ("math_stack_overflow.parquet", "laion/nemotron-gym-math-stack-overflow",
-     "nvidia/Nemotron-RL-math-stack_overflow"),
-    ("knowledge_mcqa.parquet", "laion/nemotron-gym-knowledge-mcqa",
-     "nvidia/Nemotron-RL-knowledge-mcqa"),
-    ("knowledge_web_search_mcqa.parquet", "laion/nemotron-gym-knowledge-web-search-mcqa",
-     "nvidia/Nemotron-RL-knowledge-web_search-mcqa"),
-    ("knowledge_openqa.parquet", "laion/nemotron-gym-knowledge-openqa",
-     "nvidia/Nemotron-RL-knowledge-openqa"),
-    ("knowledge_openqa_v2.parquet", "laion/nemotron-gym-knowledge-openqa-v2",
-     "nvidia/Nemotron-RL-knowledge-openqa"),
-    ("instruction_following.parquet", "laion/nemotron-gym-instruction-following",
-     "nvidia/Nemotron-RL-instruction_following"),
-    ("instruction_following_structured.parquet", "laion/nemotron-gym-instruction-following-structured",
-     "nvidia/Nemotron-RL-instruction_following-structured_outputs"),
-    ("instruction_following_calendar.parquet", "laion/nemotron-gym-instruction-following-calendar",
-     "nvidia/Nemotron-RL-Instruction-Following-Calendar-v2"),
-    ("reasoning_gym.parquet", "laion/nemotron-gym-reasoning-gym",
-     "nvidia/Nemotron-RL-ReasoningGym-v1"),
-    ("agent_calendar.parquet", "laion/nemotron-gym-agent-calendar",
-     "nvidia/Nemotron-RL-agent-calendar_scheduling"),
-    ("agent_workplace.parquet", "laion/nemotron-gym-agent-workplace",
-     "nvidia/Nemotron-RL-agent-workplace_assistant"),
-    ("safety.parquet", "laion/nemotron-gym-safety",
-     "nvidia/Nemotron-RL-Safety-v1"),
-    ("safety_v2.parquet", "laion/nemotron-gym-safety-v2",
-     "nvidia/Nemotron-RL-Safety-v1"),
-    ("identity_following.parquet", "laion/nemotron-gym-identity-following",
-     "nvidia/Nemotron-RL-Identity-Following-v1"),
-    ("instruction_following_adversarial.parquet",
-     "laion/nemotron-gym-instruction-following-adversarial",
-     "nvidia/Nemotron-RL-Instruction-Following-Adversarial-v1"),
+    (
+        "competitive_coding.parquet",
+        "laion/nemotron-gym-competitive-coding",
+        "nvidia/Nemotron-RL-coding-competitive_coding",
+    ),
+    (
+        "math_openmathreasoning.parquet",
+        "laion/nemotron-gym-math-openmathreasoning",
+        "nvidia/Nemotron-RL-math-OpenMathReasoning",
+    ),
+    (
+        "math_advanced_calculations.parquet",
+        "laion/nemotron-gym-math-advanced-calculations",
+        "nvidia/Nemotron-RL-math-advanced_calculations",
+    ),
+    (
+        "math_stack_overflow.parquet",
+        "laion/nemotron-gym-math-stack-overflow",
+        "nvidia/Nemotron-RL-math-stack_overflow",
+    ),
+    (
+        "knowledge_mcqa.parquet",
+        "laion/nemotron-gym-knowledge-mcqa",
+        "nvidia/Nemotron-RL-knowledge-mcqa",
+    ),
+    (
+        "knowledge_web_search_mcqa.parquet",
+        "laion/nemotron-gym-knowledge-web-search-mcqa",
+        "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+    ),
+    (
+        "knowledge_openqa.parquet",
+        "laion/nemotron-gym-knowledge-openqa",
+        "nvidia/Nemotron-RL-knowledge-openqa",
+    ),
+    (
+        "knowledge_openqa_v2.parquet",
+        "laion/nemotron-gym-knowledge-openqa-v2",
+        "nvidia/Nemotron-RL-knowledge-openqa",
+    ),
+    (
+        "instruction_following.parquet",
+        "laion/nemotron-gym-instruction-following",
+        "nvidia/Nemotron-RL-instruction_following",
+    ),
+    (
+        "instruction_following_structured.parquet",
+        "laion/nemotron-gym-instruction-following-structured",
+        "nvidia/Nemotron-RL-instruction_following-structured_outputs",
+    ),
+    (
+        "instruction_following_calendar.parquet",
+        "laion/nemotron-gym-instruction-following-calendar",
+        "nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
+    ),
+    (
+        "reasoning_gym.parquet",
+        "laion/nemotron-gym-reasoning-gym",
+        "nvidia/Nemotron-RL-ReasoningGym-v1",
+    ),
+    (
+        "agent_calendar.parquet",
+        "laion/nemotron-gym-agent-calendar",
+        "nvidia/Nemotron-RL-agent-calendar_scheduling",
+    ),
+    (
+        "agent_workplace.parquet",
+        "laion/nemotron-gym-agent-workplace",
+        "nvidia/Nemotron-RL-agent-workplace_assistant",
+    ),
+    ("safety.parquet", "laion/nemotron-gym-safety", "nvidia/Nemotron-RL-Safety-v1"),
+    (
+        "safety_v2.parquet",
+        "laion/nemotron-gym-safety-v2",
+        "nvidia/Nemotron-RL-Safety-v1",
+    ),
+    (
+        "identity_following.parquet",
+        "laion/nemotron-gym-identity-following",
+        "nvidia/Nemotron-RL-Identity-Following-v1",
+    ),
+    (
+        "instruction_following_adversarial.parquet",
+        "laion/nemotron-gym-instruction-following-adversarial",
+        "nvidia/Nemotron-RL-Instruction-Following-Adversarial-v1",
+    ),
 ]
 
 
@@ -158,9 +207,9 @@ VERIFIER_FAMILY_BY_REPO = {
     "knowledge-openqa-v2": "llm_judge (LiteLLM, default `openai/gpt-4o-mini`, scored against reference answers as rubric — semantic-equivalence judging for paraphrasable long-form answers)",
     "instruction-following": "ifeval_constraints (IFEval-style constraint checker — paragraphs / words / forbidden / formatting)",
     "instruction-following-structured": "json_schema (parse agent JSON, validate against Draft 2020-12 schema)",
-    "instruction-following-calendar": "calendar_constraints (parse agent JSON list, check duration/window/constraint per event)",
+    "instruction-following-calendar": "calendar_constraints (parse agent JSON list; check exact event set, duration, window, declared constraints, and pairwise non-overlap)",
     "reasoning-gym": "reasoning_gym (delegate to upstream reasoning_gym scorer; normalized-match fallback)",
-    "agent-calendar": "calendar_constraints (same as instruction-following-calendar)",
+    "agent-calendar": "calendar_constraints (same complete contract as instruction-following-calendar)",
     "agent-workplace": "tool_call_match (JSON `{name, arguments}` compared to ground_truth tool calls; lossy single-step substitute for upstream stateful env)",
     "safety": "llm_judge (LiteLLM, default `openai/gpt-4o-mini`, scored against `principle` rubric)",
     "safety-v2": "safety_judge (LiteLLM, default `openai/gpt-4o-mini`, scored against `principle` rubric, with a heuristic refusal-detection fallback for sandboxes without `OPENAI_API_KEY` and a `/logs/agent` scan for the agent's response when `/app/response.txt` is missing — v2 fixes the 0% solve rate of v1)",
@@ -227,11 +276,15 @@ def main() -> int:
 
     token = os.environ.get("HF_TOKEN")
     if not token and not args.dry_run:
-        print("ERROR: HF_TOKEN not set. `source ~/secrets.env` or pass --dry-run", file=sys.stderr)
+        print(
+            "ERROR: HF_TOKEN not set. `source ~/secrets.env` or pass --dry-run",
+            file=sys.stderr,
+        )
         return 1
 
     if not args.dry_run:
         from huggingface_hub import HfApi, create_repo  # noqa: F401
+
         api = HfApi(token=token)
     else:
         api = None
@@ -253,7 +306,9 @@ def main() -> int:
             tmp = Path(td)
             staged_parquet = tmp / "tasks.parquet"
             n_rows, new_size = _repack_snappy(src, staged_parquet)
-            print(f"  repacked: {new_size:,} bytes, {n_rows:,} rows ({time.time()-t0:.1f}s)")
+            print(
+                f"  repacked: {new_size:,} bytes, {n_rows:,} rows ({time.time() - t0:.1f}s)"
+            )
             readme = _build_readme(repo_name, source, slug, n_rows)
             (tmp / "README.md").write_text(readme)
             if args.dry_run:
@@ -265,6 +320,7 @@ def main() -> int:
                 summary.append({"repo": repo_name, "rows": n_rows, "uploaded": False})
                 continue
             from huggingface_hub import create_repo
+
             create_repo(
                 repo_id=repo_name,
                 repo_type="dataset",
@@ -282,7 +338,9 @@ def main() -> int:
                     f"{source} via OpenThoughts-Agent's data/nemotron_gym adapter"
                 ),
             )
-            print(f"  uploaded in {time.time()-t1:.1f}s -> https://huggingface.co/datasets/{repo_name}")
+            print(
+                f"  uploaded in {time.time() - t1:.1f}s -> https://huggingface.co/datasets/{repo_name}"
+            )
             summary.append({"repo": repo_name, "rows": n_rows, "uploaded": True})
 
     print("\n=== Summary ===")

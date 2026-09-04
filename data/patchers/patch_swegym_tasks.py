@@ -20,6 +20,7 @@ Patch SWE-Gym Harbor task tree so:
       before reaching its on_error trap (e.g. SIGKILL, syntax error, OOM) still
       surfaces as fail rather than as "VerifierRuntimeError: No reward file found".
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,7 +29,9 @@ import re
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# --- laion v2 patch (swegym): repo clone + reward floor + strict pass check ---"
+PATCH_MARKER = (
+    "# --- laion v2 patch (swegym): repo clone + reward floor + strict pass check ---"
+)
 
 
 def patch_dockerfile(text: str, repo: str, base_commit: str) -> tuple[str, bool]:
@@ -65,12 +68,12 @@ TEST_CD_RE = re.compile(
 # We capture the indent of the `if` and re-emit `log "Test failed..."` +
 # `return 1` at that same indent (replacing the entire if/else/fi).
 EXIT4_RE = re.compile(
-    r'^(?P<base>[ \t]*)if \[ \$ec -eq 4 \]; then[^\n]*\n'
+    r"^(?P<base>[ \t]*)if \[ \$ec -eq 4 \]; then[^\n]*\n"
     r'[ \t]*log "WARNING:[^"]*?"[^\n]*\n'
-    r'[ \t]*else[^\n]*\n'
+    r"[ \t]*else[^\n]*\n"
     r'[ \t]*(?P<fail_log>log "Test failed[^"]*?")[^\n]*\n'
-    r'[ \t]*(?P<fail_return>return 1)[^\n]*\n'
-    r'[ \t]*fi',
+    r"[ \t]*(?P<fail_return>return 1)[^\n]*\n"
+    r"[ \t]*fi",
     flags=re.MULTILINE,
 )
 
@@ -78,6 +81,7 @@ EXIT4_RE = re.compile(
 def _flatten_exit4(m: re.Match[str]) -> str:
     base = m.group("base")
     return f"{base}{m.group('fail_log')}\n{base}{m.group('fail_return')}"
+
 
 # Match the final reward=1 / "All configured tests succeeded" tail.
 FINAL_REWARD_RE = re.compile(
@@ -96,17 +100,17 @@ def patch_test_sh(text: str, repo: str, base_commit: str) -> tuple[str, bool]:
     # 1. Floor reward.txt to 0 the moment the script starts, before any
     #    command can fail and bypass the existing on_error trap.
     floor_block = (
-        f'\n{PATCH_MARKER}\n'
-        f'mkdir -p /logs/verifier 2>/dev/null || true\n'
-        f'[ -f /logs/verifier/reward.txt ] || echo 0 > /logs/verifier/reward.txt 2>/dev/null || true\n'
-        f'trap \'[ -s /logs/verifier/reward.txt ] || echo 0 > /logs/verifier/reward.txt\' EXIT\n'
+        f"\n{PATCH_MARKER}\n"
+        f"mkdir -p /logs/verifier 2>/dev/null || true\n"
+        f"[ -f /logs/verifier/reward.txt ] || echo 0 > /logs/verifier/reward.txt 2>/dev/null || true\n"
+        f"trap '[ -s /logs/verifier/reward.txt ] || echo 0 > /logs/verifier/reward.txt' EXIT\n"
     )
 
     # Insert floor right after the first shebang line (preserve it).
     shebang_re = re.compile(r"^([ \t]*)(#![^\n]*\n)")
     m = shebang_re.match(text)
     if m:
-        text = m.group(0) + floor_block + text[m.end():]
+        text = m.group(0) + floor_block + text[m.end() :]
     else:
         text = "#!/usr/bin/env bash\n" + floor_block + text
 
@@ -115,11 +119,11 @@ def patch_test_sh(text: str, repo: str, base_commit: str) -> tuple[str, bool]:
 
     def _clone_block_for(repo: str, commit: str) -> str:
         return (
-            f'{indent}# defense-in-depth: ensure repo is cloned (Dockerfile also clones at build)\n'
+            f"{indent}# defense-in-depth: ensure repo is cloned (Dockerfile also clones at build)\n"
             f'{indent}if [ ! -d "$REPO_DIR" ]; then\n'
-            f'{indent}    cd /testbed\n'
+            f"{indent}    cd /testbed\n"
             f'{indent}    git clone "https://github.com/{repo}.git" repo\n'
-            f'{indent}fi\n'
+            f"{indent}fi\n"
             f'{indent}cd "$REPO_DIR"\n'
             f'{indent}git checkout "{commit}" 2>/dev/null || true\n'
         )
@@ -136,7 +140,9 @@ def patch_test_sh(text: str, repo: str, base_commit: str) -> tuple[str, bool]:
             actual_indent = m2.group("indent")
             new_text = re.sub(
                 r'^(?P<indent>[ \t]*)cd "\$REPO_DIR"\n',
-                lambda m: _clone_block_for(repo, base_commit).replace(indent, actual_indent),
+                lambda m: _clone_block_for(repo, base_commit).replace(
+                    indent, actual_indent
+                ),
                 text,
                 count=1,
                 flags=re.MULTILINE,
@@ -155,17 +161,17 @@ def patch_test_sh(text: str, repo: str, base_commit: str) -> tuple[str, bool]:
     # 4. Replace the final reward=1 / "All configured tests succeeded" tail
     #    with an accounting check.
     accounting = (
-        '{indent}# laion v2: count actual passes; require >= expected before reward=1\n'
-        '{indent}_expected_count=$(( ${{#PASS_TESTS[@]}} + ${{#FAIL_TESTS[@]}} ))\n'
+        "{indent}# laion v2: count actual passes; require >= expected before reward=1\n"
+        "{indent}_expected_count=$(( ${{#PASS_TESTS[@]}} + ${{#FAIL_TESTS[@]}} ))\n"
         '{indent}_actual_passes=$(grep -c "^\\[swegym\\] Test passed:" "$LOG_FILE" 2>/dev/null || echo 0)\n'
         '{indent}if [ "$_actual_passes" -ge "$_expected_count" ] && [ "$_expected_count" -gt 0 ]; then\n'
         '{indent}    echo 1 > "$REWARD_FILE"\n'
         '{indent}    log "All $_expected_count configured tests passed"\n'
-        '{indent}else\n'
+        "{indent}else\n"
         '{indent}    echo 0 > "$REWARD_FILE"\n'
         '{indent}    log "Only $_actual_passes/$_expected_count configured tests passed; marking failure"\n'
-        '{indent}    exit 1\n'
-        '{indent}fi'
+        "{indent}    exit 1\n"
+        "{indent}fi"
     )
     indent_for_accounting = "    "
     text = FINAL_REWARD_RE.sub(

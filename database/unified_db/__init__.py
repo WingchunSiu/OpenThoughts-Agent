@@ -80,7 +80,7 @@ from .models import (
     SandboxBenchmarkTaskModel,
     SandboxJobModel,
     SandboxTrialModel,
-    SandboxTrialModelUsageModel
+    SandboxTrialModelUsageModel,
 )
 
 # Package metadata

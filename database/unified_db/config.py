@@ -18,7 +18,7 @@ load_dotenv()
 
 class SupabaseConfig:
     """Configuration class for Supabase connection."""
-    
+
     @staticmethod
     def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
         """Get setting from environment variables."""
@@ -60,13 +60,13 @@ supabase_config = SupabaseConfig()
 def create_supabase_client(use_admin: bool = False) -> Client:
     """
     Create and configure Supabase client.
-    
+
     Args:
         use_admin: If True, use service role key for admin operations
-        
+
     Returns:
         Configured Supabase client
-        
+
     Raises:
         ValueError: If Supabase is not properly configured
     """
@@ -75,7 +75,7 @@ def create_supabase_client(use_admin: bool = False) -> Client:
             "Supabase not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY "
             "in your environment variables."
         )
-    
+
     # Choose the appropriate key
     if use_admin and supabase_config.has_admin_access:
         key = supabase_config.supabase_service_role_key
@@ -85,12 +85,9 @@ def create_supabase_client(use_admin: bool = False) -> Client:
         if use_admin:
             print("⚠️  Admin access requested but no service role key found")
             print("   Some operations may fail due to RLS policies")
-    
+
     # Create client with timeout options
-    options = ClientOptions(
-        postgrest_client_timeout=30,
-        storage_client_timeout=30
-    )
+    options = ClientOptions(postgrest_client_timeout=30, storage_client_timeout=30)
     return create_client(supabase_config.supabase_url, key, options)
 
 
@@ -109,7 +106,7 @@ def test_connection() -> bool:
     try:
         client = get_default_client()
         # Try a simple query to test connection
-        response = client.table('datasets').select('id').limit(1).execute()
+        client.table("datasets").select("id").limit(1).execute()
         print("✅ Connected to Supabase successfully!")
         return True
     except Exception as e:
@@ -123,9 +120,13 @@ if __name__ == "__main__":
     print("=" * 40)
     print(f"URL configured: {'✅' if supabase_config.supabase_url else '❌'}")
     print(f"Anon key configured: {'✅' if supabase_config.supabase_anon_key else '❌'}")
-    print(f"Service role key configured: {'✅' if supabase_config.supabase_service_role_key else '❌'}")
-    print(f"Admin access available: {'✅' if supabase_config.has_admin_access else '❌'}")
-    
+    print(
+        f"Service role key configured: {'✅' if supabase_config.supabase_service_role_key else '❌'}"
+    )
+    print(
+        f"Admin access available: {'✅' if supabase_config.has_admin_access else '❌'}"
+    )
+
     if supabase_config.is_configured:
         print("\n🧪 Testing connection...")
         test_connection()

@@ -57,7 +57,9 @@ def extract_prompt(row: dict) -> str:
                     parts.append(content)
             if parts:
                 joined = "\n\n".join(parts)
-                return sanitize_text(joined, field_name="prompt", max_len=PROMPT_MAX_LEN)
+                return sanitize_text(
+                    joined, field_name="prompt", max_len=PROMPT_MAX_LEN
+                )
     raise SanitizationError("could not extract prompt from row")
 
 
@@ -68,7 +70,9 @@ def require_str(row: dict, key: str, *, max_len: int = PROMPT_MAX_LEN) -> str:
     return sanitize_text(val, field_name=key, max_len=max_len)
 
 
-def sanitize_list_of_str(values: Iterable[object], *, field_name: str, max_len: int = PROMPT_MAX_LEN) -> list[str]:
+def sanitize_list_of_str(
+    values: Iterable[object], *, field_name: str, max_len: int = PROMPT_MAX_LEN
+) -> list[str]:
     out: list[str] = []
     for i, v in enumerate(values):
         if not isinstance(v, str):

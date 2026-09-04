@@ -98,6 +98,7 @@ Usage
     python -m data.patchers.patch_mix_h10_reward_staged_tasks --root <dir> --dry-run
     python -m data.patchers.patch_mix_h10_reward_staged_tasks --root <dir> --limit 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -161,7 +162,7 @@ def patch_test_sh_text(text: str) -> tuple[str, bool]:
     shebang_re = re.compile(r"^(#![^\n]*\n)")
     m = shebang_re.match(new_text)
     if m:
-        new_text = m.group(1) + PATCH_MARKER + "\n" + new_text[m.end():]
+        new_text = m.group(1) + PATCH_MARKER + "\n" + new_text[m.end() :]
     else:
         new_text = "#!/bin/bash\n" + PATCH_MARKER + "\n" + new_text
 
@@ -314,9 +315,13 @@ def main() -> int:
 
     print("\n[patcher] Result summary:")
     for k in (
-        "patched", "already_patched", "skipped_other_source",
-        "skipped_no_metadata", "skipped_no_test_sh",
-        "skipped_no_pytest_line", "dropped_bash_n_fail",
+        "patched",
+        "already_patched",
+        "skipped_other_source",
+        "skipped_no_metadata",
+        "skipped_no_test_sh",
+        "skipped_no_pytest_line",
+        "dropped_bash_n_fail",
     ):
         print(f"  {counts[k]:6d}  {k}")
     print(f"[patcher] Root:    {root}")

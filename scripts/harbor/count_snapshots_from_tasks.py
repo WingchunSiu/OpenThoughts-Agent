@@ -28,15 +28,31 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import inspect
 import sys
 from pathlib import Path
+from typing import Any
 
-from harbor.constants import TASK_CACHE_DIR
-from harbor.models.registry import RemoteRegistryInfo
 
-from scripts.harbor._harbor_compat import LocalDatasetConfig, RegistryDatasetConfig
-from harbor.tasks.client import TaskClient
-from harbor.utils.container_cache import (
+def _run_maybe_async(value: Any) -> Any:
+    """Resolve ``value`` whether harbor returns it sync or as a coroutine.
+
+    Recent harbor makes ``get_task_configs`` / ``download_tasks`` ``async def``
+    (they return coroutines); older harbor returned the result directly. Awaiting
+    only when needed keeps this script working across both versions.
+    """
+    if inspect.isawaitable(value):
+        return asyncio.run(value)
+    return value
+
+
+from harbor.constants import TASK_CACHE_DIR  # noqa: E402
+from harbor.models.registry import RemoteRegistryInfo  # noqa: E402
+
+from scripts.harbor._harbor_compat import LocalDatasetConfig, RegistryDatasetConfig  # noqa: E402
+from harbor.tasks.client import TaskClient  # noqa: E402
+from harbor.utils.container_cache import (  # noqa: E402
     DockerfileStats,
     analyze_task_dockerfiles,
 )
@@ -55,9 +71,7 @@ def discover_task_dirs(data_paths: list[str | Path]) -> list[Path]:
     return task_dirs
 
 
-def get_snapshot_env_dirs(
-    task_dirs: list[Path], truncate: int = 12
-) -> dict[str, Path]:
+def get_snapshot_env_dirs(task_dirs: list[Path], truncate: int = 12) -> dict[str, Path]:
     """Map env hash -> representative environment dir (containing Dockerfile)."""
     from harbor.utils.container_cache import get_task_environment_hash
     from harbor.models.task.paths import TaskPaths
@@ -83,9 +97,65 @@ def load_tasks_from_local_dataset(
         exclude_task_names=exclude_task_names,
         n_tasks=n_tasks,
     )
-    # Get task configs which contain resolved paths
-    task_configs = config.get_task_configs(disable_verification=True)
+    # Get task configs which contain resolved paths.
+    # harbor's get_task_configs is a coroutine on recent versions; resolve it.
+    task_configs = _run_maybe_async(config.get_task_configs(disable_verification=True))
     return [tc.path for tc in task_configs]
+
+
+def load_tasks_from_hf_parquet(
+    dataset_name: str,
+    n_tasks: int | None = None,
+    download_dir: Path | None = None,
+    task_names: list[str] | None = None,
+    exclude_task_names: list[str] | None = None,
+) -> list[Path]:
+    """Load task dirs from a TaskTrove-style HF dataset.
+
+    Campaign task datasets are stored on the Hub as a ``tasks.parquet`` with columns ``path`` (str)
+    and ``task_binary`` (gzip-tar bytes of the task dir: ``environment/Dockerfile``, ``instruction.md``,
+    ...). This loader unpacks them so the same ``analyze_task_dockerfiles`` env-hash logic runs. It is
+    the fallback for datasets the harbor registry can no longer resolve (its ``latest``-tag lookup
+    drifted) — and matches how the datagen launcher itself loads ``--tasks_input_path`` HF ids.
+    """
+    import gzip
+    import io
+    import tarfile
+    import tempfile
+    from fnmatch import fnmatch
+
+    import pandas as pd
+    from huggingface_hub import hf_hub_download
+
+    parquet = hf_hub_download(
+        repo_id=dataset_name, filename="tasks.parquet", repo_type="dataset"
+    )
+    df = pd.read_parquet(parquet)
+    if "task_binary" not in df.columns or "path" not in df.columns:
+        raise ValueError(
+            f"{dataset_name}/tasks.parquet lacks the expected 'path'+'task_binary' columns "
+            f"(got {list(df.columns)})"
+        )
+    out_root = (
+        Path(download_dir)
+        if download_dir
+        else Path(tempfile.mkdtemp(prefix="tasktrove_snap_"))
+    )
+    task_dirs: list[Path] = []
+    for path, task_binary in zip(df["path"], df["task_binary"]):
+        if n_tasks is not None and len(task_dirs) >= n_tasks:
+            break
+        name = str(path)
+        if task_names and not any(fnmatch(name, pat) for pat in task_names):
+            continue
+        if exclude_task_names and any(fnmatch(name, pat) for pat in exclude_task_names):
+            continue
+        task_dir = out_root / name
+        task_dir.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(task_binary))) as tar:
+            tar.extractall(task_dir, filter="data")
+        task_dirs.append(task_dir)
+    return task_dirs
 
 
 def load_tasks_from_registry_dataset(
@@ -110,8 +180,10 @@ def load_tasks_from_registry_dataset(
         download_dir=download_dir,
     )
 
-    # Get task configs (this will download tasks if needed)
-    task_configs = config.get_task_configs(disable_verification=True)
+    # Get task configs (this will download tasks if needed).
+    # Both get_task_configs and download_tasks are harbor coroutines on recent
+    # versions; resolve whichever form this harbor returns.
+    task_configs = _run_maybe_async(config.get_task_configs(disable_verification=True))
 
     # Download the actual task directories
     client = TaskClient()
@@ -119,10 +191,12 @@ def load_tasks_from_registry_dataset(
     local_ids = [tc.path for tc in task_configs if not tc.is_git_task()]
 
     if task_ids:
-        downloaded_paths = client.download_tasks(
-            task_ids=task_ids,
-            overwrite=False,
-            output_dir=download_dir or TASK_CACHE_DIR,
+        downloaded_paths = _run_maybe_async(
+            client.download_tasks(
+                task_ids=task_ids,
+                overwrite=False,
+                output_dir=download_dir or TASK_CACHE_DIR,
+            )
         )
         return downloaded_paths + local_ids
 
@@ -149,13 +223,19 @@ def print_stats(stats: DockerfileStats, verbose: bool = False) -> None:
 
     # Calculate reuse statistics
     max_reuse = max(stats.hash_counts.values())
-    avg_reuse = stats.tasks_with_dockerfile / stats.unique_hashes if stats.unique_hashes > 0 else 0
+    avg_reuse = (
+        stats.tasks_with_dockerfile / stats.unique_hashes
+        if stats.unique_hashes > 0
+        else 0
+    )
     single_use = sum(1 for count in stats.hash_counts.values() if count == 1)
 
-    print(f"\nSnapshot reuse statistics:")
+    print("\nSnapshot reuse statistics:")
     print(f"  Average tasks per snapshot: {avg_reuse:.1f}")
     print(f"  Maximum tasks per snapshot: {max_reuse}")
-    print(f"  Single-use snapshots:       {single_use} ({100*single_use/stats.unique_hashes:.1f}%)")
+    print(
+        f"  Single-use snapshots:       {single_use} ({100 * single_use / stats.unique_hashes:.1f}%)"
+    )
 
     if verbose:
         print(f"\n{'=' * 60}")
@@ -223,7 +303,8 @@ def main():
 
     # Output options
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Show detailed hash breakdown",
     )
@@ -241,14 +322,30 @@ def main():
                 n_tasks=args.n_tasks,
             )
         else:
-            task_dirs = load_tasks_from_registry_dataset(
-                dataset_name=args.registry_dataset,
-                version=args.version,
-                task_names=args.task_names,
-                exclude_task_names=args.exclude_task_names,
-                n_tasks=args.n_tasks,
-                download_dir=args.download_dir,
-            )
+            try:
+                task_dirs = load_tasks_from_registry_dataset(
+                    dataset_name=args.registry_dataset,
+                    version=args.version,
+                    task_names=args.task_names,
+                    exclude_task_names=args.exclude_task_names,
+                    n_tasks=args.n_tasks,
+                    download_dir=args.download_dir,
+                )
+            except Exception as reg_err:
+                # The harbor registry resolves a 'latest' tag that these datasets no longer carry;
+                # fall back to the TaskTrove HF tasks.parquet, which is where they actually live.
+                print(
+                    f"[count-snapshots] harbor registry load failed ({reg_err}); "
+                    f"falling back to HF tasks.parquet for {args.registry_dataset}",
+                    file=sys.stderr,
+                )
+                task_dirs = load_tasks_from_hf_parquet(
+                    dataset_name=args.registry_dataset,
+                    n_tasks=args.n_tasks,
+                    download_dir=args.download_dir,
+                    task_names=args.task_names,
+                    exclude_task_names=args.exclude_task_names,
+                )
     except Exception as e:
         print(f"Error loading tasks: {e}", file=sys.stderr)
         sys.exit(1)
@@ -269,10 +366,14 @@ def main():
     print(f"\n{'=' * 60}")
     print("SUMMARY")
     print("=" * 60)
-    print(f"With auto_snapshot=True, this dataset would create {stats.unique_hashes} snapshot(s).")
+    print(
+        f"With auto_snapshot=True, this dataset would create {stats.unique_hashes} snapshot(s)."
+    )
 
     if stats.tasks_without_dockerfile > 0:
-        print(f"\nNote: {stats.tasks_without_dockerfile} task(s) have no environment directory and would use")
+        print(
+            f"\nNote: {stats.tasks_without_dockerfile} task(s) have no environment directory and would use"
+        )
         print("      docker_image from task config or fail to start.")
 
 

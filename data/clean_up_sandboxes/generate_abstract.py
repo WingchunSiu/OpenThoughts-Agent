@@ -16,15 +16,16 @@ import shutil
 from pathlib import Path
 from typing import List
 
+
 def clean_up_sandboxes(dataset_path: str, failed_tasks: List[str]) -> str:
     # Create temporary directory
     temp_dir = Path(tempfile.mkdtemp(prefix="clean_sandboxes_"))
     print(f"Creating clean tasks directory at: {temp_dir}")
-    
+
     # Get all task directories from the dataset
     dataset_path = Path(dataset_path)
     all_tasks = [d for d in dataset_path.iterdir() if d.is_dir()]
-    
+
     # Filter out failed tasks and tasks containing "feal", then copy the rest
     clean_task_count = 0
     for task_dir in all_tasks:
@@ -41,8 +42,9 @@ def clean_up_sandboxes(dataset_path: str, failed_tasks: List[str]) -> str:
                 print(f"Skipping failed task: {task_path}")
             elif "feal" in task_name:
                 print(f"Skipping task containing 'feal': {task_name}")
-    
+
     return temp_dir
+
 
 class CleanUpSandboxesGenerator(BaseDataGenerator):
     parser_description = "Clean OT-Agent sandboxes dataset"
@@ -69,9 +71,13 @@ class CleanUpSandboxesGenerator(BaseDataGenerator):
     ) -> GenerationResult:
         args = context.args
         dataset_path = download_hf_dataset(args.source_repo)
-        failed_tasks = filter_failed_tasks(dataset_path, num_concurrent=args.num_concurrent)
+        failed_tasks = filter_failed_tasks(
+            dataset_path, num_concurrent=args.num_concurrent
+        )
         temp_clean_dir = clean_up_sandboxes(dataset_path, failed_tasks)
-        output_path = finalize_dataset_output(temp_clean_dir, getattr(args, "output_dir", None))
+        output_path = finalize_dataset_output(
+            temp_clean_dir, getattr(args, "output_dir", None)
+        )
         dataset_output = str(output_path)
 
         limit = self._resolve_limit(request)
@@ -79,7 +85,9 @@ class CleanUpSandboxesGenerator(BaseDataGenerator):
             from data.generation.limits import limit_tasks_directory
 
             clean_tasks_dir = Path(
-                limit_tasks_directory(dataset_output, limit, dataset_prefix="clean_tasks")
+                limit_tasks_directory(
+                    dataset_output, limit, dataset_prefix="clean_tasks"
+                )
             )
             print(f"Limited cleaned tasks to {limit} entries")
             dataset_output = str(clean_tasks_dir)

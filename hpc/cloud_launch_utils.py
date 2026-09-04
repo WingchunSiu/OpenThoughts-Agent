@@ -12,6 +12,7 @@ This module provides common components for cloud launchers including:
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import subprocess
 import sys
@@ -54,7 +55,9 @@ def _ensure_sky_api_server(timeout: int = 30) -> None:
     except Exception:
         pass
 
-    print("[cloud] SkyPilot API server not running — starting it via 'sky api start'...")
+    print(
+        "[cloud] SkyPilot API server not running — starting it via 'sky api start'..."
+    )
     sky_bin = shutil.which("sky")
     if sky_bin is None:
         raise RuntimeError(
@@ -63,7 +66,9 @@ def _ensure_sky_api_server(timeout: int = 30) -> None:
         )
     result = subprocess.run(
         [sky_bin, "api", "start"],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -79,10 +84,16 @@ def _ensure_sky_api_server(timeout: int = 30) -> None:
             f"SkyPilot API server started but health check failed: {exc}\n"
             "Check ~/.sky/api_server/server.log for details."
         ) from exc
-DEFAULT_CLOUD_OUTPUT_PREFIX = "trace_runs"  # Default output subdir prefix for cloud jobs
+
+
+DEFAULT_CLOUD_OUTPUT_PREFIX = (
+    "trace_runs"  # Default output subdir prefix for cloud jobs
+)
 
 # Harbor git URL for cloud reinstalls (always fetch latest from branch)
-HARBOR_GIT_URL = "git+https://github.com/laude-institute/harbor.git@penfever/temp-override"
+HARBOR_GIT_URL = (
+    "git+https://github.com/laude-institute/harbor.git@penfever/temp-override"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +101,9 @@ HARBOR_GIT_URL = "git+https://github.com/laude-institute/harbor.git@penfever/tem
 # ---------------------------------------------------------------------------
 
 
-def derive_cloud_job_name(args: "argparse.Namespace", task_prefix: str = "cloud") -> str:
+def derive_cloud_job_name(
+    args: "argparse.Namespace", task_prefix: str = "cloud"
+) -> str:
     """Construct a fallback job name for cloud launches.
 
     Pattern: {task_prefix}__{dataset}__{model}__{cloud_provider}
@@ -176,7 +189,7 @@ def infer_harbor_env_from_config(
 # Installs harbor from git, pins huggingface-hub <1.0 (vLLM/transformers compat),
 # and pins numpy==2.2.6 (Numba compat: "Numba needs NumPy 2.2 or less").
 CLOUD_DEPS_INSTALL_CMD = (
-    f'uv pip install --upgrade --force-reinstall '
+    f"uv pip install --upgrade --force-reinstall "
     f'"harbor @ {HARBOR_GIT_URL}" '
     f'"huggingface-hub>=0.34.0,<1.0" '
     f'"numpy==2.2.6"'
@@ -215,7 +228,8 @@ class PeriodicRemoteSync:
             local_path.mkdir(parents=True, exist_ok=True)
 
             rsync_cmd = [
-                "rsync", "-avz",
+                "rsync",
+                "-avz",
                 f"{self.cluster_name}:{self.remote_dir}/",
                 f"{self.local_dir}/",
             ]
@@ -228,18 +242,36 @@ class PeriodicRemoteSync:
             if result.returncode == 0:
                 synced_files = list(local_path.glob("**/*"))
                 if synced_files:
-                    print(f"[sync] Synced {len(synced_files)} file(s) to {self.local_dir}", flush=True)
+                    print(
+                        f"[sync] Synced {len(synced_files)} file(s) to {self.local_dir}",
+                        flush=True,
+                    )
             elif result.returncode == 23:
                 # rsync code 23: partial transfer due to error (often "file/directory not found")
                 stderr_lower = (result.stderr or "").lower()
-                if "no such file" in stderr_lower or "does not exist" in stderr_lower or "change_dir" in stderr_lower:
+                if (
+                    "no such file" in stderr_lower
+                    or "does not exist" in stderr_lower
+                    or "change_dir" in stderr_lower
+                ):
                     pass  # Remote directory doesn't exist yet - expected early in job
                 else:
-                    print(f"[sync] Warning: rsync partial transfer (code 23): {result.stderr}", file=sys.stderr, flush=True)
-            elif "No such file" in result.stderr or "does not exist" in result.stderr.lower():
+                    print(
+                        f"[sync] Warning: rsync partial transfer (code 23): {result.stderr}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            elif (
+                "No such file" in result.stderr
+                or "does not exist" in result.stderr.lower()
+            ):
                 pass  # Remote directory doesn't exist yet
             else:
-                print(f"[sync] Warning: rsync returned {result.returncode}", file=sys.stderr, flush=True)
+                print(
+                    f"[sync] Warning: rsync returned {result.returncode}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         except subprocess.TimeoutExpired:
             pass  # Sync took too long, skip
         except Exception as e:
@@ -258,7 +290,10 @@ class PeriodicRemoteSync:
             return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        print(f"[sync] Started periodic sync (every {self.interval}s) to {self.local_dir}", flush=True)
+        print(
+            f"[sync] Started periodic sync (every {self.interval}s) to {self.local_dir}",
+            flush=True,
+        )
 
     def stop(self) -> None:
         """Stop the background sync thread."""
@@ -277,6 +312,7 @@ PeriodicLogSync = PeriodicRemoteSync
 # ---------------------------------------------------------------------------
 # Path Utilities
 # ---------------------------------------------------------------------------
+
 
 def parse_gpu_count(accelerator: str) -> int:
     """Parse GPU count from accelerator spec.
@@ -473,7 +509,8 @@ def fetch_diagnostic_logs(
     # Sync main logs directory
     try:
         rsync_cmd = [
-            "rsync", "-avz",
+            "rsync",
+            "-avz",
             f"{cluster_name}:{remote_logs_dir}/",
             f"{local_path}/",
         ]
@@ -512,7 +549,8 @@ def fetch_diagnostic_logs(
             ray_system_dir = local_path / "ray_system"
             ray_system_dir.mkdir(parents=True, exist_ok=True)
             ray_sys_cmd = [
-                "rsync", "-avz",
+                "rsync",
+                "-avz",
                 f"{cluster_name}:/tmp/ray/session_latest/logs/",
                 f"{ray_system_dir}/",
             ]
@@ -592,7 +630,9 @@ def prepare_hf_dataset_for_sync(
         # symlinks break when SkyPilot rsyncs only the snapshot directory to
         # the VM.  Copy with dereferencing so the VM gets real files.
         if verbose:
-            print(f"[hf-prep] Detected raw task directories (format has instruction.md files)")
+            print(
+                "[hf-prep] Detected raw task directories (format has instruction.md files)"
+            )
 
         import shutil
 
@@ -607,18 +647,24 @@ def prepare_hf_dataset_for_sync(
         shutil.copytree(
             str(snapshot_dir),
             str(output_path),
-            symlinks=False,          # dereference symlinks → real files
+            symlinks=False,  # dereference symlinks → real files
             dirs_exist_ok=False,
         )
         if verbose:
-            task_count = sum(1 for d in output_path.iterdir() if d.is_dir() and not d.name.startswith('.'))
+            task_count = sum(
+                1
+                for d in output_path.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            )
             print(f"[hf-prep] Copied {task_count} task directories")
         return output_path
 
     elif parquet_files:
         # Parquet format - extract first
         if verbose:
-            print(f"[hf-prep] Found {len(parquet_files)} parquet file(s), extracting...")
+            print(
+                f"[hf-prep] Found {len(parquet_files)} parquet file(s), extracting..."
+            )
 
         # Use existing extractor
         try:
@@ -749,13 +795,15 @@ class CloudLauncher:
                 parser.add_argument(alias, dest=dest, help=_argparse.SUPPRESS)
 
         _add(
-            "--cloud_provider", "--cloud-provider",
+            "--cloud_provider",
+            "--cloud-provider",
             default="gcp",
             help="Cloud provider(s) to use. Comma-separated for fallbacks (e.g., 'gcp,aws,lambda'). "
             "Run with --list_providers for details.",
         )
         _add(
-            "--list_providers", "--list-providers",
+            "--list_providers",
+            "--list-providers",
             action="store_true",
             help="List supported cloud providers and exit.",
         )
@@ -777,25 +825,46 @@ class CloudLauncher:
             "--cpus",
             help="Minimum number of vCPUs (e.g., '32' or '32+' for at least 32 vCPUs).",
         )
-        _add("--use_spot", "--use-spot", action="store_true", help="Use spot/preemptible instances.")
         _add(
-            "--docker_image", "--docker-image",
+            "--use_spot",
+            "--use-spot",
+            action="store_true",
+            help="Use spot/preemptible instances.",
+        )
+        _add(
+            "--docker_image",
+            "--docker-image",
             default=DEFAULT_DOCKER_IMAGE,
             help="Pre-built Docker image (default: auto-selects based on GPU count).",
         )
-        _add("--task_name", "--task-name", help="SkyPilot task name (defaults to <job_name>).")
-        _add("--cluster_name", "--cluster-name", help="SkyPilot cluster name (defaults to <job_name>).")
         _add(
-            "--remote_output_subdir", "--remote-output-subdir",
+            "--task_name",
+            "--task-name",
+            help="SkyPilot task name (defaults to <job_name>).",
+        )
+        _add(
+            "--cluster_name",
+            "--cluster-name",
+            help="SkyPilot cluster name (defaults to <job_name>).",
+        )
+        _add(
+            "--remote_output_subdir",
+            "--remote-output-subdir",
             help=f"Subdirectory for outputs (defaults to '{DEFAULT_CLOUD_OUTPUT_PREFIX}/<job_name>').",
         )
         _add(
-            "--local_sync_dir", "--local-sync-dir",
+            "--local_sync_dir",
+            "--local-sync-dir",
             help=f"Local sync directory (defaults to './{DEFAULT_CLOUD_OUTPUT_PREFIX}/<job_name>').",
         )
-        _add("--secrets_env", "--secrets-env", help="Path to secrets.env to source inside the container.")
         _add(
-            "--no_sync", "--no-sync",
+            "--secrets_env",
+            "--secrets-env",
+            help="Path to secrets.env to source inside the container.",
+        )
+        _add(
+            "--no_sync",
+            "--no-sync",
             action="store_true",
             help="Skip syncing local codebase to VM (use code baked into Docker image).",
         )
@@ -812,14 +881,16 @@ class CloudLauncher:
             help="Tear down cluster after task completes.",
         )
         _add(
-            "--log_sync_interval", "--log-sync-interval",
+            "--log_sync_interval",
+            "--log-sync-interval",
             type=int,
             default=DEFAULT_LOG_SYNC_INTERVAL,
             metavar="SECONDS",
             help=f"Interval for periodic log sync (default: {DEFAULT_LOG_SYNC_INTERVAL}s). Set to 0 to disable.",
         )
         _add(
-            "--retry_until_up", "--retry-until-up",
+            "--retry_until_up",
+            "--retry-until-up",
             action="store_true",
             help="Keep retrying to provision until the cluster is up (useful for scarce GPU availability).",
         )
@@ -843,11 +914,16 @@ class CloudLauncher:
         for pname, pconfig in zip(provider_names, provider_configs):
             creds_ok, creds_msg = check_provider_credentials(pname)
             if not creds_ok:
-                print(f"[cloud] Warning ({pconfig.display_name}): {creds_msg}", file=sys.stderr)
+                print(
+                    f"[cloud] Warning ({pconfig.display_name}): {creds_msg}",
+                    file=sys.stderr,
+                )
 
         # Warn about spot limitations
         if args.use_spot and not all(pc.supports_spot for pc in provider_configs):
-            no_spot = [pc.display_name for pc in provider_configs if not pc.supports_spot]
+            no_spot = [
+                pc.display_name for pc in provider_configs if not pc.supports_spot
+            ]
             print(
                 f"[cloud] Warning: {', '.join(no_spot)} do not support spot instances.",
                 file=sys.stderr,
@@ -855,7 +931,9 @@ class CloudLauncher:
 
         # Warn about region limitations
         if args.region and not all(pc.supports_regions for pc in provider_configs):
-            no_region = [pc.display_name for pc in provider_configs if not pc.supports_regions]
+            no_region = [
+                pc.display_name for pc in provider_configs if not pc.supports_regions
+            ]
             print(
                 f"[cloud] Warning: {', '.join(no_region)} do not support region selection.",
                 file=sys.stderr,
@@ -866,7 +944,11 @@ class CloudLauncher:
         # the provider to support Docker runtime (for socket mounting)
         harbor_env = getattr(args, "harbor_env", None)
         if harbor_env == "docker":
-            no_docker = [pc.display_name for pc in provider_configs if not pc.supports_docker_runtime]
+            no_docker = [
+                pc.display_name
+                for pc in provider_configs
+                if not pc.supports_docker_runtime
+            ]
             if no_docker:
                 print(
                     f"[cloud] Warning: {', '.join(no_docker)} do not support Docker runtime. "
@@ -880,11 +962,12 @@ class CloudLauncher:
     # Docker Image Selection
     # -------------------------------------------------------------------------
 
-    def get_docker_image(self, args: "argparse.Namespace", provider_configs: list) -> str | None:
+    def get_docker_image(
+        self, args: "argparse.Namespace", provider_configs: list
+    ) -> str | None:
         """Select and normalize Docker image based on args and provider support."""
         provider_docker_support = {
-            pc.display_name: pc.supports_docker_runtime
-            for pc in provider_configs
+            pc.display_name: pc.supports_docker_runtime for pc in provider_configs
         }
         return get_docker_image_for_providers(
             args.docker_image,
@@ -971,6 +1054,7 @@ class CloudLauncher:
             if datagen_config:
                 try:
                     import yaml
+
                     cfg_path = Path(datagen_config).expanduser().resolve()
                     if cfg_path.exists():
                         with cfg_path.open("r", encoding="utf-8") as f:
@@ -1036,7 +1120,11 @@ class CloudLauncher:
         num_resources: int,
     ) -> None:
         """Print launch configuration summary."""
-        sync_status = f"enabled -> {remote_workdir}" if not args.no_sync else "disabled (using Docker image)"
+        sync_status = (
+            f"enabled -> {remote_workdir}"
+            if not args.no_sync
+            else "disabled (using Docker image)"
+        )
         image_status = docker_image if docker_image else "(provider default)"
         provider_status = " | ".join(pc.display_name for pc in provider_configs)
         accel_status = args.accelerator
@@ -1143,7 +1231,9 @@ class CloudLauncher:
         # Start periodic sync for all configured directories
         sync_threads: List[PeriodicRemoteSync] = []
         if cluster_name and args.log_sync_interval > 0:
-            sync_paths = self.get_periodic_sync_paths(args, remote_output_dir, remote_workdir)
+            sync_paths = self.get_periodic_sync_paths(
+                args, remote_output_dir, remote_workdir
+            )
             for remote_dir, local_dir in sync_paths:
                 sync = PeriodicRemoteSync(
                     cluster_name=cluster_name,
@@ -1164,8 +1254,14 @@ class CloudLauncher:
                     print("[cloud] Job ID unavailable; streaming latest job logs.")
                     sky.tail_logs(cluster_name, job_id=None, follow=True)
             except KeyboardInterrupt:
-                print("\n[cloud] Log streaming interrupted by user (Ctrl-C).", file=sys.stderr)
-                print(f"[cloud] Job may still be running. Check with: sky queue {cluster_name}", file=sys.stderr)
+                print(
+                    "\n[cloud] Log streaming interrupted by user (Ctrl-C).",
+                    file=sys.stderr,
+                )
+                print(
+                    f"[cloud] Job may still be running. Check with: sky queue {cluster_name}",
+                    file=sys.stderr,
+                )
             except Exception as e:
                 print(f"[cloud] Warning: Failed to tail logs: {e}", file=sys.stderr)
             finally:
@@ -1257,7 +1353,10 @@ class CloudLauncher:
                 sky.stream_and_get(down_request)
                 print(f"[cloud] Cluster '{cluster_name}' terminated.")
             except Exception as e:
-                print(f"[cloud] Warning: Failed to tear down cluster: {e}", file=sys.stderr)
+                print(
+                    f"[cloud] Warning: Failed to tear down cluster: {e}",
+                    file=sys.stderr,
+                )
                 print(f"[cloud] Run manually: sky down {cluster_name}", file=sys.stderr)
 
     # -------------------------------------------------------------------------
@@ -1294,13 +1393,17 @@ class CloudLauncher:
 
         # Set local_sync_dir default to ./trace_runs/<job_name>
         if not getattr(args, "local_sync_dir", None):
-            args.local_sync_dir = (self.repo_root / DEFAULT_CLOUD_OUTPUT_PREFIX / job_name).as_posix()
+            args.local_sync_dir = (
+                self.repo_root / DEFAULT_CLOUD_OUTPUT_PREFIX / job_name
+            ).as_posix()
 
     # -------------------------------------------------------------------------
     # Main Entry Point
     # -------------------------------------------------------------------------
 
-    def build_task_command(self, args: "argparse.Namespace", remote_output_dir: str) -> str:
+    def build_task_command(
+        self, args: "argparse.Namespace", remote_output_dir: str
+    ) -> str:
         """Build the main command to execute on remote. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement build_task_command()")
 
@@ -1337,9 +1440,14 @@ class CloudLauncher:
         # Setup Docker host socket for Harbor Docker backend
         harbor_env = getattr(args, "harbor_env", None)
         if harbor_env == "docker":
-            commands.insert(0, 'echo "[cloud-setup] Setting up Docker host socket passthrough..."')
-            commands.insert(1, 'export DOCKER_HOST=unix:///var/run/docker.sock')
-            commands.insert(2, 'docker info > /dev/null 2>&1 && echo "[cloud-setup] Docker daemon accessible" || echo "[cloud-setup] WARNING: Docker daemon not accessible"')
+            commands.insert(
+                0, 'echo "[cloud-setup] Setting up Docker host socket passthrough..."'
+            )
+            commands.insert(1, "export DOCKER_HOST=unix:///var/run/docker.sock")
+            commands.insert(
+                2,
+                'docker info > /dev/null 2>&1 && echo "[cloud-setup] Docker daemon accessible" || echo "[cloud-setup] WARNING: Docker daemon not accessible"',
+            )
 
         return commands
 
@@ -1381,7 +1489,11 @@ class CloudLauncher:
 
         # Build task command
         task_cmd = self.build_task_command(args, remote_output_dir)
-        task_cmd_str = " ".join(shlex.quote(part) for part in task_cmd) if isinstance(task_cmd, list) else task_cmd
+        task_cmd_str = (
+            " ".join(shlex.quote(part) for part in task_cmd)
+            if isinstance(task_cmd, list)
+            else task_cmd
+        )
 
         # Build remote setup script
         remote_secret_path = None
@@ -1416,7 +1528,9 @@ class CloudLauncher:
         )
 
         # Build resources
-        resources = self.build_resources(args, provider_names, provider_configs, docker_image)
+        resources = self.build_resources(
+            args, provider_names, provider_configs, docker_image
+        )
         num_resources = len(resources) if isinstance(resources, set) else 1
 
         # Create task
@@ -1426,7 +1540,9 @@ class CloudLauncher:
             task.set_file_mounts(file_mounts)
 
         # Print status
-        self.print_launch_status(args, provider_configs, docker_image, remote_workdir, num_resources)
+        self.print_launch_status(
+            args, provider_configs, docker_image, remote_workdir, num_resources
+        )
 
         # Launch and wait
         job_id, cluster_name = self.launch_task(task, args)

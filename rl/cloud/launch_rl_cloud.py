@@ -37,12 +37,13 @@ if str(_repo_root) not in sys.path:
 # Handle --list-providers before importing anything heavy
 if "--list-providers" in sys.argv or "--list_providers" in sys.argv:
     from hpc.cloud_providers import list_providers
+
     print(list_providers(verbose=True))
     sys.exit(0)
 
-from hpc.launch_utils import PROJECT_ROOT
-from hpc.cloud_launch_utils import CloudLauncher, repo_relative, parse_gpu_count
-from hpc.cloud_sync_utils import sync_outputs
+from hpc.launch_utils import PROJECT_ROOT  # noqa: E402
+from hpc.cloud_launch_utils import CloudLauncher, parse_gpu_count  # noqa: E402
+from hpc.cloud_sync_utils import sync_outputs  # noqa: E402
 
 # Default Docker image for RL (has SkyRL environment)
 DEFAULT_RL_DOCKER_IMAGE = "ghcr.io/open-thoughts/openthoughts-agent:gpu-rl"
@@ -147,7 +148,9 @@ class RLCloudLauncher(CloudLauncher):
             action="store_true",
             help="Print configuration and command without running.",
         )
-        parser.add_argument("--dry-run", dest="dry_run", action="store_true", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "--dry-run", dest="dry_run", action="store_true", help=argparse.SUPPRESS
+        )
 
     def _add_cloud_args(self, parser: argparse.ArgumentParser) -> None:
         """Override to set RL-specific defaults."""
@@ -189,17 +192,25 @@ class RLCloudLauncher(CloudLauncher):
         else:
             args.rl_config = str(rl_config_path.resolve())
 
-    def build_task_command(self, args: argparse.Namespace, remote_output_dir: str) -> List[str]:
+    def build_task_command(
+        self, args: argparse.Namespace, remote_output_dir: str
+    ) -> List[str]:
         """Build the run_rl.py command."""
         # Use the RL environment's Python
         cmd: List[str] = [
             "/opt/openthoughts/envs/rl/bin/python",
-            "-m", "rl.local.run_rl",
-            "--rl_config", args.rl_config,
-            "--model_path", args.model_path,
-            "--job_name", args.job_name,
-            "--gpus", str(args.gpus),
-            "--experiments_dir", remote_output_dir,
+            "-m",
+            "rl.local.run_rl",
+            "--rl_config",
+            args.rl_config,
+            "--model_path",
+            args.model_path,
+            "--job_name",
+            args.job_name,
+            "--gpus",
+            str(args.gpus),
+            "--experiments_dir",
+            remote_output_dir,
         ]
 
         # Data arguments
@@ -217,7 +228,7 @@ class RLCloudLauncher(CloudLauncher):
             cmd.extend(["--master_port", str(args.master_port)])
 
         # SkyRL overrides
-        for override in (args.skyrl_override or []):
+        for override in args.skyrl_override or []:
             cmd.extend(["--skyrl_override", override])
 
         # Dry run (for debugging remote)
@@ -235,11 +246,11 @@ class RLCloudLauncher(CloudLauncher):
         return [
             'echo "[cloud-setup] Setting up RL environment..."',
             # Ensure SKYRL_HOME is set
-            'export SKYRL_HOME=${SKYRL_HOME:-/opt/skyrl}',
+            "export SKYRL_HOME=${SKYRL_HOME:-/opt/skyrl}",
             # Add skyrl-train to PYTHONPATH
             'export PYTHONPATH="$SKYRL_HOME/skyrl-train:${PYTHONPATH:-}"',
             # vLLM settings
-            'export VLLM_USE_V1=1',
+            "export VLLM_USE_V1=1",
         ]
 
     def get_periodic_sync_paths(
@@ -254,7 +265,10 @@ class RLCloudLauncher(CloudLauncher):
         """
         return [
             (f"{remote_output_dir}/logs", str(Path(args.local_sync_dir) / "logs")),
-            (f"{remote_output_dir}/{args.job_name}/exports", str(Path(args.local_sync_dir) / "exports")),
+            (
+                f"{remote_output_dir}/{args.job_name}/exports",
+                str(Path(args.local_sync_dir) / "exports"),
+            ),
         ]
 
     def sync_additional_outputs(

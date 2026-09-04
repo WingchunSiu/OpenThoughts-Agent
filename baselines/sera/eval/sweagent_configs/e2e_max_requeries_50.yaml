@@ -1,7 +1,3 @@
-# This template is heavily inspired by anthropic and openhands
-# For running on lite:
-# sweagent run-batch --num_workers=20 --instances.type=swe_bench --instances.subset=lite --instances.split=test --instances.shuffle=True --instances.evaluate=True --instances.deployment.docker_args='--memory=10g' --config config/250225_anthropic_filemap_simple_review.yaml
-# For running on test:
 
 agent:
   type: default

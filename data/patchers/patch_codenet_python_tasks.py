@@ -23,6 +23,7 @@ Append a single line to `instruction.md` (the original content is preserved):
 
 Idempotent — re-running on already patched dirs is a no-op.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,7 +50,9 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True, help="Tasks dir (extracted parquet)")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--limit", type=int, default=0, help="Patch at most N tasks (0 = all)")
+    p.add_argument(
+        "--limit", type=int, default=0, help="Patch at most N tasks (0 = all)"
+    )
     args = p.parse_args()
 
     root = Path(args.root).expanduser().resolve()

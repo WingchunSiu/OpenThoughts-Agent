@@ -56,6 +56,7 @@ def _parse_repo_ids(md_path: Path) -> list[str]:
 
 # ── upload ────────────────────────────────────────────────────────────────────
 
+
 def _subdir_name(repo_id: str) -> str:
     """Convert org/name → org__name for use as a subdirectory."""
     return repo_id.replace("/", "__")
@@ -90,23 +91,44 @@ def _download_and_upload(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Collect task-binary datasets into a single HF repo as subdirectories",
     )
-    p.add_argument("--source-file", required=True,
-                   help="Markdown file listing HF dataset repo IDs (one per line)")
+    p.add_argument(
+        "--source-file",
+        required=True,
+        help="Markdown file listing HF dataset repo IDs (one per line)",
+    )
     p.add_argument("--target", required=True, help="Target HF dataset repo (org/name)")
-    p.add_argument("--private", action="store_true", help="Create target repo as private")
-    p.add_argument("--token", default=None, help="HF token (defaults to HF_TOKEN env var)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print repo IDs that would be processed without downloading")
-    p.add_argument("--skip-on-error", action="store_true",
-                   help="Skip repos that fail instead of aborting")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Process at most N repos (useful for smoke-testing)")
-    p.add_argument("--cache-dir", default=None,
-                   help="HF cache directory for snapshot_download (default: HF_HOME)")
+    p.add_argument(
+        "--private", action="store_true", help="Create target repo as private"
+    )
+    p.add_argument(
+        "--token", default=None, help="HF token (defaults to HF_TOKEN env var)"
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print repo IDs that would be processed without downloading",
+    )
+    p.add_argument(
+        "--skip-on-error",
+        action="store_true",
+        help="Skip repos that fail instead of aborting",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process at most N repos (useful for smoke-testing)",
+    )
+    p.add_argument(
+        "--cache-dir",
+        default=None,
+        help="HF cache directory for snapshot_download (default: HF_HOME)",
+    )
     return p.parse_args()
 
 
@@ -130,8 +152,13 @@ def main() -> None:
         return
 
     api = HfApi(token=token)
-    create_repo(repo_id=args.target, repo_type="dataset", private=args.private,
-                token=token, exist_ok=True)
+    create_repo(
+        repo_id=args.target,
+        repo_type="dataset",
+        private=args.private,
+        token=token,
+        exist_ok=True,
+    )
 
     failed: list[str] = []
 
@@ -151,8 +178,10 @@ def main() -> None:
             print(f"[collect] [{i}/{len(repos)}] {repo_id} FAILED: {exc}")
             failed.append(repo_id)
             if not args.skip_on_error:
-                print("[collect] Aborting. Use --skip-on-error to continue past failures.",
-                      file=sys.stderr)
+                print(
+                    "[collect] Aborting. Use --skip-on-error to continue past failures.",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
     print(f"\n[collect] Done. https://huggingface.co/datasets/{args.target}")

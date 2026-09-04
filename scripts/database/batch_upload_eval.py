@@ -51,6 +51,7 @@ DEFAULT_JOBS_DIR = _repo_root / "jobs"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_iso(ts_str):
     if not ts_str:
         return None
@@ -117,14 +118,16 @@ def get_job_info(job_dir):
                     if source:
                         for pfx in ["DCAgent3_", "DCAgent2_", "DCAgent_"]:
                             if source.startswith(pfx):
-                                source = source[len(pfx):]
+                                source = source[len(pfx) :]
                                 break
                         benchmark = source
                 except (json.JSONDecodeError, OSError):
                     pass
                 break
 
-    model_short = (model.split("/")[-1] if model and "/" in model else model) or job_dir.name
+    model_short = (
+        model.split("/")[-1] if model and "/" in model else model
+    ) or job_dir.name
 
     return {
         "dir": job_dir,
@@ -153,7 +156,7 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
         # Check elapsed
         try:
             d = json.load(open(entry / "result.json"))
-        except:
+        except:  # noqa: E722
             continue
         started = parse_iso(d.get("started_at"))
         if not started:
@@ -172,7 +175,7 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
                         ft = parse_iso(fa)
                         if ft and (latest is None or ft > latest):
                             latest = ft
-                except:
+                except:  # noqa: E722
                     pass
 
         if latest is None:
@@ -181,7 +184,10 @@ def detect_overlong_jobs(jobs_dir, min_elapsed_h=20, benchmark_filter=None):
         if elapsed_h < min_elapsed_h:
             continue
 
-        if benchmark_filter and benchmark_filter.lower() not in info["benchmark"].lower():
+        if (
+            benchmark_filter
+            and benchmark_filter.lower() not in info["benchmark"].lower()
+        ):
             continue
 
         info["elapsed_h"] = elapsed_h
@@ -238,7 +244,8 @@ def run_uploads(jobs_to_upload, n_workers, skip_hf, is_overlong):
         success = failed = 0
         for job in jobs_to_upload:
             ok, label, msg = upload_one(
-                job["dir"], job.get("benchmark"), skip_hf, is_overlong)
+                job["dir"], job.get("benchmark"), skip_hf, is_overlong
+            )
             print(f"  [{'OK' if ok else 'FAIL'}] {label}: {msg}")
             if ok:
                 success += 1
@@ -246,6 +253,7 @@ def run_uploads(jobs_to_upload, n_workers, skip_hf, is_overlong):
                 failed += 1
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
         success = failed = 0
 
         def _worker(job):
@@ -272,32 +280,67 @@ def main():
     )
 
     # Mode
-    parser.add_argument("job_dirs", nargs="*", type=Path,
-                        help="Job directories to upload (glob-friendly)")
-    parser.add_argument("--auto-detect-overlong", action="store_true",
-                        help="Auto-detect overlong jobs (>20h elapsed, incomplete)")
-    parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOBS_DIR,
-                        help="Jobs directory for --auto-detect-overlong mode")
+    parser.add_argument(
+        "job_dirs",
+        nargs="*",
+        type=Path,
+        help="Job directories to upload (glob-friendly)",
+    )
+    parser.add_argument(
+        "--auto-detect-overlong",
+        action="store_true",
+        help="Auto-detect overlong jobs (>20h elapsed, incomplete)",
+    )
+    parser.add_argument(
+        "--jobs-dir",
+        type=Path,
+        default=DEFAULT_JOBS_DIR,
+        help="Jobs directory for --auto-detect-overlong mode",
+    )
 
     # Upload options
-    parser.add_argument("--overlong", action="store_true",
-                        help="Mark uploaded jobs as overlong (is_overlong=true)")
-    parser.add_argument("--skip-hf", action="store_true",
-                        help="Skip HuggingFace upload (DB only)")
-    parser.add_argument("--force", action="store_true",
-                        help="Override quality gates (low accuracy, incomplete trials)")
-    parser.add_argument("--parallel", "-p", type=int, default=1,
-                        help="Number of parallel upload workers (default: 1)")
+    parser.add_argument(
+        "--overlong",
+        action="store_true",
+        help="Mark uploaded jobs as overlong (is_overlong=true)",
+    )
+    parser.add_argument(
+        "--skip-hf", action="store_true", help="Skip HuggingFace upload (DB only)"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Override quality gates (low accuracy, incomplete trials)",
+    )
+    parser.add_argument(
+        "--parallel",
+        "-p",
+        type=int,
+        default=1,
+        help="Number of parallel upload workers (default: 1)",
+    )
 
     # Filters (for auto-detect mode)
-    parser.add_argument("--benchmark", "-b", type=str, default=None,
-                        help="Filter by benchmark substring")
-    parser.add_argument("--min-elapsed", type=float, default=20,
-                        help="Min elapsed hours for overlong detection (default: 20)")
+    parser.add_argument(
+        "--benchmark",
+        "-b",
+        type=str,
+        default=None,
+        help="Filter by benchmark substring",
+    )
+    parser.add_argument(
+        "--min-elapsed",
+        type=float,
+        default=20,
+        help="Min elapsed hours for overlong detection (default: 20)",
+    )
 
     # Safety
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be uploaded without uploading")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be uploaded without uploading",
+    )
 
     args = parser.parse_args()
 
@@ -306,8 +349,12 @@ def main():
 
     if args.auto_detect_overlong:
         # Auto-detect mode
-        print(f"Scanning {args.jobs_dir} for overlong jobs (>{args.min_elapsed}h elapsed, incomplete)...")
-        jobs_to_upload = detect_overlong_jobs(args.jobs_dir, args.min_elapsed, args.benchmark)
+        print(
+            f"Scanning {args.jobs_dir} for overlong jobs (>{args.min_elapsed}h elapsed, incomplete)..."
+        )
+        jobs_to_upload = detect_overlong_jobs(
+            args.jobs_dir, args.min_elapsed, args.benchmark
+        )
         is_overlong = True
         print(f"Found {len(jobs_to_upload)} overlong model/benchmark pairs\n")
     elif args.job_dirs:
@@ -335,12 +382,16 @@ def main():
 
     # Display table
     hdr_elapsed = "Elapsed" if args.auto_detect_overlong else ""
-    print(f"  {'Model':<55} {'Benchmark':<25} {'Progress':>10} {'Acc':>7} {hdr_elapsed:>8}")
+    print(
+        f"  {'Model':<55} {'Benchmark':<25} {'Progress':>10} {'Acc':>7} {hdr_elapsed:>8}"
+    )
     print("  " + "-" * 110)
     for r in jobs_to_upload:
-        acc = f"{r['accuracy']:.1%}" if r['accuracy'] is not None else "N/A"
+        acc = f"{r['accuracy']:.1%}" if r["accuracy"] is not None else "N/A"
         elapsed = f"{r.get('elapsed_h', 0):.1f}h" if args.auto_detect_overlong else ""
-        print(f"  {r['model_short']:<55} {r['benchmark']:<25} {r['n_trials']:>4}/{r['n_total']:<4} {acc:>7} {elapsed:>8}")
+        print(
+            f"  {r['model_short']:<55} {r['benchmark']:<25} {r['n_trials']:>4}/{r['n_total']:<4} {acc:>7} {elapsed:>8}"
+        )
 
     mode = "overlong" if is_overlong else "normal"
     hf = "skip" if args.skip_hf else "enabled"

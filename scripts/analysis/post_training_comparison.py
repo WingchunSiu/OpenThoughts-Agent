@@ -20,8 +20,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -195,7 +193,9 @@ def format_report(
     for key, info in MODELS.items():
         rows = datasets[key]
         n_tasks = len(set(r["task"] for r in rows))
-        lines.append(f"| {info['short']} | {info['pipeline']} | {len(rows)} | {n_tasks} |")
+        lines.append(
+            f"| {info['short']} | {info['pipeline']} | {len(rows)} | {n_tasks} |"
+        )
     lines.append("")
 
     # ── 1. Overall scores ──
@@ -212,9 +212,13 @@ def format_report(
     lines.append(f"Common tasks across all models: **{len(common_tasks)}**")
     lines.append("")
 
-    scored_models = {k: v for k, v in model_scores.items() if v}  # exclude base (no results)
+    scored_models = {
+        k: v for k, v in model_scores.items() if v
+    }  # exclude base (no results)
 
-    lines.append("| Model | Mean Score | Median | Tasks ≥0.5 | Tasks =1.0 | Tasks =0.0 |")
+    lines.append(
+        "| Model | Mean Score | Median | Tasks ≥0.5 | Tasks =1.0 | Tasks =0.0 |"
+    )
     lines.append("|-------|-----------|--------|-----------|-----------|-----------|")
     for key, scores in scored_models.items():
         task_scores = [scores.get(t, 0.0) for t in common_tasks]
@@ -234,7 +238,9 @@ def format_report(
     # ── 1b. Harbor-style mean reward (flat mean across all trials) ──
     lines.append("### Mean Reward per Trial (Harbor 'accuracy' metric)")
     lines.append("")
-    lines.append("Flat mean of all trial rewards (errors=0). EI = infrastructure errors dropped.")
+    lines.append(
+        "Flat mean of all trial rewards (errors=0). EI = infrastructure errors dropped."
+    )
     lines.append("")
     lines.append("| Model | Mean Reward | Mean Reward (EI) | Trials | Trials (EI) |")
     lines.append("|-------|------------|-----------------|--------|------------|")
@@ -291,9 +297,12 @@ def format_report(
         all_failure_modes.update(fm.keys())
 
     # Sort modes for display
-    mode_order = sorted(all_failure_modes, key=lambda m: (
-        0 if "success" in m else 1 if "partial" in m else 2 if "fail" in m else 3
-    ))
+    mode_order = sorted(
+        all_failure_modes,
+        key=lambda m: (
+            0 if "success" in m else 1 if "partial" in m else 2 if "fail" in m else 3
+        ),
+    )
 
     header = "| Failure Mode | " + " | ".join(MODELS[k]["short"] for k in MODELS) + " |"
     sep = "|" + "|".join(["---"] * (len(MODELS) + 1)) + "|"
@@ -305,7 +314,7 @@ def format_report(
             count = model_failures[key].get(mode, 0)
             total = len(datasets[key])
             if count > 0:
-                row_parts.append(f" {count} ({100*count/total:.0f}%) ")
+                row_parts.append(f" {count} ({100 * count / total:.0f}%) ")
             else:
                 row_parts.append(" - ")
         lines.append("|" + "|".join(row_parts) + "|")
@@ -314,8 +323,12 @@ def format_report(
     # ── 3. Context / conversation length stats ──
     lines.append("## 3. Context Length & Turn Count Statistics")
     lines.append("")
-    lines.append("| Model | Mean Chars | Median Chars | P90 Chars | Mean Turns | Median Turns | P90 Turns |")
-    lines.append("|-------|-----------|-------------|----------|-----------|-------------|----------|")
+    lines.append(
+        "| Model | Mean Chars | Median Chars | P90 Chars | Mean Turns | Median Turns | P90 Turns |"
+    )
+    lines.append(
+        "|-------|-----------|-------------|----------|-----------|-------------|----------|"
+    )
     for key in MODELS:
         clens = conversation_lengths(datasets[key])
         turns = turn_counts(datasets[key])
@@ -334,7 +347,9 @@ def format_report(
     agreement = compute_task_level_agreement(model_mean_ei, ei_tasks)
 
     n_scored = len([k for k in model_mean_ei if model_mean_ei[k]])
-    lines.append(f"- **All {n_scored} scored models solve (>=0.5):** {len(agreement['all_solve'])} tasks")
+    lines.append(
+        f"- **All {n_scored} scored models solve (>=0.5):** {len(agreement['all_solve'])} tasks"
+    )
     lines.append(f"- **No model solves:** {len(agreement['none_solve'])} tasks")
     lines.append(f"- **Some but not all solve:** {len(agreement['some_solve'])} tasks")
     lines.append("")
@@ -344,11 +359,15 @@ def format_report(
         lines.append("")
         for model_key, tasks in sorted(agreement["unique_solvers"].items()):
             info = MODELS[model_key]
-            lines.append(f"- **{info['short']}**: {len(tasks)} unique solves — `{'`, `'.join(tasks[:5])}`{'...' if len(tasks) > 5 else ''}")
+            lines.append(
+                f"- **{info['short']}**: {len(tasks)} unique solves — `{'`, `'.join(tasks[:5])}`{'...' if len(tasks) > 5 else ''}"
+            )
         lines.append("")
 
     # ── 5. Per-task score comparison (EI-filtered) ──
-    lines.append(f"## 5. Per-Task Score Comparison — EI-filtered ({len(ei_tasks)} tasks)")
+    lines.append(
+        f"## 5. Per-Task Score Comparison — EI-filtered ({len(ei_tasks)} tasks)"
+    )
     lines.append("")
     lines.append("Tasks where models diverge most (sorted by score variance):")
     lines.append("")
@@ -363,7 +382,9 @@ def format_report(
 
     task_variance.sort(key=lambda x: -x[1])
 
-    header = "| Task | " + " | ".join(MODELS[k]["short"] for k in scored_ei) + " | Var |"
+    header = (
+        "| Task | " + " | ".join(MODELS[k]["short"] for k in scored_ei) + " | Var |"
+    )
     sep = "|" + "|".join(["---"] * (len(scored_ei) + 2)) + "|"
     lines.append(header)
     lines.append(sep)
@@ -374,16 +395,26 @@ def format_report(
     lines.append("")
 
     # ── 6. Pairwise improvement analysis (EI-filtered) ──
-    lines.append(f"## 6. Pairwise Improvement Analysis (EI-filtered, {len(ei_tasks)} tasks)")
+    lines.append(
+        f"## 6. Pairwise Improvement Analysis (EI-filtered, {len(ei_tasks)} tasks)"
+    )
     lines.append("")
     lines.append("Effect of each post-training stage (EI-filtered mean scores):")
     lines.append("")
 
     comparisons = [
         ("base_weak_sft", "base_weak_strong_sft", "Adding Strong SFT to Weak SFT"),
-        ("base_strong_sft", "base_weak_strong_sft", "Adding Weak SFT before Strong SFT"),
+        (
+            "base_strong_sft",
+            "base_weak_strong_sft",
+            "Adding Weak SFT before Strong SFT",
+        ),
         ("base_weak_strong_sft", "base_weak_strong_rl", "Adding RL after SFT"),
-        ("base_strong_sft", "base_weak_strong_rl", "Full pipeline vs Direct Strong SFT"),
+        (
+            "base_strong_sft",
+            "base_weak_strong_rl",
+            "Full pipeline vs Direct Strong SFT",
+        ),
         ("base_weak_sft", "base_weak_strong_rl", "Full pipeline vs Weak SFT alone"),
     ]
 
@@ -414,7 +445,9 @@ def format_report(
         lines.append(f"### {description}")
         lines.append(f"- {MODELS[key_a]['short']} -> {MODELS[key_b]['short']}")
         lines.append(f"- Mean Δ: **{mean_delta:+.3f}**")
-        lines.append(f"- Improved: {improved}, Regressed: {regressed}, Unchanged: {unchanged}")
+        lines.append(
+            f"- Improved: {improved}, Regressed: {regressed}, Unchanged: {unchanged}"
+        )
         lines.append("")
 
     # ── 7. Convergence analysis (EI-filtered) ──
@@ -456,9 +489,13 @@ def format_report(
         lines.append("")
 
         if sft_only_tasks:
-            lines.append(f"SFT-only tasks: `{'`, `'.join(t[:25] for t in sft_only_tasks[:10])}`")
+            lines.append(
+                f"SFT-only tasks: `{'`, `'.join(t[:25] for t in sft_only_tasks[:10])}`"
+            )
         if rl_only_tasks:
-            lines.append(f"RL-only tasks: `{'`, `'.join(t[:25] for t in rl_only_tasks[:10])}`")
+            lines.append(
+                f"RL-only tasks: `{'`, `'.join(t[:25] for t in rl_only_tasks[:10])}`"
+            )
         lines.append("")
 
     if "base_strong_sft" in scored_ei and "base_weak_strong_sft" in scored_ei:
@@ -495,7 +532,9 @@ def format_report(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Post-training stage comparison analysis")
+    parser = argparse.ArgumentParser(
+        description="Post-training stage comparison analysis"
+    )
     parser.add_argument(
         "--output",
         default="/Users/benjaminfeuer/Documents/notes/ot-agent/post_training_comparison.md",

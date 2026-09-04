@@ -93,12 +93,14 @@ def reformat_assistant_content(content: str) -> Tuple[str, str]:
     close_idx = content.find("</think>")
     if close_idx >= 0:
         thinking = content[:close_idx].strip()
-        rest = _clean_rest(content[close_idx + len("</think>"):])
+        rest = _clean_rest(content[close_idx + len("</think>") :])
         if rest.startswith("{"):
             return _build_output(thinking, rest), "orphaned_close_think"
         json_pos = rest.find("{")
         if json_pos >= 0:
-            return _build_output(thinking, rest[json_pos:]), "orphaned_close_think_extracted_json"
+            return _build_output(
+                thinking, rest[json_pos:]
+            ), "orphaned_close_think_extracted_json"
         return _build_output(thinking, rest), "orphaned_close_think_no_json"
 
     # 4. Bare/malformed <think> with no </think> (e.g. model went straight to JSON,
@@ -110,7 +112,9 @@ def reformat_assistant_content(content: str) -> Tuple[str, str]:
         json_pos = after_tag_clean.find("{")
         if json_pos >= 0:
             thinking = after_tag_clean[:json_pos].strip()
-            return _build_output(thinking, after_tag_clean[json_pos:]), "bare_open_think"
+            return _build_output(
+                thinking, after_tag_clean[json_pos:]
+            ), "bare_open_think"
 
     # 5. No think tags - just JSON (possibly with leading whitespace/newlines)
     stripped = content.strip()
@@ -197,12 +201,17 @@ def _process_parquet_file(
             # Convert conversations column to Python, process, convert back
             convs_list = table.column(conversations_col).to_pylist()
             processed = _process_conversations_list(
-                convs_list, role_tag, content_tag, stats,
+                convs_list,
+                role_tag,
+                content_tag,
+                stats,
             )
 
             col_idx = table.column_names.index(conversations_col)
             table = table.set_column(
-                col_idx, conversations_col, pa.array(processed),
+                col_idx,
+                conversations_col,
+                pa.array(processed),
             )
 
             if writer is None:
@@ -326,8 +335,11 @@ def preprocess_local_dataset(
         output_path = os.path.join(out_dir, fname)
 
         rows = _process_parquet_file(
-            input_path, output_path,
-            conversations_col, role_tag, content_tag,
+            input_path,
+            output_path,
+            conversations_col,
+            role_tag,
+            content_tag,
             all_stats,
         )
         total_rows += rows
@@ -344,11 +356,14 @@ def preprocess_local_dataset(
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if not os.path.exists(dest):
                 import shutil
+
                 shutil.copy2(os.path.join(root, fname), dest)
 
     # Print stats
     total_msgs = sum(all_stats.values())
-    print(f"[prep_for_thinking] Done: {total_rows} rows, {total_msgs} assistant messages")
+    print(
+        f"[prep_for_thinking] Done: {total_rows} rows, {total_msgs} assistant messages"
+    )
     for fmt, count in sorted(all_stats.items(), key=lambda x: -x[1]):
         pct = 100 * count / total_msgs if total_msgs else 0
         print(f"  {fmt:40s} {count:6d}  ({pct:.1f}%)")

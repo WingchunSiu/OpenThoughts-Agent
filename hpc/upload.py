@@ -3,6 +3,7 @@ import time
 import argparse
 from huggingface_hub import upload_file, create_repo
 
+
 def upload_folder(local_folder, repo_id, repo_type="model"):
     for filename in os.listdir(local_folder):
         filepath = os.path.join(local_folder, filename)
@@ -27,10 +28,21 @@ def upload_folder(local_folder, repo_id, repo_type="model"):
                 print(f"❌ Failed to upload {filename} after 3 attempts.")
     print("✅ Upload process finished!")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, required=True, help="Hugging Face model name (e.g., username/model-name)")
-    parser.add_argument("--checkpoint_folder", type=str, default="/leonardo_work/AIFAC_5C0_290/DCFT_shared/checkpoints", help="Path to the checkpoint folder to upload")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        required=True,
+        help="Hugging Face model name (e.g., username/model-name)",
+    )
+    parser.add_argument(
+        "--checkpoint_folder",
+        type=str,
+        default="/leonardo_work/AIFAC_5C0_290/DCFT_shared/checkpoints",
+        help="Path to the checkpoint folder to upload",
+    )
     args = parser.parse_args()
 
     if "mlfoundations-dev/" not in args.model_name:
@@ -48,4 +60,6 @@ if __name__ == "__main__":
         print(f"❌ Failed to create repo: {e}")
         exit(1)
 
-    upload_folder(local_folder=local_folder, repo_id=f"mlfoundations-dev/{args.model_name}")
+    upload_folder(
+        local_folder=local_folder, repo_id=f"mlfoundations-dev/{args.model_name}"
+    )

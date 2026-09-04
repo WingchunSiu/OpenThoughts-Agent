@@ -36,6 +36,7 @@ The patch is idempotent via the marker
 CLI shape mirrors other patchers in this directory (`--root`, `--dry-run`,
 `--limit`).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,13 +92,10 @@ def patch_dockerfile(text: str) -> tuple[str, bool, str]:
             new_line = apk_match.group(0)
         else:
             new_pkgs = f"{existing} {ALPINE_PKG}"
-            new_line = (
-                f"{apk_match.group('indent')}"
-                f"RUN apk add --no-cache {new_pkgs}"
-            )
+            new_line = f"{apk_match.group('indent')}RUN apk add --no-cache {new_pkgs}"
         # Insert marker comment immediately above the apk line for visibility.
         replacement = f"{apk_match.group('indent')}{MARKER}\n{new_line}"
-        new_text = text[: apk_match.start()] + replacement + text[apk_match.end():]
+        new_text = text[: apk_match.start()] + replacement + text[apk_match.end() :]
         # Ensure trailing newline preserved
         if not new_text.endswith("\n"):
             new_text += "\n"
@@ -110,12 +108,9 @@ def patch_dockerfile(text: str) -> tuple[str, bool, str]:
         flags = apt_match.group("flags") or ""
         already_have = set(existing.split()) | set(DEBIAN_PKGS.split())
         new_pkgs = " ".join(sorted(already_have))
-        new_line = (
-            f"{apt_match.group('indent')}"
-            f"RUN apt-get install {flags}{new_pkgs}"
-        )
+        new_line = f"{apt_match.group('indent')}RUN apt-get install {flags}{new_pkgs}"
         replacement = f"{apt_match.group('indent')}{MARKER}\n{new_line}"
-        new_text = text[: apt_match.start()] + replacement + text[apt_match.end():]
+        new_text = text[: apt_match.start()] + replacement + text[apt_match.end() :]
         if not new_text.endswith("\n"):
             new_text += "\n"
         return new_text, True, "debian-extended"
@@ -130,10 +125,7 @@ def patch_dockerfile(text: str) -> tuple[str, bool, str]:
     base = m.group(1).lower()
     insertion_pt = text.find("\n", m.start()) + 1
     if "alpine" in base:
-        block = (
-            f"\n{MARKER}\n"
-            f"RUN apk add --no-cache {ALPINE_PKG}\n"
-        )
+        block = f"\n{MARKER}\nRUN apk add --no-cache {ALPINE_PKG}\n"
         variant = "alpine-new-run"
     else:
         # Best-effort Debian/Ubuntu install. Use update + install in one RUN.

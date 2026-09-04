@@ -9,7 +9,6 @@ with support for both HuggingFace and local parquet file datasets.
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -20,7 +19,7 @@ from harbor.utils.traces_utils import export_traces
 from supabase import Client
 
 from .config import get_default_client, get_admin_client
-from .models import *
+from .models import *  # noqa: F403
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +47,13 @@ except (ImportError, OSError):
 
 # ==================== SUPABASE CLIENT ====================
 
+
 def get_supabase_client(use_admin: bool = False) -> Client:
     """Get Supabase client for database operations."""
     if use_admin:
         return get_admin_client()
     return get_default_client()
+
 
 def load_supabase_keys() -> bool:
     """Load Supabase credentials from DC_AGENT_SECRET_ENV (or legacy KEYS)."""
@@ -105,44 +106,48 @@ def load_supabase_keys() -> bool:
 
     return True
 
+
 # ==================== DATASET UTILITIES ====================
+
 
 def get_dataset_by_name(name: str) -> Optional[Dict[str, Any]]:
     """Retrieve a dataset from the database by name."""
     try:
         client = get_supabase_client()
-        response = client.table('datasets').select('*').eq('name', name).execute()
+        response = client.table("datasets").select("*").eq("name", name).execute()
 
         if not response.data:
             return None
 
-        return clean_dataset_metadata(response.data[0])
+        return clean_dataset_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving dataset by name {name}: {e}")
         return None
+
 
 def get_dataset_by_id(dataset_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve a dataset from the database by ID."""
     try:
         client = get_supabase_client()
-        response = client.table('datasets').select('*').eq('id', dataset_id).execute()
+        response = client.table("datasets").select("*").eq("id", dataset_id).execute()
         if not response.data:
             return None
-        return clean_dataset_metadata(response.data[0])
+        return clean_dataset_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving dataset with ID {dataset_id}: {e}")
         return None
+
 
 def create_dataset(dataset_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new dataset in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('datasets').insert(dataset_data).execute()
+        response = client.table("datasets").insert(dataset_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create dataset")
 
-        return clean_dataset_metadata(response.data[0])
+        return clean_dataset_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating dataset: {e}")
         raise
@@ -152,18 +157,21 @@ def update_dataset(dataset_id: str, dataset_data: Dict[str, Any]) -> Dict[str, A
     """Update an existing dataset in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('datasets').update(dataset_data).eq('id', dataset_id).execute()
+        response = (
+            client.table("datasets").update(dataset_data).eq("id", dataset_id).execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update dataset with ID {dataset_id}")
 
-        return clean_dataset_metadata(response.data[0])
+        return clean_dataset_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating dataset {dataset_id}: {e}")
         raise
 
 
 # ==================== DATASET REGISTRATION FUNCTIONS ====================
+
 
 def register_hf_dataset(
     repo_name: str,
@@ -175,7 +183,7 @@ def register_hf_dataset(
     generation_end: Optional[datetime] = None,
     generation_parameters: Optional[Dict] = None,
     forced_update: bool = True,
-    **kwargs
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Register a HuggingFace dataset with comprehensive auto-filling.
@@ -207,7 +215,9 @@ def register_hf_dataset(
             from datasets import load_dataset
             from huggingface_hub import dataset_info
         except ImportError:
-            raise ImportError("datasets and huggingface_hub libraries required for HF dataset registration. Install with: pip install datasets huggingface_hub")
+            raise ImportError(
+                "datasets and huggingface_hub libraries required for HF dataset registration. Install with: pip install datasets huggingface_hub"
+            )
 
         logger.info(f"Registering HuggingFace dataset: {repo_name}")
 
@@ -224,16 +234,19 @@ def register_hf_dataset(
             logger.info(f"Retrieved HF metadata for {repo_name}")
         except Exception as e:
             logger.error(f"Failed to get HF dataset info for {repo_name}: {e}")
-            return {"success": False, "error": f"Could not access HuggingFace dataset {repo_name}: {e}"}
+            return {
+                "success": False,
+                "error": f"Could not access HuggingFace dataset {repo_name}: {e}",
+            }
 
         # Get dataset size (num_tasks)
         num_tasks = None
         try:
-            dataset = load_dataset(repo_name)['train']
+            dataset = load_dataset(repo_name)["train"]
             # Handle different dataset structures
-            if hasattr(dataset, '__len__'):
+            if hasattr(dataset, "__len__"):
                 num_tasks = len(dataset)
-            elif hasattr(dataset, 'num_rows'):
+            elif hasattr(dataset, "num_rows"):
                 num_tasks = dataset.num_rows
             logger.info(f"Dataset size: {num_tasks} rows")
         except Exception as e:
@@ -242,8 +255,8 @@ def register_hf_dataset(
 
         # Extract creator from repo name if not provided
         if not created_by:
-            if '/' in repo_name:
-                created_by = repo_name.split('/')[0]
+            if "/" in repo_name:
+                created_by = repo_name.split("/")[0]
             else:
                 created_by = "hf-uploader"
 
@@ -254,11 +267,13 @@ def register_hf_dataset(
             "access_method": "datasets_library",
             "registered_at": datetime.now(timezone.utc).isoformat(),
             "hf_metadata": {
-                "fingerprint": getattr(dataset, '_fingerprint', None) if 'dataset' in locals() else None,
-                "commit_hash": getattr(hf_info, 'sha', None),
-                "tags": getattr(hf_info, 'tags', []),
-                "description": getattr(hf_info, 'description', ''),
-            }
+                "fingerprint": getattr(dataset, "_fingerprint", None)
+                if "dataset" in locals()
+                else None,
+                "commit_hash": getattr(hf_info, "sha", None),
+                "tags": getattr(hf_info, "tags", []),
+                "description": getattr(hf_info, "description", ""),
+            },
         }
 
         # Add user-provided generation parameters
@@ -271,7 +286,6 @@ def register_hf_dataset(
             # Auto-filled system fields
             "creation_time": now.isoformat(),
             "updated_at": now.isoformat(),
-
             # Auto-filled from HF API
             "name": dataset_name,
             "created_by": created_by,
@@ -279,28 +293,30 @@ def register_hf_dataset(
             "creation_location": "HuggingFace",
             "generation_status": "completed",  # HF datasets are already generated
             "generation_parameters": auto_params,
-            "generation_start": generation_start.isoformat() if generation_start else None,
+            "generation_start": generation_start.isoformat()
+            if generation_start
+            else None,
             "generation_end": generation_end.isoformat() if generation_end else None,
-            "hf_fingerprint": getattr(dataset, '_fingerprint', None) if 'dataset' in locals() else None,
-            "hf_commit_hash": getattr(hf_info, 'sha', None),
+            "hf_fingerprint": getattr(dataset, "_fingerprint", None)
+            if "dataset" in locals()
+            else None,
+            "hf_commit_hash": getattr(hf_info, "sha", None),
             "num_tasks": num_tasks,
-
             # Required user field
             "dataset_type": dataset_type,
-
             # Optional user fields
             "data_generation_hash": data_generation_hash,
         }
 
         # Apply any additional overrides from kwargs
         for key, value in kwargs.items():
-            if key != 'generation_parameters':  # Already handled above
+            if key != "generation_parameters":  # Already handled above
                 dataset_data[key] = value
 
         # Create or update dataset in database
         if existing and forced_update:
             logger.info(f"Updating existing dataset entry for {dataset_name}")
-            result = update_dataset(existing['id'], dataset_data)
+            result = update_dataset(existing["id"], dataset_data)
             logger.info(f"Successfully updated HF dataset: {dataset_name}")
             return {"success": True, "dataset": result, "updated": True}
         else:
@@ -326,7 +342,7 @@ def register_local_parquet(
     hf_commit_hash: Optional[str] = None,
     generation_parameters: Optional[Dict] = None,
     forced_update: bool = True,
-    **kwargs
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Register a local parquet file as a dataset with comprehensive auto-filling.
@@ -359,7 +375,9 @@ def register_local_parquet(
         try:
             import pandas as pd
         except ImportError:
-            raise ImportError("pandas library required for parquet file registration. Install with: pip install pandas")
+            raise ImportError(
+                "pandas library required for parquet file registration. Install with: pip install pandas"
+            )
 
         logger.info(f"Registering local parquet dataset: {file_path}")
 
@@ -388,7 +406,9 @@ def register_local_parquet(
             file_size = file_stat.st_size
             last_modified = datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc)
 
-            logger.info(f"Parquet analysis: {num_tasks} rows, {len(df.columns)} columns, {file_size / 1024 / 1024:.2f} MB")
+            logger.info(
+                f"Parquet analysis: {num_tasks} rows, {len(df.columns)} columns, {file_size / 1024 / 1024:.2f} MB"
+            )
 
         except Exception as e:
             logger.error(f"Failed to analyze parquet file {abs_path}: {e}")
@@ -406,7 +426,7 @@ def register_local_parquet(
                 "num_columns": len(df.columns),
                 "column_names": list(df.columns),
                 "column_dtypes": {str(k): str(v) for k, v in df.dtypes.items()},
-            }
+            },
         }
 
         # Add user-provided generation parameters
@@ -419,7 +439,6 @@ def register_local_parquet(
             # Auto-filled system fields
             "creation_time": now.isoformat(),
             "updated_at": now.isoformat(),
-
             # Auto-filled from file system
             "data_location": abs_path,
             "generation_status": "completed",  # File exists so generation is complete
@@ -427,15 +446,15 @@ def register_local_parquet(
             "generation_parameters": auto_params,
             "num_tasks": num_tasks,
             "last_modified": last_modified.isoformat(),
-
             # Required user fields
             "name": name,
             "created_by": created_by,
             "dataset_type": dataset_type,
-
             # Optional user fields
             "data_generation_hash": data_generation_hash,
-            "generation_start": generation_start.isoformat() if generation_start else None,
+            "generation_start": generation_start.isoformat()
+            if generation_start
+            else None,
             "generation_end": generation_end.isoformat() if generation_end else None,
             "hf_fingerprint": hf_fingerprint,
             "hf_commit_hash": hf_commit_hash,
@@ -443,13 +462,13 @@ def register_local_parquet(
 
         # Apply any additional overrides from kwargs
         for key, value in kwargs.items():
-            if key != 'generation_parameters':  # Already handled above
+            if key != "generation_parameters":  # Already handled above
                 dataset_data[key] = value
 
         # Create or update dataset in database
         if existing and forced_update:
             logger.info(f"Updating existing dataset entry for {name}")
-            result = update_dataset(existing['id'], dataset_data)
+            result = update_dataset(existing["id"], dataset_data)
             logger.info(f"Successfully updated local parquet dataset: {name}")
             return {"success": True, "dataset": result, "updated": True}
         else:
@@ -465,16 +484,17 @@ def register_local_parquet(
 
 # ==================== MODEL UTILITIES ====================
 
+
 def get_model_by_name(name: str) -> Optional[Dict[str, Any]]:
     """Retrieve a model from the database by name."""
     try:
         client = get_supabase_client()
-        response = client.table('models').select('*').eq('name', name).execute()
+        response = client.table("models").select("*").eq("name", name).execute()
 
         if not response.data:
             return None
 
-        return clean_model_metadata(response.data[0])
+        return clean_model_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving model by name {name}: {e}")
         return None
@@ -484,12 +504,12 @@ def create_model(model_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new model in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('models').insert(model_data).execute()
+        response = client.table("models").insert(model_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create model")
 
-        return clean_model_metadata(response.data[0])
+        return clean_model_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating model: {e}")
         raise
@@ -499,18 +519,21 @@ def update_model(model_id: str, model_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update an existing model in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('models').update(model_data).eq('id', model_id).execute()
+        response = (
+            client.table("models").update(model_data).eq("id", model_id).execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update model with ID {model_id}")
 
-        return clean_model_metadata(response.data[0])
+        return clean_model_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating model {model_id}: {e}")
         raise
 
 
 # ==================== MODEL REGISTRATION FUNCTIONS ====================
+
 
 def register_hf_model(
     repo_name: str,
@@ -529,7 +552,7 @@ def register_hf_model(
     description: Optional[str] = None,
     multiple_datasets: bool = False,
     forced_update: bool = True,
-    **kwargs
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Register a HuggingFace model with comprehensive auto-filling.
@@ -569,7 +592,9 @@ def register_hf_model(
         try:
             from huggingface_hub import model_info, hf_hub_download
         except ImportError:
-            raise ImportError("huggingface_hub library required for HF model registration. Install with: pip install huggingface_hub")
+            raise ImportError(
+                "huggingface_hub library required for HF model registration. Install with: pip install huggingface_hub"
+            )
 
         logger.info(f"Registering HuggingFace model: {repo_name}")
 
@@ -578,7 +603,7 @@ def register_hf_model(
         existing = get_model_by_name(model_name)
         if existing and not forced_update:
             logger.info(f"Model {model_name} already exists")
-            return {"success": True, "model": existing['id'], "exists": True}
+            return {"success": True, "model": existing["id"], "exists": True}
 
         # Handle multi-dataset validation
         final_dataset_id = None
@@ -586,7 +611,9 @@ def register_hf_model(
 
         if multiple_datasets and dataset_names:
             # Multi-dataset mode: validate all datasets exist by name
-            datasets_to_validate = [d.strip() for d in dataset_names.split(',') if d.strip()]
+            datasets_to_validate = [
+                d.strip() for d in dataset_names.split(",") if d.strip()
+            ]
 
             # Validate each dataset exists
             for ds_name in datasets_to_validate:
@@ -597,7 +624,9 @@ def register_hf_model(
 
             final_dataset_id = None  # Don't use single dataset_id in multi mode
             final_dataset_names = dataset_names
-            logger.info(f"Validated {len(datasets_to_validate)} datasets for multi-dataset model")
+            logger.info(
+                f"Validated {len(datasets_to_validate)} datasets for multi-dataset model"
+            )
 
         elif dataset_id:
             # Single dataset mode (backwards compat): validate single UUID
@@ -615,7 +644,10 @@ def register_hf_model(
             logger.info(f"Retrieved HF metadata for {repo_name}")
         except Exception as e:
             logger.error(f"Failed to get HF model info for {repo_name}: {e}")
-            return {"success": False, "error": f"Could not access HuggingFace model {repo_name}: {e}"}
+            return {
+                "success": False,
+                "error": f"Could not access HuggingFace model {repo_name}: {e}",
+            }
 
         # Try to get model config
         model_config = {}
@@ -623,7 +655,8 @@ def register_hf_model(
             # Try to download and read config.json
             config_path = hf_hub_download(repo_id=repo_name, filename="config.json")
             import json
-            with open(config_path, 'r') as f:
+
+            with open(config_path, "r") as f:
                 model_config = json.load(f)
             logger.info(f"Retrieved model config for {repo_name}")
         except Exception as e:
@@ -631,14 +664,16 @@ def register_hf_model(
 
         # Extract creator from repo name if not provided
         if not created_by:
-            if '/' in repo_name:
-                created_by = repo_name.split('/')[0]
+            if "/" in repo_name:
+                created_by = repo_name.split("/")[0]
             else:
                 created_by = "hf-uploader"
 
         # Extract description from model card if not provided
         if not description:
-            description = getattr(hf_info, 'cardData', {}).get('description') or getattr(hf_info, 'description', '')
+            description = getattr(hf_info, "cardData", {}).get(
+                "description"
+            ) or getattr(hf_info, "description", "")
 
         # Prepare auto-filled training parameters
         auto_params = {
@@ -646,13 +681,13 @@ def register_hf_model(
             "source": "huggingface_hub",
             "registered_at": datetime.now(timezone.utc).isoformat(),
             "hf_metadata": {
-                "model_id": getattr(hf_info, 'modelId', None),
-                "sha": getattr(hf_info, 'sha', None),
-                "tags": getattr(hf_info, 'tags', []),
-                "pipeline_tag": getattr(hf_info, 'pipeline_tag', None),
-                "library_name": getattr(hf_info, 'library_name', None),
-                "downloads": getattr(hf_info, 'downloads', None),
-                "likes": getattr(hf_info, 'likes', None),
+                "model_id": getattr(hf_info, "modelId", None),
+                "sha": getattr(hf_info, "sha", None),
+                "tags": getattr(hf_info, "tags", []),
+                "pipeline_tag": getattr(hf_info, "pipeline_tag", None),
+                "library_name": getattr(hf_info, "library_name", None),
+                "downloads": getattr(hf_info, "downloads", None),
+                "likes": getattr(hf_info, "likes", None),
             },
             "model_config": model_config,
         }
@@ -667,7 +702,6 @@ def register_hf_model(
             # Auto-filled system fields
             "creation_time": now.isoformat(),
             "updated_at": now.isoformat(),
-
             # Auto-filled from HF
             "name": model_name,
             "created_by": created_by,
@@ -677,16 +711,16 @@ def register_hf_model(
             "training_status": "completed",  # HF models are already trained
             "training_parameters": auto_params,
             "description": description,
-
             # Required user fields
             "agent_id": agent_id,
             "training_start": training_start.isoformat(),
-
             # Optional user fields
             "base_model_id": base_model_id,
             "dataset_id": final_dataset_id,
             "dataset_names": final_dataset_names,
-            "training_end": training_end.isoformat() if training_end else now.isoformat(),
+            "training_end": training_end.isoformat()
+            if training_end
+            else now.isoformat(),
             "training_type": training_type,
             "wandb_link": wandb_link,
             "traces_location_s3": traces_location_s3,
@@ -694,20 +728,20 @@ def register_hf_model(
 
         # Apply any additional overrides from kwargs
         for key, value in kwargs.items():
-            if key != 'training_parameters':  # Already handled above
+            if key != "training_parameters":  # Already handled above
                 model_data[key] = value
 
         # Create or update model in database
         if existing and forced_update:
             logger.info(f"Updating existing model entry for {model_name}")
-            result = update_model(existing['id'], model_data)
+            result = update_model(existing["id"], model_data)
             logger.info(f"Successfully updated HF model: {model_name}")
-            return {"success": True, "model": result['id'], "updated": True}
+            return {"success": True, "model": result["id"], "updated": True}
         else:
             logger.info(f"Creating model entry for {model_name}")
             result = create_model(model_data)
             logger.info(f"Successfully registered HF model: {model_name}")
-            return {"success": True, "model": result['id']}
+            return {"success": True, "model": result["id"]}
 
     except Exception as e:
         logger.error(f"Failed to register HF model {repo_name}: {e}")
@@ -731,7 +765,7 @@ def register_local_model(
     description: Optional[str] = None,
     multiple_datasets: bool = False,
     forced_update: bool = True,
-    **kwargs
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Register a local model with comprehensive auto-filling.
@@ -776,7 +810,10 @@ def register_local_model(
             return {"success": False, "error": f"Model path does not exist: {abs_path}"}
 
         if not os.path.isdir(abs_path):
-            return {"success": False, "error": f"Model path is not a directory: {abs_path}"}
+            return {
+                "success": False,
+                "error": f"Model path is not a directory: {abs_path}",
+            }
 
         # Check if model already exists
         existing = get_model_by_name(name)
@@ -790,7 +827,9 @@ def register_local_model(
 
         if multiple_datasets and dataset_names:
             # Multi-dataset mode: validate all datasets exist by name
-            datasets_to_validate = [d.strip() for d in dataset_names.split(',') if d.strip()]
+            datasets_to_validate = [
+                d.strip() for d in dataset_names.split(",") if d.strip()
+            ]
 
             # Validate each dataset exists
             for ds_name in datasets_to_validate:
@@ -801,7 +840,9 @@ def register_local_model(
 
             final_dataset_id = None  # Don't use single dataset_id in multi mode
             final_dataset_names = dataset_names
-            logger.info(f"Validated {len(datasets_to_validate)} datasets for multi-dataset model")
+            logger.info(
+                f"Validated {len(datasets_to_validate)} datasets for multi-dataset model"
+            )
 
         elif dataset_id:
             # Single dataset mode (backwards compat): validate single UUID
@@ -817,8 +858,11 @@ def register_local_model(
         model_files = os.listdir(abs_path)
         model_info = {
             "files": model_files,
-            "total_size_bytes": sum(os.path.getsize(os.path.join(abs_path, f))
-                                   for f in model_files if os.path.isfile(os.path.join(abs_path, f))),
+            "total_size_bytes": sum(
+                os.path.getsize(os.path.join(abs_path, f))
+                for f in model_files
+                if os.path.isfile(os.path.join(abs_path, f))
+            ),
         }
 
         # Try to load config.json if it exists
@@ -827,7 +871,8 @@ def register_local_model(
         if os.path.exists(config_path):
             try:
                 import json
-                with open(config_path, 'r') as f:
+
+                with open(config_path, "r") as f:
                     config_data = json.load(f)
                 logger.info(f"Loaded config.json from {abs_path}")
             except Exception as e:
@@ -838,9 +883,9 @@ def register_local_model(
             readme_path = os.path.join(abs_path, "README.md")
             if os.path.exists(readme_path):
                 try:
-                    with open(readme_path, 'r') as f:
+                    with open(readme_path, "r") as f:
                         description = f.read()[:500]  # First 500 chars
-                    logger.info(f"Extracted description from README.md")
+                    logger.info("Extracted description from README.md")
                 except Exception as e:
                     logger.warning(f"Could not read README.md: {e}")
 
@@ -883,7 +928,6 @@ def register_local_model(
             # Auto-filled system fields
             "creation_time": now.isoformat(),
             "updated_at": now.isoformat(),
-
             # Auto-filled from filesystem
             "weights_location": abs_path,
             "creation_location": "local",
@@ -891,13 +935,11 @@ def register_local_model(
             "training_status": training_status,
             "training_parameters": auto_params,
             "description": description,
-
             # Required user fields
             "name": name,
             "created_by": created_by,
             "agent_id": agent_id,
             "training_start": training_start.isoformat(),
-
             # Optional user fields
             "base_model_id": base_model_id,
             "dataset_id": final_dataset_id,
@@ -910,13 +952,13 @@ def register_local_model(
 
         # Apply any additional overrides from kwargs
         for key, value in kwargs.items():
-            if key != 'training_parameters':  # Already handled above
+            if key != "training_parameters":  # Already handled above
                 model_data[key] = value
 
         # Create or update model in database
         if existing and forced_update:
             logger.info(f"Updating existing model entry for {name}")
-            result = update_model(existing['id'], model_data)
+            result = update_model(existing["id"], model_data)
             logger.info(f"Successfully updated local model: {name}")
             return {"success": True, "model": result, "updated": True}
         else:
@@ -940,8 +982,10 @@ BASE_MODEL_TRAINING_START_SENTINEL = "1970-01-01T00:00:00Z"
 
 
 # ---- Helper: parse HF model name from URLs ----
-import re
-HF_RE = re.compile(r'https?://(?:www\.)?huggingface\.co/([^/\s]+)/([^/\s#?]+)')
+import re  # noqa: E402
+
+HF_RE = re.compile(r"https?://(?:www\.)?huggingface\.co/([^/\s]+)/([^/\s#?]+)")
+
 
 def parse_hf_model_name(val: Any) -> Optional[str]:
     """
@@ -972,13 +1016,13 @@ def parse_hf_model_name(val: Any) -> Optional[str]:
             return f"{m.group(1)}/{m.group(2)}"
     return None
 
+
 def register_trained_model(
-    training_record: Dict[str, Any],
-    forced_update: bool = False
+    training_record: Dict[str, Any], forced_update: bool = False
 ) -> Dict[str, Any]:
     """
     Register a newly trained model (SFT/RL)
-    
+
     Expected training_record keys:
       - agent_name (str): trainer agent name
       - training_start (str|datetime)
@@ -993,17 +1037,17 @@ def register_trained_model(
     """
     try:
         # ---- Validate required fields ----
-        agent_name = training_record.get('agent_name')
-        base_model_name = training_record.get('base_model_name')
-        dataset_name = training_record.get('dataset_name')
-        training_type = training_record.get('training_type')
+        agent_name = training_record.get("agent_name")
+        base_model_name = training_record.get("base_model_name")
+        dataset_name = training_record.get("dataset_name")
+        training_type = training_record.get("training_type")
         if not agent_name:
             return {"success": False, "error": "agent_name is required"}
         if not base_model_name:
             return {"success": False, "error": "base_model_name is required"}
         if not dataset_name:
             return {"success": False, "error": "dataset_name is required"}
-        if training_type not in ('SFT', 'RL'):
+        if training_type not in ("SFT", "RL"):
             return {"success": False, "error": "training_type must be 'SFT' or 'RL'"}
 
         # ---- Parse timestamps ----
@@ -1013,17 +1057,21 @@ def register_trained_model(
             if isinstance(val, datetime):
                 return val
             if isinstance(val, str):
-                return datetime.fromisoformat(val.replace('Z', '+00:00')) if val.endswith('Z') else datetime.fromisoformat(val)
+                return (
+                    datetime.fromisoformat(val.replace("Z", "+00:00"))
+                    if val.endswith("Z")
+                    else datetime.fromisoformat(val)
+                )
             raise ValueError("timestamp must be datetime or ISO string")
 
-        raw_start = training_record.get('training_start')
+        raw_start = training_record.get("training_start")
         if not raw_start:
             return {"success": False, "error": "training_start is required"}
         training_start_dt = _parse_ts(raw_start)
-        training_end_dt = _parse_ts(training_record.get('training_end'))
+        training_end_dt = _parse_ts(training_record.get("training_end"))
 
         # ---- Normalize training_parameters ----
-        params = training_record.get('training_parameters')
+        params = training_record.get("training_parameters")
         if params is None:
             training_params = {}
         elif isinstance(params, dict):
@@ -1036,24 +1084,24 @@ def register_trained_model(
         else:
             training_params = {"raw": params}
 
-        created_by = training_record.get('created_by') or ''
-        wandb_link = training_record.get('wandb_link') or ''
-        traces_location_s3 = training_record.get('traces_location_s3') or ''
-        explicit_name = (training_record.get('model_name') or '').strip()
+        created_by = training_record.get("created_by") or ""
+        wandb_link = training_record.get("wandb_link") or ""
+        traces_location_s3 = training_record.get("traces_location_s3") or ""
+        explicit_name = (training_record.get("model_name") or "").strip()
 
         # ---- Ensure agent exists ----
         agent_res = register_agent(name=agent_name)
-        if not agent_res.get('success'):
+        if not agent_res.get("success"):
             return agent_res
-        agent = agent_res['agent']
-        agent_id = agent['id']
+        agent = agent_res["agent"]
+        agent_id = agent["id"]
 
         # ---- Ensure dataset(s) exist (HF) ----
         def _normalize_dataset_list(raw: Any) -> List[str]:
             if raw is None:
                 return []
             if isinstance(raw, str):
-                parts = raw.split(',')
+                parts = raw.split(",")
             elif isinstance(raw, (list, tuple, set)):
                 parts = list(raw)
             else:
@@ -1065,8 +1113,10 @@ def register_trained_model(
                     norm.append(name)
             return norm
 
-        dataset_names_raw = training_record.get('dataset_names')
-        dataset_list = _normalize_dataset_list(dataset_names_raw) or _normalize_dataset_list(dataset_name)
+        dataset_names_raw = training_record.get("dataset_names")
+        dataset_list = _normalize_dataset_list(
+            dataset_names_raw
+        ) or _normalize_dataset_list(dataset_name)
         if not dataset_list:
             return {"success": False, "error": "No valid dataset_name(s) provided"}
 
@@ -1083,10 +1133,13 @@ def register_trained_model(
                     name=dataset_name_single,
                     created_by=created_by,
                 )
-                if not ds_res.get('success'):
-                    return {"success": False, "error": ds_res.get('error', 'Dataset registration failed')}
-                ds = ds_res['dataset']
-            dataset_id = ds['id']
+                if not ds_res.get("success"):
+                    return {
+                        "success": False,
+                        "error": ds_res.get("error", "Dataset registration failed"),
+                    }
+                ds = ds_res["dataset"]
+            dataset_id = ds["id"]
         else:
             dataset_names_csv = ",".join(dataset_list)
             for name in dataset_list:
@@ -1098,17 +1151,29 @@ def register_trained_model(
                         name=name,
                         created_by=created_by,
                     )
-                    if not ds_res.get('success'):
-                        return {"success": False, "error": ds_res.get('error', 'Dataset registration failed')}
+                    if not ds_res.get("success"):
+                        return {
+                            "success": False,
+                            "error": ds_res.get("error", "Dataset registration failed"),
+                        }
 
         # ---- Ensure base model exists WITH training_start sentinel ----
         base_m = get_model_by_name(base_model_name)
         if not base_m:
             now_ts = datetime.now(timezone.utc).isoformat()
-            base_model_training_start = BASE_MODEL_TRAINING_START_SENTINEL  # e.g. "1970-01-01T00:00:00+00:00"
+            base_model_training_start = (
+                BASE_MODEL_TRAINING_START_SENTINEL  # e.g. "1970-01-01T00:00:00+00:00"
+            )
             base_payload = {
                 "name": base_model_name,
-                "created_by": (created_by or (base_model_name.split('/')[0] if '/' in base_model_name else "hf-uploader")),
+                "created_by": (
+                    created_by
+                    or (
+                        base_model_name.split("/")[0]
+                        if "/" in base_model_name
+                        else "hf-uploader"
+                    )
+                ),
                 "creation_location": "HuggingFace",
                 "creation_time": now_ts,
                 "updated_at": now_ts,
@@ -1124,23 +1189,28 @@ def register_trained_model(
                 },
             }
             base_m = create_model(base_payload)
-        base_model_id = base_m['id']
+        base_model_id = base_m["id"]
 
         # ---- Decide trained model name (prefer HF repo if present) ----
         def looks_like_org_repo(name: str) -> bool:
-            return '/' in name and not name.endswith('/')
+            return "/" in name and not name.endswith("/")
 
         hf_from_explicit = explicit_name if looks_like_org_repo(explicit_name) else None
-        hf_from_params = parse_hf_model_name(params) or parse_hf_model_name(training_params)
+        hf_from_params = parse_hf_model_name(params) or parse_hf_model_name(
+            training_params
+        )
 
         if hf_from_explicit:
             model_name = hf_from_explicit
         elif hf_from_params:
             model_name = hf_from_params
-        else: # Must provide the exact HF model repo name
-            model_name = training_record.get('hf_model_repo_name')
+        else:  # Must provide the exact HF model repo name
+            model_name = training_record.get("hf_model_repo_name")
             if not model_name:
-                return {"success": False, "error": "model_name or hf_model_repo_name required"}
+                return {
+                    "success": False,
+                    "error": "model_name or hf_model_repo_name required",
+                }
 
         # ---- Build model row ----
         existing = get_model_by_name(model_name)
@@ -1149,7 +1219,7 @@ def register_trained_model(
         weights_location = f"https://huggingface.co/{model_name}"
         is_external = True
 
-        training_status = 'completed' if training_end_dt else 'in_progress'
+        training_status = "completed" if training_end_dt else "in_progress"
 
         model_data = {
             "name": model_name,
@@ -1162,18 +1232,15 @@ def register_trained_model(
             "training_status": training_status,
             "training_parameters": training_params,
             "description": None,
-
             # FKs / metadata
             "agent_id": agent_id,
             "base_model_id": base_model_id,
             "dataset_id": dataset_id,
             "dataset_names": dataset_names_csv,
             "training_type": training_type,
-
             # Times
             "training_start": training_start_dt.isoformat(),
             "training_end": training_end_dt.isoformat() if training_end_dt else None,
-
             # Optional links
             "wandb_link": wandb_link,
             "traces_location_s3": traces_location_s3,
@@ -1183,7 +1250,7 @@ def register_trained_model(
         if existing and not forced_update:
             return {"success": True, "model": existing, "exists": True}
         if existing and forced_update:
-            updated = update_model(existing['id'], model_data)
+            updated = update_model(existing["id"], model_data)
             return {"success": True, "model": updated, "updated": True}
         created = create_model(model_data)
         return {"success": True, "model": created}
@@ -1192,19 +1259,20 @@ def register_trained_model(
         logger.error(f"Failed to register trained model: {e}")
         return {"success": False, "error": str(e)}
 
-      
+
 # ==================== AGENT UTILITIES ====================
+
 
 def get_agent_by_name(name: str) -> Optional[Dict[str, Any]]:
     """Retrieve an agent from the database by name."""
     try:
         client = get_supabase_client()
-        response = client.table('agents').select('*').eq('name', name).execute()
+        response = client.table("agents").select("*").eq("name", name).execute()
 
         if not response.data:
             return None
 
-        return clean_agent_metadata(response.data[0])
+        return clean_agent_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving agent by name {name}: {e}")
         return None
@@ -1214,12 +1282,12 @@ def create_agent(agent_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new agent in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('agents').insert(agent_data).execute()
+        response = client.table("agents").insert(agent_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create agent")
 
-        return clean_agent_metadata(response.data[0])
+        return clean_agent_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating agent: {e}")
         raise
@@ -1229,12 +1297,14 @@ def update_agent(agent_id: str, agent_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update an existing agent in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('agents').update(agent_data).eq('id', agent_id).execute()
+        response = (
+            client.table("agents").update(agent_data).eq("id", agent_id).execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update agent with ID {agent_id}")
 
-        return clean_agent_metadata(response.data[0])
+        return clean_agent_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating agent {agent_id}: {e}")
         raise
@@ -1242,11 +1312,12 @@ def update_agent(agent_id: str, agent_data: Dict[str, Any]) -> Dict[str, Any]:
 
 # ==================== AGENT REGISTRATION FUNCTIONS ====================
 
+
 def register_agent(
     name: str,
     agent_version_hash: Optional[str] = None,
     description: Optional[str] = None,
-    forced_update: bool = True
+    forced_update: bool = True,
 ) -> Dict[str, Any]:
     """
     Register an evaluation agent with minimal auto-filling.
@@ -1268,7 +1339,10 @@ def register_agent(
 
         # Validate agent_version_hash length if provided
         if agent_version_hash and len(agent_version_hash) != 64:
-            return {"success": False, "error": "agent_version_hash must be exactly 64 characters (SHA-256 hash)"}
+            return {
+                "success": False,
+                "error": "agent_version_hash must be exactly 64 characters (SHA-256 hash)",
+            }
 
         # Check if agent already exists
         existing = get_agent_by_name(name)
@@ -1281,17 +1355,16 @@ def register_agent(
         agent_data = {
             # Auto-filled system fields
             "updated_at": now.isoformat(),
-
             # Manual user fields
             "name": name,
             "agent_version_hash": agent_version_hash,
-            "description": description
+            "description": description,
         }
 
         # Create or update agent in database
         if existing and forced_update:
             logger.info(f"Updating existing agent entry for {name}")
-            result = update_agent(existing['id'], agent_data)
+            result = update_agent(existing["id"], agent_data)
             logger.info(f"Successfully updated agent: {name}")
             return {"success": True, "agent": result, "updated": True}
         else:
@@ -1307,16 +1380,17 @@ def register_agent(
 
 # ==================== BENCHMARK UTILITIES ====================
 
+
 def get_benchmark_by_name(name: str) -> Optional[Dict[str, Any]]:
     """Retrieve a benchmark from the database by name."""
     try:
         client = get_supabase_client()
-        response = client.table('benchmarks').select('*').eq('name', name).execute()
+        response = client.table("benchmarks").select("*").eq("name", name).execute()
 
         if not response.data:
             return None
 
-        return clean_benchmark_metadata(response.data[0])
+        return clean_benchmark_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving benchmark by name {name}: {e}")
         return None
@@ -1326,27 +1400,34 @@ def create_benchmark(benchmark_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new benchmark in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('benchmarks').insert(benchmark_data).execute()
+        response = client.table("benchmarks").insert(benchmark_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create benchmark")
 
-        return clean_benchmark_metadata(response.data[0])
+        return clean_benchmark_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating benchmark: {e}")
         raise
 
 
-def update_benchmark(benchmark_id: str, benchmark_data: Dict[str, Any]) -> Dict[str, Any]:
+def update_benchmark(
+    benchmark_id: str, benchmark_data: Dict[str, Any]
+) -> Dict[str, Any]:
     """Update an existing benchmark in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('benchmarks').update(benchmark_data).eq('id', benchmark_id).execute()
+        response = (
+            client.table("benchmarks")
+            .update(benchmark_data)
+            .eq("id", benchmark_id)
+            .execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update benchmark with ID {benchmark_id}")
 
-        return clean_benchmark_metadata(response.data[0])
+        return clean_benchmark_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating benchmark {benchmark_id}: {e}")
         raise
@@ -1354,13 +1435,14 @@ def update_benchmark(benchmark_id: str, benchmark_data: Dict[str, Any]) -> Dict[
 
 # ==================== BENCHMARK REGISTRATION FUNCTIONS ====================
 
+
 def register_benchmark(
     name: str,
     benchmark_version_hash: Optional[str] = None,
     is_external: bool = False,
     external_link: Optional[str] = None,
     description: Optional[str] = None,
-    forced_update: bool = True
+    forced_update: bool = True,
 ) -> Dict[str, Any]:
     """
     Register an evaluation benchmark with minimal auto-filling.
@@ -1384,7 +1466,10 @@ def register_benchmark(
 
         # Validate benchmark_version_hash length if provided
         if benchmark_version_hash and len(benchmark_version_hash) != 64:
-            return {"success": False, "error": "benchmark_version_hash must be exactly 64 characters (SHA-256 hash)"}
+            return {
+                "success": False,
+                "error": "benchmark_version_hash must be exactly 64 characters (SHA-256 hash)",
+            }
 
         # Check if benchmark already exists
         existing = get_benchmark_by_name(name)
@@ -1397,19 +1482,18 @@ def register_benchmark(
         benchmark_data = {
             # Auto-filled system fields
             "updated_at": now.isoformat(),
-
             # Manual user fields
             "name": name,
             "benchmark_version_hash": benchmark_version_hash,
             "is_external": is_external,
             "external_link": external_link,
-            "description": description
+            "description": description,
         }
 
         # Create or update benchmark in database
         if existing and forced_update:
             logger.info(f"Updating existing benchmark entry for {name}")
-            result = update_benchmark(existing['id'], benchmark_data)
+            result = update_benchmark(existing["id"], benchmark_data)
             logger.info(f"Successfully updated benchmark: {name}")
             return {"success": True, "benchmark": result, "updated": True}
         else:
@@ -1424,6 +1508,7 @@ def register_benchmark(
 
 
 # ==================== DELETE UTILITIES ====================
+
 
 def delete_dataset_by_id(dataset_id: str) -> Dict[str, Any]:
     """
@@ -1440,26 +1525,48 @@ def delete_dataset_by_id(dataset_id: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if dataset exists and get its name for logging
-        existing = client.table('datasets').select('name').eq('id', dataset_id).execute()
+        existing = (
+            client.table("datasets").select("name").eq("id", dataset_id).execute()
+        )
         if not existing.data:
-            return {"success": False, "error": f"Dataset with ID {dataset_id} not found"}
+            return {
+                "success": False,
+                "error": f"Dataset with ID {dataset_id} not found",
+            }
 
-        dataset_name = existing.data[0]['name']
+        dataset_name = existing.data[0]["name"]
 
         # Check for foreign key constraints (models referencing this dataset)
-        models_using_dataset = client.table('models').select('id, name').eq('dataset_id', dataset_id).execute()
+        models_using_dataset = (
+            client.table("models")
+            .select("id, name")
+            .eq("dataset_id", dataset_id)
+            .execute()
+        )
         if models_using_dataset.data:
-            model_names = [model['name'] for model in models_using_dataset.data]
-            return {"success": False, "error": f"Cannot delete dataset '{dataset_name}': referenced by models: {', '.join(model_names)}"}
+            model_names = [model["name"] for model in models_using_dataset.data]
+            return {
+                "success": False,
+                "error": f"Cannot delete dataset '{dataset_name}': referenced by models: {', '.join(model_names)}",
+            }
 
         # Delete the dataset
-        response = client.table('datasets').delete().eq('id', dataset_id).execute()
+        response = client.table("datasets").delete().eq("id", dataset_id).execute()
 
         if response.data:
-            logger.info(f"Successfully deleted dataset: {dataset_name} (ID: {dataset_id})")
-            return {"success": True, "message": f"Dataset '{dataset_name}' deleted successfully", "deleted_id": dataset_id}
+            logger.info(
+                f"Successfully deleted dataset: {dataset_name} (ID: {dataset_id})"
+            )
+            return {
+                "success": True,
+                "message": f"Dataset '{dataset_name}' deleted successfully",
+                "deleted_id": dataset_id,
+            }
         else:
-            return {"success": False, "error": f"Failed to delete dataset with ID {dataset_id}"}
+            return {
+                "success": False,
+                "error": f"Failed to delete dataset with ID {dataset_id}",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting dataset by ID {dataset_id}: {e}")
@@ -1484,7 +1591,7 @@ def delete_dataset_by_name(name: str) -> Dict[str, Any]:
             return {"success": False, "error": f"Dataset with name '{name}' not found"}
 
         # Use delete by ID
-        return delete_dataset_by_id(dataset['id'])
+        return delete_dataset_by_id(dataset["id"])
 
     except Exception as e:
         logger.error(f"Error deleting dataset by name {name}: {e}")
@@ -1506,26 +1613,38 @@ def delete_agent_by_id(agent_id: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if agent exists and get its name for logging
-        existing = client.table('agents').select('name').eq('id', agent_id).execute()
+        existing = client.table("agents").select("name").eq("id", agent_id).execute()
         if not existing.data:
             return {"success": False, "error": f"Agent with ID {agent_id} not found"}
 
-        agent_name = existing.data[0]['name']
+        agent_name = existing.data[0]["name"]
 
         # Check for foreign key constraints (models referencing this agent)
-        models_using_agent = client.table('models').select('id, name').eq('agent_id', agent_id).execute()
+        models_using_agent = (
+            client.table("models").select("id, name").eq("agent_id", agent_id).execute()
+        )
         if models_using_agent.data:
-            model_names = [model['name'] for model in models_using_agent.data]
-            return {"success": False, "error": f"Cannot delete agent '{agent_name}': referenced by models: {', '.join(model_names)}"}
+            model_names = [model["name"] for model in models_using_agent.data]
+            return {
+                "success": False,
+                "error": f"Cannot delete agent '{agent_name}': referenced by models: {', '.join(model_names)}",
+            }
 
         # Delete the agent
-        response = client.table('agents').delete().eq('id', agent_id).execute()
+        response = client.table("agents").delete().eq("id", agent_id).execute()
 
         if response.data:
             logger.info(f"Successfully deleted agent: {agent_name} (ID: {agent_id})")
-            return {"success": True, "message": f"Agent '{agent_name}' deleted successfully", "deleted_id": agent_id}
+            return {
+                "success": True,
+                "message": f"Agent '{agent_name}' deleted successfully",
+                "deleted_id": agent_id,
+            }
         else:
-            return {"success": False, "error": f"Failed to delete agent with ID {agent_id}"}
+            return {
+                "success": False,
+                "error": f"Failed to delete agent with ID {agent_id}",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting agent by ID {agent_id}: {e}")
@@ -1550,7 +1669,7 @@ def delete_agent_by_name(name: str) -> Dict[str, Any]:
             return {"success": False, "error": f"Agent with name '{name}' not found"}
 
         # Use delete by ID
-        return delete_agent_by_id(agent['id'])
+        return delete_agent_by_id(agent["id"])
 
     except Exception as e:
         logger.error(f"Error deleting agent by name {name}: {e}")
@@ -1572,26 +1691,41 @@ def delete_model_by_id(model_id: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if model exists and get its name for logging
-        existing = client.table('models').select('name').eq('id', model_id).execute()
+        existing = client.table("models").select("name").eq("id", model_id).execute()
         if not existing.data:
             return {"success": False, "error": f"Model with ID {model_id} not found"}
 
-        model_name = existing.data[0]['name']
+        model_name = existing.data[0]["name"]
 
         # Check for foreign key constraints (models referencing this model as base_model)
-        models_using_base = client.table('models').select('id, name').eq('base_model_id', model_id).execute()
+        models_using_base = (
+            client.table("models")
+            .select("id, name")
+            .eq("base_model_id", model_id)
+            .execute()
+        )
         if models_using_base.data:
-            dependent_names = [model['name'] for model in models_using_base.data]
-            return {"success": False, "error": f"Cannot delete model '{model_name}': used as base model by: {', '.join(dependent_names)}"}
+            dependent_names = [model["name"] for model in models_using_base.data]
+            return {
+                "success": False,
+                "error": f"Cannot delete model '{model_name}': used as base model by: {', '.join(dependent_names)}",
+            }
 
         # Delete the model
-        response = client.table('models').delete().eq('id', model_id).execute()
+        response = client.table("models").delete().eq("id", model_id).execute()
 
         if response.data:
             logger.info(f"Successfully deleted model: {model_name} (ID: {model_id})")
-            return {"success": True, "message": f"Model '{model_name}' deleted successfully", "deleted_id": model_id}
+            return {
+                "success": True,
+                "message": f"Model '{model_name}' deleted successfully",
+                "deleted_id": model_id,
+            }
         else:
-            return {"success": False, "error": f"Failed to delete model with ID {model_id}"}
+            return {
+                "success": False,
+                "error": f"Failed to delete model with ID {model_id}",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting model by ID {model_id}: {e}")
@@ -1616,7 +1750,7 @@ def delete_model_by_name(name: str) -> Dict[str, Any]:
             return {"success": False, "error": f"Model with name '{name}' not found"}
 
         # Use delete by ID
-        return delete_model_by_id(model['id'])
+        return delete_model_by_id(model["id"])
 
     except Exception as e:
         logger.error(f"Error deleting model by name {name}: {e}")
@@ -1638,23 +1772,37 @@ def delete_benchmark_by_id(benchmark_id: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if benchmark exists and get its name for logging
-        existing = client.table('benchmarks').select('name').eq('id', benchmark_id).execute()
+        existing = (
+            client.table("benchmarks").select("name").eq("id", benchmark_id).execute()
+        )
         if not existing.data:
-            return {"success": False, "error": f"Benchmark with ID {benchmark_id} not found"}
+            return {
+                "success": False,
+                "error": f"Benchmark with ID {benchmark_id} not found",
+            }
 
-        benchmark_name = existing.data[0]['name']
+        benchmark_name = existing.data[0]["name"]
 
         # Benchmarks currently have no foreign key constraints, so we can delete directly
         # Note: If benchmark results tables are added later, check those constraints here
 
         # Delete the benchmark
-        response = client.table('benchmarks').delete().eq('id', benchmark_id).execute()
+        response = client.table("benchmarks").delete().eq("id", benchmark_id).execute()
 
         if response.data:
-            logger.info(f"Successfully deleted benchmark: {benchmark_name} (ID: {benchmark_id})")
-            return {"success": True, "message": f"Benchmark '{benchmark_name}' deleted successfully", "deleted_id": benchmark_id}
+            logger.info(
+                f"Successfully deleted benchmark: {benchmark_name} (ID: {benchmark_id})"
+            )
+            return {
+                "success": True,
+                "message": f"Benchmark '{benchmark_name}' deleted successfully",
+                "deleted_id": benchmark_id,
+            }
         else:
-            return {"success": False, "error": f"Failed to delete benchmark with ID {benchmark_id}"}
+            return {
+                "success": False,
+                "error": f"Failed to delete benchmark with ID {benchmark_id}",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting benchmark by ID {benchmark_id}: {e}")
@@ -1676,10 +1824,13 @@ def delete_benchmark_by_name(name: str) -> Dict[str, Any]:
         # First get the benchmark ID
         benchmark = get_benchmark_by_name(name)
         if not benchmark:
-            return {"success": False, "error": f"Benchmark with name '{name}' not found"}
+            return {
+                "success": False,
+                "error": f"Benchmark with name '{name}' not found",
+            }
 
         # Use delete by ID
-        return delete_benchmark_by_id(benchmark['id'])
+        return delete_benchmark_by_id(benchmark["id"])
 
     except Exception as e:
         logger.error(f"Error deleting benchmark by name {name}: {e}")
@@ -1688,16 +1839,19 @@ def delete_benchmark_by_name(name: str) -> Dict[str, Any]:
 
 # ==================== SANDBOX TASK UTILITIES ====================
 
+
 def get_sandbox_task_by_checksum(checksum: str) -> Optional[Dict[str, Any]]:
     """Retrieve a sandbox task from the database by checksum (PK)."""
     try:
         client = get_supabase_client()
-        response = client.table('sandbox_tasks').select('*').eq('checksum', checksum).execute()
+        response = (
+            client.table("sandbox_tasks").select("*").eq("checksum", checksum).execute()
+        )
 
         if not response.data:
             return None
 
-        return clean_sandbox_task_metadata(response.data[0])
+        return clean_sandbox_task_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving sandbox task by checksum {checksum}: {e}")
         return None
@@ -1707,12 +1861,18 @@ def get_sandbox_task_by_name(source: str, name: str) -> Optional[Dict[str, Any]]
     """Retrieve a sandbox task from the database by source and name."""
     try:
         client = get_supabase_client()
-        response = client.table('sandbox_tasks').select('*').eq('source', source).eq('name', name).execute()
+        response = (
+            client.table("sandbox_tasks")
+            .select("*")
+            .eq("source", source)
+            .eq("name", name)
+            .execute()
+        )
 
         if not response.data:
             return None
 
-        return clean_sandbox_task_metadata(response.data[0])
+        return clean_sandbox_task_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving sandbox task by name {source}/{name}: {e}")
         return None
@@ -1722,12 +1882,12 @@ def create_sandbox_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new sandbox task in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_tasks').insert(task_data).execute()
+        response = client.table("sandbox_tasks").insert(task_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create sandbox task")
 
-        return clean_sandbox_task_metadata(response.data[0])
+        return clean_sandbox_task_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating sandbox task: {e}")
         raise
@@ -1737,12 +1897,17 @@ def update_sandbox_task(checksum: str, task_data: Dict[str, Any]) -> Dict[str, A
     """Update an existing sandbox task in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_tasks').update(task_data).eq('checksum', checksum).execute()
+        response = (
+            client.table("sandbox_tasks")
+            .update(task_data)
+            .eq("checksum", checksum)
+            .execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update sandbox task with checksum {checksum}")
 
-        return clean_sandbox_task_metadata(response.data[0])
+        return clean_sandbox_task_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating sandbox task {checksum}: {e}")
         raise
@@ -1758,7 +1923,7 @@ def register_sandbox_task(
     instruction: str = "",
     git_url: Optional[str] = None,
     git_commit_id: Optional[str] = None,
-    forced_update: bool = True
+    forced_update: bool = True,
 ) -> Dict[str, Any]:
     """
     Register a sandbox task with minimal auto-filling.
@@ -1787,7 +1952,7 @@ def register_sandbox_task(
             "verifier_timeout_sec": verifier_timeout_sec,
             "git_url": git_url,
             "git_commit_id": git_commit_id,
-            "path": path
+            "path": path,
         }
 
         # Create or update task
@@ -1813,29 +1978,64 @@ def delete_sandbox_task_by_checksum(checksum: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if task exists
-        existing = client.table('sandbox_tasks').select('name').eq('checksum', checksum).execute()
+        existing = (
+            client.table("sandbox_tasks")
+            .select("name")
+            .eq("checksum", checksum)
+            .execute()
+        )
         if not existing.data:
-            return {"success": False, "error": f"Sandbox task with checksum {checksum} not found"}
+            return {
+                "success": False,
+                "error": f"Sandbox task with checksum {checksum} not found",
+            }
 
-        task_name = existing.data[0]['name']
+        task_name = existing.data[0]["name"]
 
         # Check for FK constraints (benchmark_tasks, trials)
-        benchmark_links = client.table('sandbox_benchmark_tasks').select('benchmark_id').eq('task_checksum', checksum).execute()
+        benchmark_links = (
+            client.table("sandbox_benchmark_tasks")
+            .select("benchmark_id")
+            .eq("task_checksum", checksum)
+            .execute()
+        )
         if benchmark_links.data:
-            return {"success": False, "error": f"Cannot delete task '{task_name}': linked to {len(benchmark_links.data)} benchmarks"}
+            return {
+                "success": False,
+                "error": f"Cannot delete task '{task_name}': linked to {len(benchmark_links.data)} benchmarks",
+            }
 
-        trials = client.table('sandbox_trials').select('id').eq('task_checksum', checksum).execute()
+        trials = (
+            client.table("sandbox_trials")
+            .select("id")
+            .eq("task_checksum", checksum)
+            .execute()
+        )
         if trials.data:
-            return {"success": False, "error": f"Cannot delete task '{task_name}': referenced by {len(trials.data)} trials"}
+            return {
+                "success": False,
+                "error": f"Cannot delete task '{task_name}': referenced by {len(trials.data)} trials",
+            }
 
         # Delete the task
-        response = client.table('sandbox_tasks').delete().eq('checksum', checksum).execute()
+        response = (
+            client.table("sandbox_tasks").delete().eq("checksum", checksum).execute()
+        )
 
         if response.data:
-            logger.info(f"Successfully deleted sandbox task: {task_name} (checksum: {checksum})")
-            return {"success": True, "message": f"Task '{task_name}' deleted successfully", "deleted_checksum": checksum}
+            logger.info(
+                f"Successfully deleted sandbox task: {task_name} (checksum: {checksum})"
+            )
+            return {
+                "success": True,
+                "message": f"Task '{task_name}' deleted successfully",
+                "deleted_checksum": checksum,
+            }
         else:
-            return {"success": False, "error": f"Failed to delete task with checksum {checksum}"}
+            return {
+                "success": False,
+                "error": f"Failed to delete task with checksum {checksum}",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting sandbox task by checksum {checksum}: {e}")
@@ -1847,9 +2047,12 @@ def delete_sandbox_task_by_name(source: str, name: str) -> Dict[str, Any]:
     try:
         task = get_sandbox_task_by_name(source, name)
         if not task:
-            return {"success": False, "error": f"Sandbox task with source '{source}' and name '{name}' not found"}
+            return {
+                "success": False,
+                "error": f"Sandbox task with source '{source}' and name '{name}' not found",
+            }
 
-        return delete_sandbox_task_by_checksum(task['checksum'])
+        return delete_sandbox_task_by_checksum(task["checksum"])
 
     except Exception as e:
         logger.error(f"Error deleting sandbox task by name {source}/{name}: {e}")
@@ -1858,42 +2061,49 @@ def delete_sandbox_task_by_name(source: str, name: str) -> Dict[str, Any]:
 
 # ==================== SANDBOX BENCHMARK TASK UTILITIES ====================
 
+
 def link_benchmark_to_task(
     benchmark_id: str,
     task_checksum: str,
     benchmark_name: str,
-    benchmark_version_hash: str
+    benchmark_version_hash: str,
 ) -> Dict[str, Any]:
     """Create a link between a benchmark and a task."""
     try:
         client = get_supabase_client(use_admin=True)
 
         # Check if link already exists
-        existing = client.table('sandbox_benchmark_tasks')\
-            .select('*')\
-            .eq('benchmark_id', benchmark_id)\
-            .eq('task_checksum', task_checksum)\
+        existing = (
+            client.table("sandbox_benchmark_tasks")
+            .select("*")
+            .eq("benchmark_id", benchmark_id)
+            .eq("task_checksum", task_checksum)
             .execute()
+        )
 
         if existing.data:
-            result = clean_sandbox_benchmark_task_metadata(existing.data[0])
-            logger.info(f"Benchmark-task link already exists: {benchmark_id} -> {task_checksum}")
+            result = clean_sandbox_benchmark_task_metadata(existing.data[0])  # noqa: F405
+            logger.info(
+                f"Benchmark-task link already exists: {benchmark_id} -> {task_checksum}"
+            )
             return {"success": True, "link": result, "exists": True}
 
         link_data = {
             "benchmark_id": benchmark_id,
             "benchmark_name": benchmark_name,
             "benchmark_version_hash": benchmark_version_hash,
-            "task_checksum": task_checksum
+            "task_checksum": task_checksum,
         }
 
-        response = client.table('sandbox_benchmark_tasks').insert(link_data).execute()
+        response = client.table("sandbox_benchmark_tasks").insert(link_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create benchmark-task link")
 
-        result = clean_sandbox_benchmark_task_metadata(response.data[0])
-        logger.info(f"Successfully linked benchmark {benchmark_id} to task {task_checksum}")
+        result = clean_sandbox_benchmark_task_metadata(response.data[0])  # noqa: F405
+        logger.info(
+            f"Successfully linked benchmark {benchmark_id} to task {task_checksum}"
+        )
         return {"success": True, "link": result}
 
     except Exception as e:
@@ -1906,11 +2116,22 @@ def unlink_benchmark_from_task(benchmark_id: str, task_checksum: str) -> Dict[st
     try:
         client = get_supabase_client(use_admin=True)
 
-        response = client.table('sandbox_benchmark_tasks').delete().eq('benchmark_id', benchmark_id).eq('task_checksum', task_checksum).execute()
+        response = (
+            client.table("sandbox_benchmark_tasks")
+            .delete()
+            .eq("benchmark_id", benchmark_id)
+            .eq("task_checksum", task_checksum)
+            .execute()
+        )
 
         if response.data:
-            logger.info(f"Successfully unlinked benchmark {benchmark_id} from task {task_checksum}")
-            return {"success": True, "message": "Benchmark-task link removed successfully"}
+            logger.info(
+                f"Successfully unlinked benchmark {benchmark_id} from task {task_checksum}"
+            )
+            return {
+                "success": True,
+                "message": "Benchmark-task link removed successfully",
+            }
         else:
             return {"success": False, "error": "Link not found or already deleted"}
 
@@ -1924,7 +2145,12 @@ def delete_all_benchmark_task_links(benchmark_id: str) -> Dict[str, Any]:
     try:
         client = get_supabase_client(use_admin=True)
 
-        response = client.table('sandbox_benchmark_tasks').delete().eq('benchmark_id', benchmark_id).execute()
+        response = (
+            client.table("sandbox_benchmark_tasks")
+            .delete()
+            .eq("benchmark_id", benchmark_id)
+            .execute()
+        )
 
         count = len(response.data) if response.data else 0
         logger.info(f"Deleted {count} task links for benchmark {benchmark_id}")
@@ -1937,16 +2163,17 @@ def delete_all_benchmark_task_links(benchmark_id: str) -> Dict[str, Any]:
 
 # ==================== SANDBOX JOB UTILITIES ====================
 
+
 def get_sandbox_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve a sandbox job from the database by ID."""
     try:
         client = get_supabase_client()
-        response = client.table('sandbox_jobs').select('*').eq('id', job_id).execute()
+        response = client.table("sandbox_jobs").select("*").eq("id", job_id).execute()
 
         if not response.data:
             return None
 
-        return clean_sandbox_job_metadata(response.data[0])
+        return clean_sandbox_job_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving sandbox job by ID {job_id}: {e}")
         return None
@@ -1967,10 +2194,10 @@ def get_sandbox_job_by_name(job_name: str) -> Optional[Dict[str, Any]]:
     try:
         client = get_supabase_client()
         response = (
-            client.table('sandbox_jobs')
-            .select('*')
-            .eq('job_name', job_name)
-            .order('submitted_at', desc=True)
+            client.table("sandbox_jobs")
+            .select("*")
+            .eq("job_name", job_name)
+            .order("submitted_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -1978,7 +2205,7 @@ def get_sandbox_job_by_name(job_name: str) -> Optional[Dict[str, Any]]:
         if not response.data:
             return None
 
-        return clean_sandbox_job_metadata(response.data[0])
+        return clean_sandbox_job_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving sandbox job by name {job_name}: {e}")
         return None
@@ -1988,12 +2215,12 @@ def create_sandbox_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new sandbox job in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_jobs').insert(job_data).execute()
+        response = client.table("sandbox_jobs").insert(job_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create sandbox job")
 
-        return clean_sandbox_job_metadata(response.data[0])
+        return clean_sandbox_job_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating sandbox job: {e}")
         raise
@@ -2003,12 +2230,14 @@ def update_sandbox_job(job_id: str, job_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update an existing sandbox job in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_jobs').update(job_data).eq('id', job_id).execute()
+        response = (
+            client.table("sandbox_jobs").update(job_data).eq("id", job_id).execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update sandbox job with ID {job_id}")
 
-        return clean_sandbox_job_metadata(response.data[0])
+        return clean_sandbox_job_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating sandbox job {job_id}: {e}")
         raise
@@ -2032,7 +2261,7 @@ def register_sandbox_job(
     stats: Optional[Dict[str, Any]] = None,
     forced_update: bool = True,
     hf_traces_link: Optional[str] = None,
-    job_status: Optional[str] = None
+    job_status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Register a sandbox job with minimal auto-filling.
@@ -2045,7 +2274,10 @@ def register_sandbox_job(
 
         # Validate version constraint
         if not git_commit_id and not package_version:
-            return {"success": False, "error": "Either git_commit_id or package_version must be provided"}
+            return {
+                "success": False,
+                "error": "Either git_commit_id or package_version must be provided",
+            }
 
         # Check if job already exists
         existing = get_sandbox_job_by_name(job_name)
@@ -2072,7 +2304,7 @@ def register_sandbox_job(
             "benchmark_id": benchmark_id,
             "n_rep_eval": n_rep_eval,
             "hf_traces_link": hf_traces_link,
-            "job_status": job_status
+            "job_status": job_status,
         }
 
         # Include job_id if provided (preserves local ID from result.json)
@@ -2082,7 +2314,7 @@ def register_sandbox_job(
         # Create or update job
         if existing and forced_update:
             logger.info(f"Updating existing sandbox job: {job_name}")
-            result = update_sandbox_job(existing['id'], job_data)
+            result = update_sandbox_job(existing["id"], job_data)
             logger.info(f"Successfully updated sandbox job: {job_name}")
             return {"success": True, "job": result, "updated": True}
         else:
@@ -2102,23 +2334,37 @@ def delete_sandbox_job_by_id(job_id: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if job exists
-        existing = client.table('sandbox_jobs').select('job_name').eq('id', job_id).execute()
+        existing = (
+            client.table("sandbox_jobs").select("job_name").eq("id", job_id).execute()
+        )
         if not existing.data:
-            return {"success": False, "error": f"Sandbox job with ID {job_id} not found"}
+            return {
+                "success": False,
+                "error": f"Sandbox job with ID {job_id} not found",
+            }
 
-        job_name = existing.data[0]['job_name']
+        job_name = existing.data[0]["job_name"]
 
         # Check for FK constraints (trials)
-        trials = client.table('sandbox_trials').select('id').eq('job_id', job_id).execute()
+        trials = (
+            client.table("sandbox_trials").select("id").eq("job_id", job_id).execute()
+        )
         if trials.data:
-            return {"success": False, "error": f"Cannot delete job '{job_name}': referenced by {len(trials.data)} trials"}
+            return {
+                "success": False,
+                "error": f"Cannot delete job '{job_name}': referenced by {len(trials.data)} trials",
+            }
 
         # Delete the job
-        response = client.table('sandbox_jobs').delete().eq('id', job_id).execute()
+        response = client.table("sandbox_jobs").delete().eq("id", job_id).execute()
 
         if response.data:
             logger.info(f"Successfully deleted sandbox job: {job_name} (ID: {job_id})")
-            return {"success": True, "message": f"Job '{job_name}' deleted successfully", "deleted_id": job_id}
+            return {
+                "success": True,
+                "message": f"Job '{job_name}' deleted successfully",
+                "deleted_id": job_id,
+            }
         else:
             return {"success": False, "error": f"Failed to delete job with ID {job_id}"}
 
@@ -2132,9 +2378,12 @@ def delete_sandbox_job_by_name(job_name: str) -> Dict[str, Any]:
     try:
         job = get_sandbox_job_by_name(job_name)
         if not job:
-            return {"success": False, "error": f"Sandbox job with name '{job_name}' not found"}
+            return {
+                "success": False,
+                "error": f"Sandbox job with name '{job_name}' not found",
+            }
 
-        return delete_sandbox_job_by_id(job['id'])
+        return delete_sandbox_job_by_id(job["id"])
 
     except Exception as e:
         logger.error(f"Error deleting sandbox job by name {job_name}: {e}")
@@ -2143,16 +2392,19 @@ def delete_sandbox_job_by_name(job_name: str) -> Dict[str, Any]:
 
 # ==================== SANDBOX TRIAL UTILITIES ====================
 
+
 def get_sandbox_trial_by_id(trial_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve a sandbox trial from the database by ID."""
     try:
         client = get_supabase_client()
-        response = client.table('sandbox_trials').select('*').eq('id', trial_id).execute()
+        response = (
+            client.table("sandbox_trials").select("*").eq("id", trial_id).execute()
+        )
 
         if not response.data:
             return None
 
-        return clean_sandbox_trial_metadata(response.data[0])
+        return clean_sandbox_trial_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving sandbox trial by ID {trial_id}: {e}")
         return None
@@ -2162,12 +2414,17 @@ def get_sandbox_trial_by_name(trial_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve a sandbox trial from the database by name."""
     try:
         client = get_supabase_client()
-        response = client.table('sandbox_trials').select('*').eq('trial_name', trial_name).execute()
+        response = (
+            client.table("sandbox_trials")
+            .select("*")
+            .eq("trial_name", trial_name)
+            .execute()
+        )
 
         if not response.data:
             return None
 
-        return clean_sandbox_trial_metadata(response.data[0])
+        return clean_sandbox_trial_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error retrieving sandbox trial by name {trial_name}: {e}")
         return None
@@ -2177,12 +2434,12 @@ def create_sandbox_trial(trial_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new sandbox trial in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_trials').insert(trial_data).execute()
+        response = client.table("sandbox_trials").insert(trial_data).execute()
 
         if not response.data:
             raise ValueError("Failed to create sandbox trial")
 
-        return clean_sandbox_trial_metadata(response.data[0])
+        return clean_sandbox_trial_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating sandbox trial: {e}")
         raise
@@ -2192,12 +2449,17 @@ def update_sandbox_trial(trial_id: str, trial_data: Dict[str, Any]) -> Dict[str,
     """Update an existing sandbox trial in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_trials').update(trial_data).eq('id', trial_id).execute()
+        response = (
+            client.table("sandbox_trials")
+            .update(trial_data)
+            .eq("id", trial_id)
+            .execute()
+        )
 
         if not response.data:
             raise ValueError(f"Failed to update sandbox trial with ID {trial_id}")
 
-        return clean_sandbox_trial_metadata(response.data[0])
+        return clean_sandbox_trial_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error updating sandbox trial {trial_id}: {e}")
         raise
@@ -2222,7 +2484,7 @@ def register_sandbox_trial(
     verifier_started_at: Optional[datetime] = None,
     verifier_ended_at: Optional[datetime] = None,
     exception_info: Optional[Dict[str, Any]] = None,
-    forced_update: bool = True
+    forced_update: bool = True,
 ) -> Dict[str, Any]:
     """
     Register a sandbox trial with minimal auto-filling.
@@ -2249,17 +2511,33 @@ def register_sandbox_trial(
             "reward": reward,
             "started_at": started_at.isoformat() if started_at else None,
             "ended_at": ended_at.isoformat() if ended_at else None,
-            "environment_setup_started_at": environment_setup_started_at.isoformat() if environment_setup_started_at else None,
-            "environment_setup_ended_at": environment_setup_ended_at.isoformat() if environment_setup_ended_at else None,
-            "agent_setup_started_at": agent_setup_started_at.isoformat() if agent_setup_started_at else None,
-            "agent_setup_ended_at": agent_setup_ended_at.isoformat() if agent_setup_ended_at else None,
-            "agent_execution_started_at": agent_execution_started_at.isoformat() if agent_execution_started_at else None,
-            "agent_execution_ended_at": agent_execution_ended_at.isoformat() if agent_execution_ended_at else None,
-            "verifier_started_at": verifier_started_at.isoformat() if verifier_started_at else None,
-            "verifier_ended_at": verifier_ended_at.isoformat() if verifier_ended_at else None,
+            "environment_setup_started_at": environment_setup_started_at.isoformat()
+            if environment_setup_started_at
+            else None,
+            "environment_setup_ended_at": environment_setup_ended_at.isoformat()
+            if environment_setup_ended_at
+            else None,
+            "agent_setup_started_at": agent_setup_started_at.isoformat()
+            if agent_setup_started_at
+            else None,
+            "agent_setup_ended_at": agent_setup_ended_at.isoformat()
+            if agent_setup_ended_at
+            else None,
+            "agent_execution_started_at": agent_execution_started_at.isoformat()
+            if agent_execution_started_at
+            else None,
+            "agent_execution_ended_at": agent_execution_ended_at.isoformat()
+            if agent_execution_ended_at
+            else None,
+            "verifier_started_at": verifier_started_at.isoformat()
+            if verifier_started_at
+            else None,
+            "verifier_ended_at": verifier_ended_at.isoformat()
+            if verifier_ended_at
+            else None,
             "config": config,
             "exception_info": exception_info,
-            "created_at": now.isoformat()
+            "created_at": now.isoformat(),
         }
 
         # Include trial_id if provided (preserves local ID from result.json)
@@ -2269,7 +2547,7 @@ def register_sandbox_trial(
         # Create or update trial
         if existing and forced_update:
             logger.info(f"Found existing sandbox trial: {trial_name}, updating...")
-            result = update_sandbox_trial(existing['id'], trial_data)
+            result = update_sandbox_trial(existing["id"], trial_data)
             logger.info(f"Successfully updated sandbox trial: {trial_name}")
             return {"success": True, "trial": result, "updated": True}
         else:
@@ -2289,25 +2567,50 @@ def delete_sandbox_trial_by_id(trial_id: str) -> Dict[str, Any]:
         client = get_supabase_client(use_admin=True)
 
         # Check if trial exists
-        existing = client.table('sandbox_trials').select('trial_name').eq('id', trial_id).execute()
+        existing = (
+            client.table("sandbox_trials")
+            .select("trial_name")
+            .eq("id", trial_id)
+            .execute()
+        )
         if not existing.data:
-            return {"success": False, "error": f"Sandbox trial with ID {trial_id} not found"}
+            return {
+                "success": False,
+                "error": f"Sandbox trial with ID {trial_id} not found",
+            }
 
-        trial_name = existing.data[0]['trial_name']
+        trial_name = existing.data[0]["trial_name"]
 
         # Check for FK constraints (model_usage)
-        usage = client.table('sandbox_trial_model_usage').select('trial_id').eq('trial_id', trial_id).execute()
+        usage = (
+            client.table("sandbox_trial_model_usage")
+            .select("trial_id")
+            .eq("trial_id", trial_id)
+            .execute()
+        )
         if usage.data:
-            return {"success": False, "error": f"Cannot delete trial '{trial_name}': has {len(usage.data)} model usage records"}
+            return {
+                "success": False,
+                "error": f"Cannot delete trial '{trial_name}': has {len(usage.data)} model usage records",
+            }
 
         # Delete the trial
-        response = client.table('sandbox_trials').delete().eq('id', trial_id).execute()
+        response = client.table("sandbox_trials").delete().eq("id", trial_id).execute()
 
         if response.data:
-            logger.info(f"Successfully deleted sandbox trial: {trial_name} (ID: {trial_id})")
-            return {"success": True, "message": f"Trial '{trial_name}' deleted successfully", "deleted_id": trial_id}
+            logger.info(
+                f"Successfully deleted sandbox trial: {trial_name} (ID: {trial_id})"
+            )
+            return {
+                "success": True,
+                "message": f"Trial '{trial_name}' deleted successfully",
+                "deleted_id": trial_id,
+            }
         else:
-            return {"success": False, "error": f"Failed to delete trial with ID {trial_id}"}
+            return {
+                "success": False,
+                "error": f"Failed to delete trial with ID {trial_id}",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting sandbox trial by ID {trial_id}: {e}")
@@ -2319,9 +2622,12 @@ def delete_sandbox_trial_by_name(trial_name: str) -> Dict[str, Any]:
     try:
         trial = get_sandbox_trial_by_name(trial_name)
         if not trial:
-            return {"success": False, "error": f"Sandbox trial with name '{trial_name}' not found"}
+            return {
+                "success": False,
+                "error": f"Sandbox trial with name '{trial_name}' not found",
+            }
 
-        return delete_sandbox_trial_by_id(trial['id'])
+        return delete_sandbox_trial_by_id(trial["id"])
 
     except Exception as e:
         logger.error(f"Error deleting sandbox trial by name {trial_name}: {e}")
@@ -2330,22 +2636,30 @@ def delete_sandbox_trial_by_name(trial_name: str) -> Dict[str, Any]:
 
 # ==================== SANDBOX TRIAL MODEL USAGE UTILITIES ====================
 
-def get_trial_model_usage(trial_id: str, model_id: str, model_provider: str) -> Optional[Dict[str, Any]]:
+
+def get_trial_model_usage(
+    trial_id: str, model_id: str, model_provider: str
+) -> Optional[Dict[str, Any]]:
     """Retrieve trial model usage by composite primary key."""
     try:
         client = get_supabase_client()
-        response = client.table('sandbox_trial_model_usage').select('*')\
-            .eq('trial_id', trial_id)\
-            .eq('model_id', model_id)\
-            .eq('model_provider', model_provider)\
+        response = (
+            client.table("sandbox_trial_model_usage")
+            .select("*")
+            .eq("trial_id", trial_id)
+            .eq("model_id", model_id)
+            .eq("model_provider", model_provider)
             .execute()
+        )
 
         if not response.data:
             return None
 
-        return clean_sandbox_trial_model_usage_metadata(response.data[0])
+        return clean_sandbox_trial_model_usage_metadata(response.data[0])  # noqa: F405
     except Exception as e:
-        logger.error(f"Error retrieving trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}: {e}")
+        logger.error(
+            f"Error retrieving trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}: {e}"
+        )
         return None
 
 
@@ -2353,33 +2667,44 @@ def create_trial_model_usage(usage_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new trial model usage record in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_trial_model_usage').insert(usage_data).execute()
+        response = (
+            client.table("sandbox_trial_model_usage").insert(usage_data).execute()
+        )
 
         if not response.data:
             raise ValueError("Failed to create trial model usage")
 
-        return clean_sandbox_trial_model_usage_metadata(response.data[0])
+        return clean_sandbox_trial_model_usage_metadata(response.data[0])  # noqa: F405
     except Exception as e:
         logger.error(f"Error creating trial model usage: {e}")
         raise
 
 
-def update_trial_model_usage(trial_id: str, model_id: str, model_provider: str, usage_data: Dict[str, Any]) -> Dict[str, Any]:
+def update_trial_model_usage(
+    trial_id: str, model_id: str, model_provider: str, usage_data: Dict[str, Any]
+) -> Dict[str, Any]:
     """Update an existing trial model usage record in the database."""
     try:
         client = get_supabase_client(use_admin=True)
-        response = client.table('sandbox_trial_model_usage').update(usage_data)\
-            .eq('trial_id', trial_id)\
-            .eq('model_id', model_id)\
-            .eq('model_provider', model_provider)\
+        response = (
+            client.table("sandbox_trial_model_usage")
+            .update(usage_data)
+            .eq("trial_id", trial_id)
+            .eq("model_id", model_id)
+            .eq("model_provider", model_provider)
             .execute()
+        )
 
         if not response.data:
-            raise ValueError(f"Failed to update trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}")
+            raise ValueError(
+                f"Failed to update trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}"
+            )
 
-        return clean_sandbox_trial_model_usage_metadata(response.data[0])
+        return clean_sandbox_trial_model_usage_metadata(response.data[0])  # noqa: F405
     except Exception as e:
-        logger.error(f"Error updating trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}: {e}")
+        logger.error(
+            f"Error updating trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}: {e}"
+        )
         raise
 
 
@@ -2389,7 +2714,7 @@ def register_trial_model_usage(
     model_provider: str,
     n_input_tokens: Optional[int] = None,
     n_output_tokens: Optional[int] = None,
-    forced_update: bool = True
+    forced_update: bool = True,
 ) -> Dict[str, Any]:
     """
     Register trial model usage with minimal auto-filling.
@@ -2403,7 +2728,9 @@ def register_trial_model_usage(
         # Check if usage record already exists
         existing = get_trial_model_usage(trial_id, model_id, model_provider)
         if existing and not forced_update:
-            logger.info(f"Trial model usage already exists for trial {trial_id}, model {model_id}, provider {model_provider}")
+            logger.info(
+                f"Trial model usage already exists for trial {trial_id}, model {model_id}, provider {model_provider}"
+            )
             return {"success": True, "usage": existing, "exists": True}
 
         # Build usage data with minimal auto-filling
@@ -2414,19 +2741,25 @@ def register_trial_model_usage(
             "model_id": model_id,
             "model_provider": model_provider,
             "n_input_tokens": n_input_tokens,
-            "n_output_tokens": n_output_tokens
+            "n_output_tokens": n_output_tokens,
         }
 
         # Create or update usage record
         if existing and forced_update:
-            logger.info(f"Updating existing trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}")
-            result = update_trial_model_usage(trial_id, model_id, model_provider, usage_data)
-            logger.info(f"Successfully updated trial model usage")
+            logger.info(
+                f"Updating existing trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}"
+            )
+            result = update_trial_model_usage(
+                trial_id, model_id, model_provider, usage_data
+            )
+            logger.info("Successfully updated trial model usage")
             return {"success": True, "usage": result, "updated": True}
         else:
-            logger.info(f"Creating new trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}")
+            logger.info(
+                f"Creating new trial model usage for trial {trial_id}, model {model_id}, provider {model_provider}"
+            )
             result = create_trial_model_usage(usage_data)
-            logger.info(f"Successfully registered trial model usage")
+            logger.info("Successfully registered trial model usage")
             return {"success": True, "usage": result}
 
     except Exception as e:
@@ -2434,22 +2767,33 @@ def register_trial_model_usage(
         return {"success": False, "error": str(e)}
 
 
-def delete_trial_model_usage(trial_id: str, model_id: str, model_provider: str) -> Dict[str, Any]:
+def delete_trial_model_usage(
+    trial_id: str, model_id: str, model_provider: str
+) -> Dict[str, Any]:
     """Delete trial model usage by composite PK."""
     try:
         client = get_supabase_client(use_admin=True)
 
-        response = client.table('sandbox_trial_model_usage').delete()\
-            .eq('trial_id', trial_id)\
-            .eq('model_id', model_id)\
-            .eq('model_provider', model_provider)\
+        response = (
+            client.table("sandbox_trial_model_usage")
+            .delete()
+            .eq("trial_id", trial_id)
+            .eq("model_id", model_id)
+            .eq("model_provider", model_provider)
             .execute()
+        )
 
         if response.data:
             logger.info(f"Successfully deleted trial model usage for trial {trial_id}")
-            return {"success": True, "message": "Trial model usage deleted successfully"}
+            return {
+                "success": True,
+                "message": "Trial model usage deleted successfully",
+            }
         else:
-            return {"success": False, "error": "Usage record not found or already deleted"}
+            return {
+                "success": False,
+                "error": "Usage record not found or already deleted",
+            }
 
     except Exception as e:
         logger.error(f"Error deleting trial model usage: {e}")
@@ -2461,7 +2805,12 @@ def delete_all_trial_model_usage(trial_id: str) -> Dict[str, Any]:
     try:
         client = get_supabase_client(use_admin=True)
 
-        response = client.table('sandbox_trial_model_usage').delete().eq('trial_id', trial_id).execute()
+        response = (
+            client.table("sandbox_trial_model_usage")
+            .delete()
+            .eq("trial_id", trial_id)
+            .execute()
+        )
 
         count = len(response.data) if response.data else 0
         logger.info(f"Deleted {count} model usage records for trial {trial_id}")
@@ -2473,6 +2822,7 @@ def delete_all_trial_model_usage(trial_id: str) -> Dict[str, Any]:
 
 
 # ==================== S3 UTILITIES ====================
+
 
 def _check_bucket_exists(client: Client, bucket_name: str) -> None:
     """
@@ -2497,10 +2847,7 @@ def _check_bucket_exists(client: Client, bucket_name: str) -> None:
 
 
 def _upload_file_to_s3(
-    client: Client,
-    file_path: "Path",
-    s3_path: str,
-    bucket_name: str
+    client: Client, file_path: "Path", s3_path: str, bucket_name: str
 ) -> None:
     """
     Upload a single file to S3.
@@ -2517,9 +2864,7 @@ def _upload_file_to_s3(
     try:
         with open(file_path, "rb") as f:
             client.storage.from_(bucket_name).upload(
-                file=f,
-                path=s3_path,
-                file_options={"upsert": "false"}
+                file=f, path=s3_path, file_options={"upsert": "false"}
             )
         logger.debug(f"Uploaded {file_path.name} to {s3_path}")
     except Exception as e:
@@ -2528,11 +2873,7 @@ def _upload_file_to_s3(
 
 
 def _upload_trial_folder_to_s3(
-    client: Client,
-    trial_dir: "Path",
-    trial_id: str,
-    job_id: str,
-    bucket_name: str
+    client: Client, trial_dir: "Path", trial_id: str, job_id: str, bucket_name: str
 ) -> None:
     """
     Upload entire trial directory to S3 recursively.
@@ -2566,10 +2907,7 @@ def _upload_trial_folder_to_s3(
 
 
 def _get_trial_s3_url(
-    client: Client,
-    trial_id: str,
-    job_id: str,
-    bucket_name: str
+    client: Client, trial_id: str, job_id: str, bucket_name: str
 ) -> str:
     """
     Get public URL for trial folder in S3.
@@ -2594,7 +2932,9 @@ def _get_trial_s3_url(
     supabase_url = supabase_config.supabase_url
 
     # Construct public URL: bucket/job_id/trial_id
-    trial_url = f"{supabase_url}/storage/v1/object/public/{bucket_name}/{job_id}/{trial_id}"
+    trial_url = (
+        f"{supabase_url}/storage/v1/object/public/{bucket_name}/{job_id}/{trial_id}"
+    )
 
     logger.info(f"Generated S3 URL for trial {trial_id}")
     return trial_url
@@ -2604,6 +2944,7 @@ def _get_trial_s3_url(
 
 # Configuration constants
 MAX_TRIAL_RETRIES = 3  # Number of retries per trial before giving up
+
 
 def get_agent_by_name_and_version(
     name: str,
@@ -2621,21 +2962,18 @@ def get_agent_by_name_and_version(
     """
     try:
         client = get_supabase_client()
-        response = (
-            client.table("agents")
-            .select("*")
-            .eq("name", name)
-            .execute()
-        )
+        response = client.table("agents").select("*").eq("name", name).execute()
 
         if not response.data:
             return None
 
         # Package version matching is not currently enforced in the DB schema,
         # so we return the first record for this agent name.
-        return clean_agent_metadata(response.data[0])
+        return clean_agent_metadata(response.data[0])  # noqa: F405
     except Exception as e:
-        logger.error(f"Error retrieving agent by name {name} and version {version}: {e}")
+        logger.error(
+            f"Error retrieving agent by name {name} and version {version}: {e}"
+        )
         return None
 
 
@@ -2666,10 +3004,13 @@ def get_benchmark_by_name_and_version(
         if not response.data:
             return None
 
-        return clean_benchmark_metadata(response.data[0])
+        return clean_benchmark_metadata(response.data[0])  # noqa: F405
     except Exception as e:
-        logger.error(f"Error retrieving benchmark by name {name} and version {version_hash}: {e}")
+        logger.error(
+            f"Error retrieving benchmark by name {name} and version {version_hash}: {e}"
+        )
         return None
+
 
 def _assert_job_finished(job_dir: Path) -> None:
     """
@@ -2692,6 +3033,7 @@ def _assert_job_finished(job_dir: Path) -> None:
     if not result.get("finished_at"):
         # Auto-set finished_at to now for timed-out or interrupted jobs
         from datetime import datetime, timezone
+
         now_str = datetime.now(timezone.utc).isoformat()
         result["finished_at"] = now_str
         result_path.write_text(json.dumps(result, indent=2))
@@ -2709,11 +3051,11 @@ def _extract_job_metadata(
     git_commit_id: Optional[str],
     agent_id: UUID,
     model_id: UUID,
-    benchmark_id: UUID
+    benchmark_id: UUID,
 ) -> Dict[str, Any]:
     """
     Extract job metadata from job directory.
-    
+
     Args:
         job_dir: Path to job directory
         username: Username for job
@@ -2721,23 +3063,23 @@ def _extract_job_metadata(
         agent_id: Agent UUID (foreign key)
         model_id: Model UUID (foreign key)
         benchmark_id: Benchmark UUID (foreign key)
-    
+
     Returns:
         Dict with job metadata ready for register_sandbox_job()
     """
     config_path = job_dir / "config.json"
     result_path = job_dir / "result.json"
-    
+
     config = json.loads(config_path.read_text())
     result = json.loads(result_path.read_text())
-    
+
     # Extract package_version from first trial's agent_info
     trial_dirs = [d for d in job_dir.iterdir() if d.is_dir()]
     package_version = None
     if trial_dirs:
         first_trial_result = json.loads((trial_dirs[0] / "result.json").read_text())
         package_version = first_trial_result.get("agent_info", {}).get("version")
-    
+
     # Extract metrics from the nested structure
     metrics_list = []
     if "stats" in result and "evals" in result["stats"]:
@@ -2758,19 +3100,66 @@ def _extract_job_metadata(
                         # Check for new-style named metrics
                         for key in ("mean_drop_ei_reward", "accuracy_drop_ei_reward"):
                             if key in metric_dict:
-                                metrics_list.append({"name": key, "value": metric_dict[key]})
+                                metrics_list.append(
+                                    {"name": key, "value": metric_dict[key]}
+                                )
                         # Legacy format: {"mean": X}
-                        if "mean" in metric_dict and not any(m["name"] == "accuracy" for m in metrics_list):
-                            metrics_list.append({"name": "accuracy", "value": metric_dict["mean"]})
+                        if "mean" in metric_dict and not any(
+                            m["name"] == "accuracy" for m in metrics_list
+                        ):
+                            metrics_list.append(
+                                {"name": "accuracy", "value": metric_dict["mean"]}
+                            )
 
                 # If we found accuracy_drop_ei_reward, also add it as "accuracy" for backwards compat
-                accuracy_metric = next((m for m in metrics_list if m["name"] == "accuracy_drop_ei_reward"), None)
-                if accuracy_metric and not any(m["name"] == "accuracy" for m in metrics_list):
-                    metrics_list.append({"name": "accuracy", "value": accuracy_metric["value"]})
-    
+                accuracy_metric = next(
+                    (m for m in metrics_list if m["name"] == "accuracy_drop_ei_reward"),
+                    None,
+                )
+                if accuracy_metric and not any(
+                    m["name"] == "accuracy" for m in metrics_list
+                ):
+                    metrics_list.append(
+                        {"name": "accuracy", "value": accuracy_metric["value"]}
+                    )
 
     # job_name can be None in Harbor result.json — fall back to config or dir name
     job_name = config.get("job_name") or result.get("job_name") or job_dir.name
+
+    # Ensure the leaderboard-expected VALID-trial numerator is present as a top-level
+    # `stats.n_trials` key. The leaderboard reads `stats.n_trials` for the "completed"
+    # numerator (server/storage.ts), but current Harbor (>=0.1.x JobStats schema) renamed
+    # the legacy top-level `n_trials` -> `n_completed_trials` and the legacy field no longer
+    # serializes — so without this the leaderboard renders "?/X". `n_completed_trials` is
+    # NOT the right numerator anyway: it counts ALL completed trials (incl. errored/no-reward
+    # ones), whereas the VALID count we standardized on (eval-agentic-cleanup §0 check-4 =
+    # trials with a numeric verifier reward) is the per-eval `stats.evals.<key>.n_trials`,
+    # which JobStats only increments when a reward is present. Sum those into a top-level
+    # `n_trials` so the leaderboard numerator is the VALID count.
+    stats = result.get("stats")
+    if isinstance(stats, dict) and "n_trials" not in stats:
+        evals = stats.get("evals")
+        if isinstance(evals, dict) and evals:
+            valid_trials = 0
+            for eval_data in evals.values():
+                if isinstance(eval_data, dict):
+                    n = eval_data.get("n_trials")
+                    if isinstance(n, int):
+                        valid_trials += n
+            stats["n_trials"] = valid_trials
+
+    # Additively persist the INFRASTRUCTURE-error count + per-type breakdown so a
+    # plain Supabase query can read them (stats->>'n_infra_errors',
+    # stats->'infra_error_breakdown') without re-deriving the INFRA_ERROR_TYPES
+    # classification from exception_stats. Pure audit fields — they do NOT touch
+    # the accuracy denominator or any existing metric. The classification set is
+    # the single source of truth in database/unified_db/infra_errors.py.
+    if isinstance(stats, dict):
+        from .infra_errors import compute_infra_error_stats
+
+        n_infra, infra_breakdown = compute_infra_error_stats(stats)
+        stats["n_infra_errors"] = n_infra
+        stats["infra_error_breakdown"] = infra_breakdown
 
     job_metadata = {
         "job_id": result["id"],  # Preserve local job ID from result.json
@@ -2783,13 +3172,13 @@ def _extract_job_metadata(
         "n_rep_eval": config.get("n_attempts", 1),
         "config": config,
         "metrics": metrics_list,  # Now properly extracted from nested structure
-        "stats": result.get("stats"),
+        "stats": stats,
         "git_commit_id": git_commit_id,
         "package_version": package_version,
         "started_at": _parse_datetime(result.get("started_at")),
-        "ended_at": _parse_datetime(result.get("finished_at"))
+        "ended_at": _parse_datetime(result.get("finished_at")),
     }
-    
+
     return job_metadata
 
 
@@ -2817,17 +3206,13 @@ def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt
-        except:
+        except:  # noqa: E722
             logger.warning(f"Failed to parse datetime: {dt_str}")
             return None
 
 
 def _extract_trial_metadata(
-    trial_dir: Path,
-    trial_uri: str,
-    trial_id: str,
-    job_id: UUID,
-    task_checksum: str
+    trial_dir: Path, trial_uri: str, trial_id: str, job_id: UUID, task_checksum: str
 ) -> Dict[str, Any]:
     """
     Extract trial metadata from trial directory.
@@ -2849,7 +3234,7 @@ def _extract_trial_metadata(
     config_path = trial_dir / "config.json"
     result_path = trial_dir / "result.json"
 
-    config = json.loads(config_path.read_text())
+    json.loads(config_path.read_text())
     result = json.loads(result_path.read_text())
 
     # VALIDATION: Accept trials with agent_execution and either verifier_result OR reward
@@ -2896,17 +3281,31 @@ def _extract_trial_metadata(
         "exception_info": exception_info,
         "started_at": _parse_datetime(result.get("started_at")),
         "ended_at": _parse_datetime(result.get("finished_at")),
-        "environment_setup_started_at": _parse_datetime((result.get("environment_setup") or {}).get("started_at")),
-        "environment_setup_ended_at": _parse_datetime((result.get("environment_setup") or {}).get("finished_at")),
-        "agent_setup_started_at": _parse_datetime((result.get("agent_setup") or {}).get("started_at")),
-        "agent_setup_ended_at": _parse_datetime((result.get("agent_setup") or {}).get("finished_at")),
-        "agent_execution_started_at": _parse_datetime((agent_execution or {}).get("started_at")),
-        "agent_execution_ended_at": _parse_datetime((agent_execution or {}).get("finished_at")),
+        "environment_setup_started_at": _parse_datetime(
+            (result.get("environment_setup") or {}).get("started_at")
+        ),
+        "environment_setup_ended_at": _parse_datetime(
+            (result.get("environment_setup") or {}).get("finished_at")
+        ),
+        "agent_setup_started_at": _parse_datetime(
+            (result.get("agent_setup") or {}).get("started_at")
+        ),
+        "agent_setup_ended_at": _parse_datetime(
+            (result.get("agent_setup") or {}).get("finished_at")
+        ),
+        "agent_execution_started_at": _parse_datetime(
+            (agent_execution or {}).get("started_at")
+        ),
+        "agent_execution_ended_at": _parse_datetime(
+            (agent_execution or {}).get("finished_at")
+        ),
         "verifier_started_at": _parse_datetime(
-            (verifier_result or {}).get("started_at") or (result.get("verifier") or {}).get("started_at")
+            (verifier_result or {}).get("started_at")
+            or (result.get("verifier") or {}).get("started_at")
         ),
         "verifier_ended_at": _parse_datetime(
-            (verifier_result or {}).get("finished_at") or (result.get("verifier") or {}).get("finished_at")
+            (verifier_result or {}).get("finished_at")
+            or (result.get("verifier") or {}).get("finished_at")
         ),
     }
 
@@ -2914,9 +3313,7 @@ def _extract_trial_metadata(
 
 
 def _extract_model_usage(
-    trial_dir: Path,
-    trial_id: UUID,
-    model_id: UUID
+    trial_dir: Path, trial_id: UUID, model_id: UUID
 ) -> Optional[Dict[str, Any]]:
     """
     Extract model usage from trial directory.
@@ -2939,14 +3336,16 @@ def _extract_model_usage(
         return None
 
     # Use `or {}` pattern because `.get()` returns None (not the default) when key exists with None value
-    model_provider = ((result.get("agent_info") or {}).get("model_info") or {}).get("provider", "unknown")
+    model_provider = ((result.get("agent_info") or {}).get("model_info") or {}).get(
+        "provider", "unknown"
+    )
 
     usage_metadata = {
         "trial_id": str(trial_id),
         "model_id": str(model_id),
         "model_provider": model_provider,
         "n_input_tokens": agent_result.get("n_input_tokens"),
-        "n_output_tokens": agent_result.get("n_output_tokens")
+        "n_output_tokens": agent_result.get("n_output_tokens"),
     }
 
     return usage_metadata
@@ -2975,14 +3374,20 @@ def _rollback_db_records(
     rollback_errors = []
 
     # Step 1: Delete all trial model usage records
-    logger.info(f"Step 1: Deleting {len(registered_usage_records)} model usage records...")
+    logger.info(
+        f"Step 1: Deleting {len(registered_usage_records)} model usage records..."
+    )
     for trial_id, model_id, provider in registered_usage_records:
         try:
             result = delete_trial_model_usage(trial_id, model_id, provider)
             if not result.get("success"):
-                rollback_errors.append(f"Failed to delete usage for trial {trial_id}: {result.get('error')}")
+                rollback_errors.append(
+                    f"Failed to delete usage for trial {trial_id}: {result.get('error')}"
+                )
         except Exception as e:
-            rollback_errors.append(f"Exception deleting usage for trial {trial_id}: {e}")
+            rollback_errors.append(
+                f"Exception deleting usage for trial {trial_id}: {e}"
+            )
 
     # Step 2: Delete all registered trials
     logger.info(f"Step 2: Deleting {len(registered_trial_ids)} trials from database...")
@@ -2990,7 +3395,9 @@ def _rollback_db_records(
         try:
             result = delete_sandbox_trial_by_id(trial_id)
             if not result.get("success"):
-                rollback_errors.append(f"Failed to delete trial {trial_id}: {result.get('error')}")
+                rollback_errors.append(
+                    f"Failed to delete trial {trial_id}: {result.get('error')}"
+                )
         except Exception as e:
             rollback_errors.append(f"Exception deleting trial {trial_id}: {e}")
 
@@ -2999,7 +3406,9 @@ def _rollback_db_records(
     try:
         result = delete_sandbox_job_by_id(job_id)
         if not result.get("success"):
-            rollback_errors.append(f"Failed to delete job {job_id}: {result.get('error')}")
+            rollback_errors.append(
+                f"Failed to delete job {job_id}: {result.get('error')}"
+            )
     except Exception as e:
         rollback_errors.append(f"Exception deleting job {job_id}: {e}")
 
@@ -3009,7 +3418,9 @@ def _rollback_db_records(
         for error in rollback_errors:
             logger.error(f"  - {error}")
     else:
-        logger.info(f"DB rollback completed successfully. Deleted {len(registered_trial_ids)} trials and job {job_id}.")
+        logger.info(
+            f"DB rollback completed successfully. Deleted {len(registered_trial_ids)} trials and job {job_id}."
+        )
 
 
 def calculate_standard_error(
@@ -3053,12 +3464,18 @@ def calculate_standard_error(
     import numpy as np
 
     # Get all trial directories
-    trial_dirs = [d for d in job_dir.iterdir() if d.is_dir() and d.name not in ["config.json", "result.json"]]
+    trial_dirs = [
+        d
+        for d in job_dir.iterdir()
+        if d.is_dir() and d.name not in ["config.json", "result.json"]
+    ]
     if not trial_dirs:
         logger.warning("No trial directories found, cannot calculate standard error")
         return None
 
-    logger.info(f"Calculating standard error from {len(trial_dirs)} trials using Bernoulli variance formula")
+    logger.info(
+        f"Calculating standard error from {len(trial_dirs)} trials using Bernoulli variance formula"
+    )
 
     # Extract rewards and group by task name
     task_trials = {}  # task_name -> list of rewards
@@ -3077,13 +3494,17 @@ def calculate_standard_error(
 
         try:
             if not reward_path.exists():
-                logger.warning(f"Reward file not found for {trial_name}, using 0 reward")
+                logger.warning(
+                    f"Reward file not found for {trial_name}, using 0 reward"
+                )
                 reward = 0.0
             else:
                 reward_text = reward_path.read_text().strip()
                 reward = float(reward_text)
         except Exception as e:
-            logger.warning(f"Failed to parse reward for {trial_name}: {e}, using 0 reward")
+            logger.warning(
+                f"Failed to parse reward for {trial_name}: {e}, using 0 reward"
+            )
             reward = 0.0
 
         if task_name not in task_trials:
@@ -3091,7 +3512,9 @@ def calculate_standard_error(
 
         task_trials[task_name].append(reward)
 
-    logger.info(f"Found {len(task_trials)} unique tasks with {len(trial_dirs)} total trials")
+    logger.info(
+        f"Found {len(task_trials)} unique tasks with {len(trial_dirs)} total trials"
+    )
 
     # Calculate variance contribution for each task
     variance_contributions = []
@@ -3101,7 +3524,9 @@ def calculate_standard_error(
         k_i = len(rewards)
 
         if k_i < 2:
-            logger.info(f"Task '{task_name}': skipping (k_i={k_i}, need k_i >= 2 for variance calculation)")
+            logger.info(
+                f"Task '{task_name}': skipping (k_i={k_i}, need k_i >= 2 for variance calculation)"
+            )
             skipped_tasks.append((task_name, k_i))
             continue
 
@@ -3121,7 +3546,9 @@ def calculate_standard_error(
             logger.info(f"  - '{task_name}': k_i={k_i}")
 
     if not variance_contributions:
-        logger.warning("No valid tasks for variance calculation (all tasks have k_i < 2)")
+        logger.warning(
+            "No valid tasks for variance calculation (all tasks have k_i < 2)"
+        )
         return None
 
     # Calculate standard error using Bernoulli formula
@@ -3129,10 +3556,10 @@ def calculate_standard_error(
     # where n = number of valid tasks
     n = len(variance_contributions)
     sum_variance = sum(variance_contributions)
-    variance = (1.0 / (n ** 2)) * sum_variance
+    variance = (1.0 / (n**2)) * sum_variance
     stderr = np.sqrt(variance)
 
-    logger.info(f"Standard error calculation:")
+    logger.info("Standard error calculation:")
     logger.info(f"  Number of valid tasks (n): {n}")
     logger.info(f"  Sum of variance contributions: {sum_variance:.6f}")
     logger.info(f"  variance = (1/{n}^2) * {sum_variance:.6f} = {variance:.6f}")
@@ -3147,7 +3574,7 @@ def _rollback_upload(
     registered_trial_ids: List[str],
     registered_usage_records: List[tuple],
     client: Client,
-    bucket_name: str
+    bucket_name: str,
 ) -> None:
     """
     Rollback all database and S3 changes from a failed upload.
@@ -3170,14 +3597,20 @@ def _rollback_upload(
     rollback_errors = []
 
     # Step 1: Delete all trial model usage records
-    logger.info(f"Step 1: Deleting {len(registered_usage_records)} model usage records...")
+    logger.info(
+        f"Step 1: Deleting {len(registered_usage_records)} model usage records..."
+    )
     for trial_id, model_id, provider in registered_usage_records:
         try:
             result = delete_trial_model_usage(trial_id, model_id, provider)
             if not result.get("success"):
-                rollback_errors.append(f"Failed to delete usage for trial {trial_id}: {result.get('error')}")
+                rollback_errors.append(
+                    f"Failed to delete usage for trial {trial_id}: {result.get('error')}"
+                )
         except Exception as e:
-            rollback_errors.append(f"Exception deleting usage for trial {trial_id}: {e}")
+            rollback_errors.append(
+                f"Exception deleting usage for trial {trial_id}: {e}"
+            )
 
     # Step 2: Delete all S3 files for uploaded trials (including trials that failed DB registration)
     logger.info(f"Step 2: Deleting S3 files for {len(uploaded_s3_trial_ids)} trials...")
@@ -3190,9 +3623,9 @@ def _rollback_upload(
                 """Recursively collect all file paths under a prefix."""
                 items = client.storage.from_(bucket_name).list(prefix)
                 for item in items:
-                    item_path = f"{prefix}/{item['name']}" if prefix else item['name']
+                    item_path = f"{prefix}/{item['name']}" if prefix else item["name"]
                     # Check if it's a folder (Supabase returns folders with metadata)
-                    if item.get('id') is None:  # Folder
+                    if item.get("id") is None:  # Folder
                         collect_files(item_path)
                     else:  # File
                         files_to_delete.append(item_path)
@@ -3203,9 +3636,13 @@ def _rollback_upload(
             # Delete all collected files
             if files_to_delete:
                 client.storage.from_(bucket_name).remove(files_to_delete)
-                logger.debug(f"  Deleted {len(files_to_delete)} files for trial {trial_id}")
+                logger.debug(
+                    f"  Deleted {len(files_to_delete)} files for trial {trial_id}"
+                )
         except Exception as e:
-            rollback_errors.append(f"Exception deleting S3 files for trial {trial_id}: {e}")
+            rollback_errors.append(
+                f"Exception deleting S3 files for trial {trial_id}: {e}"
+            )
 
     # Step 3: Delete all registered trials
     logger.info(f"Step 3: Deleting {len(registered_trial_ids)} trials from database...")
@@ -3213,7 +3650,9 @@ def _rollback_upload(
         try:
             result = delete_sandbox_trial_by_id(trial_id)
             if not result.get("success"):
-                rollback_errors.append(f"Failed to delete trial {trial_id}: {result.get('error')}")
+                rollback_errors.append(
+                    f"Failed to delete trial {trial_id}: {result.get('error')}"
+                )
         except Exception as e:
             rollback_errors.append(f"Exception deleting trial {trial_id}: {e}")
 
@@ -3222,7 +3661,9 @@ def _rollback_upload(
     try:
         result = delete_sandbox_job_by_id(job_id)
         if not result.get("success"):
-            rollback_errors.append(f"Failed to delete job {job_id}: {result.get('error')}")
+            rollback_errors.append(
+                f"Failed to delete job {job_id}: {result.get('error')}"
+            )
     except Exception as e:
         rollback_errors.append(f"Exception deleting job {job_id}: {e}")
 
@@ -3232,13 +3673,13 @@ def _rollback_upload(
         for error in rollback_errors:
             logger.error(f"  - {error}")
     else:
-        logger.info(f"Rollback completed successfully. Deleted {len(uploaded_s3_trial_ids)} S3 folders, {len(registered_trial_ids)} DB trials, and job {job_id}.")
+        logger.info(
+            f"Rollback completed successfully. Deleted {len(uploaded_s3_trial_ids)} S3 folders, {len(registered_trial_ids)} DB trials, and job {job_id}."
+        )
 
 
 def register_benchmark_and_tasks_from_job(
-    job_dir: Union[str, Path],
-    benchmark_name: str,
-    benchmark_version_hash: str
+    job_dir: Union[str, Path], benchmark_name: str, benchmark_version_hash: str
 ) -> Dict[str, Any]:
     """
     Register a benchmark and all its tasks from a job directory.
@@ -3283,10 +3724,13 @@ def register_benchmark_and_tasks_from_job(
                 name=benchmark_name,
                 benchmark_version_hash=benchmark_version_hash,
                 is_external=False,
-                forced_update=False  # Don't update if exists
+                forced_update=False,  # Don't update if exists
             )
             if not result.get("success"):
-                return {"success": False, "error": f"Failed to register benchmark: {result.get('error')}"}
+                return {
+                    "success": False,
+                    "error": f"Failed to register benchmark: {result.get('error')}",
+                }
 
             benchmark = result["benchmark"]
             benchmark_registered = True
@@ -3307,7 +3751,7 @@ def register_benchmark_and_tasks_from_job(
                 "tasks_registered": 0,
                 "tasks_existing": 0,
                 "links_created": 0,
-                "links_existing": 0
+                "links_existing": 0,
             }
 
         # Track processed task checksums to avoid duplicates (n_attempts > 1)
@@ -3342,7 +3786,9 @@ def register_benchmark_and_tasks_from_job(
                 task_path = result.get("task_id", {}).get("path", "")
 
                 if not task_name or not task_path:
-                    logger.warning(f"Missing task_name or path in {trial_dir.name}, skipping")
+                    logger.warning(
+                        f"Missing task_name or path in {trial_dir.name}, skipping"
+                    )
                     continue
 
                 # Check if task exists (use GET, not register)
@@ -3350,7 +3796,9 @@ def register_benchmark_and_tasks_from_job(
 
                 if not existing_task:
                     # Register new task with placeholder values for missing fields
-                    logger.info(f"Registering task: {task_name} ({task_checksum[:8]}...)")
+                    logger.info(
+                        f"Registering task: {task_name} ({task_checksum[:8]}...)"
+                    )
                     task_result = register_sandbox_task(
                         checksum=task_checksum,
                         name=task_name,
@@ -3359,10 +3807,12 @@ def register_benchmark_and_tasks_from_job(
                         verifier_timeout_sec=600,  # Default: 10 minutes
                         source=benchmark_name,  # Use benchmark name as source
                         instruction="",  # Empty instruction (has default in schema)
-                        forced_update=False  # Don't update if exists
+                        forced_update=False,  # Don't update if exists
                     )
                     if not task_result.get("success"):
-                        logger.error(f"Failed to register task {task_name}: {task_result.get('error')}")
+                        logger.error(
+                            f"Failed to register task {task_name}: {task_result.get('error')}"
+                        )
                         continue
 
                     tasks_registered += 1
@@ -3375,7 +3825,7 @@ def register_benchmark_and_tasks_from_job(
                     benchmark_id=benchmark_id,
                     task_checksum=task_checksum,
                     benchmark_name=benchmark_name,
-                    benchmark_version_hash=benchmark_version_hash
+                    benchmark_version_hash=benchmark_version_hash,
                 )
 
                 if link_result.get("success"):
@@ -3384,7 +3834,9 @@ def register_benchmark_and_tasks_from_job(
                     else:
                         links_created += 1
                 else:
-                    logger.error(f"Failed to link task {task_name} to benchmark: {link_result.get('error')}")
+                    logger.error(
+                        f"Failed to link task {task_name} to benchmark: {link_result.get('error')}"
+                    )
 
             except Exception as e:
                 logger.error(f"Error processing trial {trial_dir.name}: {e}")
@@ -3405,7 +3857,7 @@ def register_benchmark_and_tasks_from_job(
             "tasks_registered": tasks_registered,
             "tasks_existing": tasks_existing,
             "links_created": links_created,
-            "links_existing": links_existing
+            "links_existing": links_existing,
         }
 
     except Exception as e:
@@ -3422,10 +3874,17 @@ def _hf_run_summary(model_name: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        p = hf_hub_download(repo_id=model_name, filename="run_summary.json", repo_type="model")
+        p = hf_hub_download(
+            repo_id=model_name, filename="run_summary.json", repo_type="model"
+        )
     except Exception:
         try:
-            p = hf_hub_download(repo_id=model_name, filename="run_summary.json", repo_type="model", revision="main")
+            p = hf_hub_download(
+                repo_id=model_name,
+                filename="run_summary.json",
+                repo_type="model",
+                revision="main",
+            )
         except Exception as e2:
             logger.error(f"Failed to download run_summary.json for {model_name}: {e2}")
             return None
@@ -3438,9 +3897,12 @@ def _hf_run_summary(model_name: str) -> Optional[Dict[str, Any]]:
 
     # normalize null-ish values -> None
     def norm(v):
-        if isinstance(v, dict):  return {k: norm(vv) for k, vv in v.items()}
-        if isinstance(v, list):  return [norm(vv) for vv in v]
-        if v is None:            return None
+        if isinstance(v, dict):
+            return {k: norm(vv) for k, vv in v.items()}  # noqa: E701
+        if isinstance(v, list):
+            return [norm(vv) for vv in v]  # noqa: E701
+        if v is None:
+            return None  # noqa: E701
         if isinstance(v, str) and v.strip().lower() in {"null", "none", ""}:
             return None
         return v
@@ -3521,11 +3983,15 @@ def upload_job_and_trial_records(
     """
     # Validate error_mode
     if error_mode not in ("rollback_on_error", "skip_on_error"):
-        raise ValueError(f"Invalid error_mode: {error_mode}. Must be 'rollback_on_error' or 'skip_on_error'")
+        raise ValueError(
+            f"Invalid error_mode: {error_mode}. Must be 'rollback_on_error' or 'skip_on_error'"
+        )
 
     # Convert to Path
     job_dir = Path(job_dir)
-    logger.info(f"Starting DB-only upload of evaluation results from {job_dir} (error_mode={error_mode})")
+    logger.info(
+        f"Starting DB-only upload of evaluation results from {job_dir} (error_mode={error_mode})"
+    )
 
     # Step 1: Validate job is finished
     logger.info("Step 1: Validating job is finished")
@@ -3538,7 +4004,7 @@ def upload_job_and_trial_records(
 
     job_config = json.loads(config_path.read_text())
     job_result = json.loads(result_path.read_text())
-    job_id = job_result["id"]
+    job_result["id"]
 
     # Step 3: Auto-detect and lookup foreign keys
     logger.info("Step 3: Auto-detecting and looking up foreign keys")
@@ -3553,10 +4019,13 @@ def upload_job_and_trial_records(
         elif (d / "agent").exists():
             # Has agent data but no result — incomplete trial from timeout/crash
             import shutil
+
             shutil.rmtree(d)
             removed_incomplete += 1
     if removed_incomplete:
-        logger.warning(f"Removed {removed_incomplete} incomplete trial(s) (had agent/ but no result.json)")
+        logger.warning(
+            f"Removed {removed_incomplete} incomplete trial(s) (had agent/ but no result.json)"
+        )
     if not trial_dirs:
         raise ValueError(f"No complete trial directories found in {job_dir}")
 
@@ -3616,20 +4085,26 @@ def upload_job_and_trial_records(
     if not agent_name:
         agent_name = first_trial_result.get("agent_info", {}).get("name")
         if not agent_name:
-            raise ValueError("agent_name not provided and could not be auto-detected from trial")
+            raise ValueError(
+                "agent_name not provided and could not be auto-detected from trial"
+            )
         logger.info(f"Auto-detected agent_name: {agent_name}")
 
     if not agent_version:
         agent_version = first_trial_result.get("agent_info", {}).get("version")
         if not agent_version:
-            raise ValueError("agent_version not provided and could not be auto-detected from trial")
+            raise ValueError(
+                "agent_version not provided and could not be auto-detected from trial"
+            )
         logger.info(f"Auto-detected agent_version: {agent_version}")
 
     # Auto-detect model name
     if not model_name:
         model_name = first_trial_config.get("agent", {}).get("model_name")
         if not model_name:
-            raise ValueError("model_name not provided and could not be auto-detected from trial config")
+            raise ValueError(
+                "model_name not provided and could not be auto-detected from trial config"
+            )
         logger.info(f"Auto-detected model_name: {model_name}")
 
     # Auto-detect benchmark name using shared utility
@@ -3638,10 +4113,12 @@ def upload_job_and_trial_records(
             # Import shared utility from hpc.launch_utils
             import sys
             from pathlib import Path as _Path
+
             _hpc_path = _Path(__file__).resolve().parents[2] / "hpc"
             if str(_hpc_path.parent) not in sys.path:
                 sys.path.insert(0, str(_hpc_path.parent))
             from hpc.launch_utils import derive_benchmark_from_job_dir
+
             benchmark_name = derive_benchmark_from_job_dir(job_dir)
             logger.info(f"Auto-detected benchmark_name: {benchmark_name}")
         except ImportError:
@@ -3651,14 +4128,21 @@ def upload_job_and_trial_records(
             registry_name = first_dataset.get("name")
             registry_version = first_dataset.get("version")
             if registry_name:
-                benchmark_name = f"{registry_name}@{registry_version}" if registry_version else registry_name
+                benchmark_name = (
+                    f"{registry_name}@{registry_version}"
+                    if registry_version
+                    else registry_name
+                )
             if not benchmark_name:
-                raise ValueError("benchmark_name not provided and could not be auto-detected from job config")
+                raise ValueError(
+                    "benchmark_name not provided and could not be auto-detected from job config"
+                )
             logger.info(f"Auto-detected benchmark_name (fallback): {benchmark_name}")
 
     # Auto-detect benchmark version hash from config
     if not benchmark_version_hash:
         import hashlib
+
         datasets_cfg = job_config.get("datasets", [{}])
         first_dataset = datasets_cfg[0] if datasets_cfg else {}
 
@@ -3666,9 +4150,15 @@ def upload_job_and_trial_records(
         registry_name = first_dataset.get("name")
         registry_version = first_dataset.get("version")
         if registry_name:
-            version_str = f"{registry_name}:{registry_version}" if registry_version else registry_name
+            version_str = (
+                f"{registry_name}:{registry_version}"
+                if registry_version
+                else registry_name
+            )
             benchmark_version_hash = hashlib.sha256(version_str.encode()).hexdigest()
-            logger.info(f"Generated benchmark_version_hash from registry info: {benchmark_version_hash[:16]}...")
+            logger.info(
+                f"Generated benchmark_version_hash from registry info: {benchmark_version_hash[:16]}..."
+            )
 
         # Method 2: HF cache path style - extract from snapshots path
         if not benchmark_version_hash:
@@ -3677,22 +4167,32 @@ def upload_job_and_trial_records(
                 snapshot_part = dataset_path.split("snapshots/")[1]
                 raw_hash = snapshot_part.strip("/").split("/")[0]
                 if len(raw_hash) == 40:
-                    benchmark_version_hash = hashlib.sha256(raw_hash.encode()).hexdigest()
-                    logger.info(f"Auto-detected git hash {raw_hash}, converted to SHA-256: {benchmark_version_hash}")
+                    benchmark_version_hash = hashlib.sha256(
+                        raw_hash.encode()
+                    ).hexdigest()
+                    logger.info(
+                        f"Auto-detected git hash {raw_hash}, converted to SHA-256: {benchmark_version_hash}"
+                    )
                 else:
                     benchmark_version_hash = raw_hash
-                    logger.info(f"Auto-detected benchmark_version_hash from path: {benchmark_version_hash}")
+                    logger.info(
+                        f"Auto-detected benchmark_version_hash from path: {benchmark_version_hash}"
+                    )
 
         # Method 3: Fallback - generate hash from benchmark_name
         if not benchmark_version_hash:
             benchmark_version_hash = hashlib.sha256(benchmark_name.encode()).hexdigest()
-            logger.info(f"Generated benchmark_version_hash from name: {benchmark_version_hash[:16]}...")
+            logger.info(
+                f"Generated benchmark_version_hash from name: {benchmark_version_hash[:16]}..."
+            )
 
     # Lookup foreign keys in database
     logger.info("Looking up agent in database...")
     agent = get_agent_by_name(agent_name)
     if not agent:
-        raise ValueError(f"Agent not found in database: {agent_name}. Please register the agent first.")
+        raise ValueError(
+            f"Agent not found in database: {agent_name}. Please register the agent first."
+        )
     agent_id = agent["id"]
     logger.info(f"Found agent: {agent_id}")
 
@@ -3704,7 +4204,9 @@ def upload_job_and_trial_records(
         hf_name = model_name
         if model_name.startswith("hosted_vllm/"):
             hf_name = model_name.split("hosted_vllm/", 1)[1]
-            logger.info(f"Model '{model_name}' not found, trying stripped name: {hf_name}")
+            logger.info(
+                f"Model '{model_name}' not found, trying stripped name: {hf_name}"
+            )
             model = get_model_by_name(hf_name)
 
         # If still missing, attempt auto-register from HF
@@ -3714,21 +4216,37 @@ def upload_job_and_trial_records(
             if summary:
                 # Use eval job's agent_name as fallback if model's run_summary is missing it
                 if not summary.get("agent_name") and agent_name:
-                    logger.info(f"Model run_summary missing agent_name, using eval agent: {agent_name}")
+                    logger.info(
+                        f"Model run_summary missing agent_name, using eval agent: {agent_name}"
+                    )
                     summary["agent_name"] = agent_name
-                uploaded_model = register_trained_model(summary, forced_update=forced_update)
-                if not uploaded_model or uploaded_model.get('success') == False:
+                uploaded_model = register_trained_model(
+                    summary, forced_update=forced_update
+                )
+                if not uploaded_model or not uploaded_model.get("success"):
                     # If trained model registration fails, fall back to base model registration
-                    logger.warning(f"register_trained_model failed for {hf_name}, trying register_base_model")
-                    uploaded_model = register_base_model(hf_name, forced_update=forced_update)
-                    if not uploaded_model or uploaded_model.get('success') == False:
-                        raise ValueError(f"Could not register model in database: {uploaded_model}")
+                    logger.warning(
+                        f"register_trained_model failed for {hf_name}, trying register_base_model"
+                    )
+                    uploaded_model = register_base_model(
+                        hf_name, forced_update=forced_update
+                    )
+                    if not uploaded_model or not uploaded_model.get("success"):
+                        raise ValueError(
+                            f"Could not register model in database: {uploaded_model}"
+                        )
             else:
                 # No run_summary.json - this is likely a base model (Qwen, Llama, etc.)
-                logger.info(f"No run_summary.json for {hf_name}, registering as base model")
-                uploaded_model = register_base_model(hf_name, forced_update=forced_update)
-                if not uploaded_model or uploaded_model.get('success') == False:
-                    raise ValueError(f"Could not register base model in database: {uploaded_model}")
+                logger.info(
+                    f"No run_summary.json for {hf_name}, registering as base model"
+                )
+                uploaded_model = register_base_model(
+                    hf_name, forced_update=forced_update
+                )
+                if not uploaded_model or not uploaded_model.get("success"):
+                    raise ValueError(
+                        f"Could not register base model in database: {uploaded_model}"
+                    )
             # Re-lookup after attempted registration
             model = get_model_by_name(hf_name)
             if model:
@@ -3736,7 +4254,9 @@ def upload_job_and_trial_records(
                 model_name = hf_name
 
     if not model:
-        raise ValueError(f"Model not found in database: {model_name}. Please register the model first.")
+        raise ValueError(
+            f"Model not found in database: {model_name}. Please register the model first."
+        )
 
     model_id = model["id"]
     logger.info(f"Found model: {model_id}")
@@ -3746,11 +4266,13 @@ def upload_job_and_trial_records(
 
     # If register_benchmark=True and benchmark not found, auto-register it
     if register_benchmark and not benchmark:
-        logger.info(f"Benchmark not found. Auto-registering benchmark and tasks from job...")
+        logger.info(
+            "Benchmark not found. Auto-registering benchmark and tasks from job..."
+        )
         reg_result = register_benchmark_and_tasks_from_job(
             job_dir=job_dir,
             benchmark_name=benchmark_name,
-            benchmark_version_hash=benchmark_version_hash
+            benchmark_version_hash=benchmark_version_hash,
         )
         if not reg_result.get("success"):
             raise ValueError(f"Failed to register benchmark: {reg_result.get('error')}")
@@ -3795,8 +4317,10 @@ def upload_job_and_trial_records(
         eval_jobs_meta = job_dir.parent.parent / "eval_jobs" / job_dir.name / "meta.env"
         if not eval_jobs_meta.exists():
             # Try common eval_jobs locations
-            for parent in [Path("/leonardo_work/AIFAC_5C0_290/bfeuer00/eval_jobs"),
-                           Path("/e/data1/datasets/playground/ot/eval_jobs")]:
+            for parent in [
+                Path("/leonardo_work/AIFAC_5C0_290/bfeuer00/eval_jobs"),
+                Path("/e/data1/datasets/playground/ot/eval_jobs"),
+            ]:
                 candidate = parent / job_dir.name / "meta.env"
                 if candidate.exists():
                     eval_jobs_meta = candidate
@@ -3807,23 +4331,30 @@ def upload_job_and_trial_records(
                     val = line.split("=", 1)[1].strip()
                     if val:
                         existing_job_id = val
-                        logger.info(f"Found existing job ID in eval_jobs meta.env: {existing_job_id}")
+                        logger.info(
+                            f"Found existing job ID in eval_jobs meta.env: {existing_job_id}"
+                        )
                     break
 
     # Last resort: look up by model_id + benchmark_id to find sbatch-created "Started" job
     if not existing_job_id:
         try:
             client = get_supabase_client()
-            resp = client.table('sandbox_jobs').select('id,job_status').eq(
-                'model_id', str(model_id)
-            ).eq(
-                'benchmark_id', str(benchmark_id)
-            ).eq(
-                'job_status', 'Started'
-            ).order('created_at', desc=True).limit(1).execute()
+            resp = (
+                client.table("sandbox_jobs")
+                .select("id,job_status")
+                .eq("model_id", str(model_id))
+                .eq("benchmark_id", str(benchmark_id))
+                .eq("job_status", "Started")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
             if resp.data:
-                existing_job_id = resp.data[0]['id']
-                logger.info(f"Found existing 'Started' job by model+benchmark lookup: {existing_job_id}")
+                existing_job_id = resp.data[0]["id"]
+                logger.info(
+                    f"Found existing 'Started' job by model+benchmark lookup: {existing_job_id}"
+                )
         except Exception as e:
             logger.warning(f"Failed to look up existing job by model+benchmark: {e}")
 
@@ -3835,13 +4366,15 @@ def upload_job_and_trial_records(
     if existing_job_id:
         # UPDATE existing job row (created by sbatch)
         logger.info(f"Updating existing job {existing_job_id} with final results")
-        
+
         try:
             client = get_supabase_client()
-            
+
             # Prepare update payload with final job data
             update_data = {
-                "ended_at": job_metadata["ended_at"].isoformat() if job_metadata.get("ended_at") else None,
+                "ended_at": job_metadata["ended_at"].isoformat()
+                if job_metadata.get("ended_at")
+                else None,
                 "git_commit_id": job_metadata.get("git_commit_id"),
                 "package_version": job_metadata.get("package_version"),
                 "metrics": job_metadata.get("metrics"),
@@ -3852,34 +4385,39 @@ def upload_job_and_trial_records(
                 "n_trials": job_metadata.get("n_trials"),
                 "n_rep_eval": job_metadata.get("n_rep_eval"),
             }
-            
+
             # Remove None values to avoid overwriting with null
             update_data = {k: v for k, v in update_data.items() if v is not None}
-            
-            resp = client.table('sandbox_jobs').update(update_data).eq('id', existing_job_id).execute()
-            
+
+            resp = (
+                client.table("sandbox_jobs")
+                .update(update_data)
+                .eq("id", existing_job_id)
+                .execute()
+            )
+
             if not resp.data:
                 raise Exception(f"Failed to update job {existing_job_id}")
-            
+
             db_job_id = existing_job_id
             job_record = {"success": True, "job": resp.data[0], "updated": True}
             logger.info(f"Job {db_job_id} updated successfully")
-            
+
         except Exception as e:
             raise Exception(f"Job update failed: {e}")
-    
+
     else:
         # CREATE new job (fallback for manual/legacy uploads without sbatch pre-creation)
         logger.info("No existing job found in meta.env, creating new job (legacy mode)")
-        
+
         job_metadata["hf_traces_link"] = hf_dataset_url
         job_metadata["job_status"] = "Finished"
-        
+
         job_record = register_sandbox_job(**job_metadata, forced_update=forced_update)
-        
+
         if not job_record.get("success"):
             raise Exception(f"Job registration failed: {job_record.get('error')}")
-        
+
         # Get the database-generated job_id
         db_job_id = job_record.get("job", {}).get("id")
         if not db_job_id:
@@ -3912,11 +4450,17 @@ def upload_job_and_trial_records(
                 trial_uri = None
 
             # Register trial
-            trial_metadata = _extract_trial_metadata(trial_dir, trial_uri, trial_id, db_job_id, task_checksum)
-            trial_record = register_sandbox_trial(**trial_metadata, forced_update=forced_update)
+            trial_metadata = _extract_trial_metadata(
+                trial_dir, trial_uri, trial_id, db_job_id, task_checksum
+            )
+            trial_record = register_sandbox_trial(
+                **trial_metadata, forced_update=forced_update
+            )
 
             if not trial_record.get("success"):
-                raise Exception(f"Trial registration failed: {trial_record.get('error')}")
+                raise Exception(
+                    f"Trial registration failed: {trial_record.get('error')}"
+                )
 
             # Track registered trial for potential rollback
             registered_trial_ids.append(trial_id)
@@ -3924,12 +4468,20 @@ def upload_job_and_trial_records(
             # Register model usage (if available)
             usage_metadata = _extract_model_usage(trial_dir, trial_id, model_id)
             if usage_metadata:
-                usage_record = register_trial_model_usage(**usage_metadata, forced_update=forced_update)
+                usage_record = register_trial_model_usage(
+                    **usage_metadata, forced_update=forced_update
+                )
                 if not usage_record.get("success"):
-                    raise Exception(f"Model usage registration failed: {usage_record.get('error')}")
+                    raise Exception(
+                        f"Model usage registration failed: {usage_record.get('error')}"
+                    )
 
                 # Track registered usage for potential rollback
-                usage_key = (usage_metadata["trial_id"], usage_metadata["model_id"], usage_metadata["model_provider"])
+                usage_key = (
+                    usage_metadata["trial_id"],
+                    usage_metadata["model_id"],
+                    usage_metadata["model_provider"],
+                )
                 registered_usage_records.append(usage_key)
 
             trials_uploaded.append(trial_record.get("trial"))
@@ -3940,16 +4492,22 @@ def upload_job_and_trial_records(
 
             if error_mode == "skip_on_error":
                 # Skip mode: Log error and continue to next trial
-                logger.warning(f"  Skipping failed trial {trial_name} (error_mode=skip_on_error)")
-                trials_failed.append({
-                    "trial_name": trial_name,
-                    "trial_number": i,
-                    "error": str(e),
-                })
+                logger.warning(
+                    f"  Skipping failed trial {trial_name} (error_mode=skip_on_error)"
+                )
+                trials_failed.append(
+                    {
+                        "trial_name": trial_name,
+                        "trial_number": i,
+                        "error": str(e),
+                    }
+                )
             else:
                 # Rollback mode: Trigger rollback and return immediately
-                logger.error(f"Triggering immediate rollback due to trial failure...")
-                _rollback_db_records(db_job_id, registered_trial_ids, registered_usage_records)
+                logger.error("Triggering immediate rollback due to trial failure...")
+                _rollback_db_records(
+                    db_job_id, registered_trial_ids, registered_usage_records
+                )
 
                 return {
                     "success": False,
@@ -3963,13 +4521,15 @@ def upload_job_and_trial_records(
                         "trial_name": trial_name,
                         "trial_number": i,
                         "error": str(e),
-                    }
+                    },
                 }
 
     # Step 6: Calculate and upload standard error if n_attempts > 1
     n_attempts = job_config.get("n_attempts", 1)
     if n_attempts > 1 and len(trials_uploaded) > 0:
-        logger.info(f"Step 6: Calculating standard error for {n_attempts} repeated evaluation runs")
+        logger.info(
+            f"Step 6: Calculating standard error for {n_attempts} repeated evaluation runs"
+        )
         try:
             stderr = calculate_standard_error(job_dir, n_attempts)
             if stderr is not None:
@@ -3980,20 +4540,25 @@ def upload_job_and_trial_records(
                 current_metrics = job_record.get("job", {}).get("metrics", []) or []
 
                 # Add standard error to metrics
-                updated_metrics = current_metrics + [{"name": "accuracy_stderr", "value": stderr}]
+                updated_metrics = current_metrics + [
+                    {"name": "accuracy_stderr", "value": stderr}
+                ]
 
                 # Update job record in database
                 admin_client = get_admin_client()
-                update_result = admin_client.table("sandbox_jobs").update({
-                    "metrics": updated_metrics
-                }).eq("id", db_job_id).execute()
+                update_result = (
+                    admin_client.table("sandbox_jobs")
+                    .update({"metrics": updated_metrics})
+                    .eq("id", db_job_id)
+                    .execute()
+                )
 
                 if update_result:
-                    logger.info(f"Successfully updated job record with standard error")
+                    logger.info("Successfully updated job record with standard error")
                     # Update the job record in our summary
                     job_record["job"]["metrics"] = updated_metrics
                 else:
-                    logger.warning(f"Failed to update job record with standard error")
+                    logger.warning("Failed to update job record with standard error")
         except Exception as e:
             logger.warning(f"Failed to calculate or upload standard error: {e}")
             # Don't fail the entire upload if stderr calculation fails
@@ -4015,7 +4580,7 @@ def upload_job_and_trial_records(
 
             # Write to new file
             result_with_stderr_path.write_text(json.dumps(result_data, indent=2))
-            logger.info(f"Created result_with_std_error.json with updated metrics")
+            logger.info("Created result_with_std_error.json with updated metrics")
     except Exception as e:
         logger.warning(f"Failed to create result_with_std_error.json: {e}")
         # Don't fail the entire upload if file creation fails
@@ -4025,21 +4590,29 @@ def upload_job_and_trial_records(
         "success": True,
         "job_id": db_job_id,
         "job_name": job_config["job_name"],
-        "job_updated": job_record.get("updated", False),  # True if updated existing, False if created new
+        "job_updated": job_record.get(
+            "updated", False
+        ),  # True if updated existing, False if created new
         "n_trials_total": len(trial_dirs),
         "n_trials_uploaded": len(trials_uploaded),
         "n_trials_failed": len(trials_failed),
         "failed_trials": trials_failed,
         "job": job_record.get("job"),
-        "trials": trials_uploaded
+        "trials": trials_uploaded,
     }
 
     if trials_failed:
-        logger.warning(f"Upload completed with failures: {len(trials_uploaded)}/{len(trial_dirs)} trials uploaded, {len(trials_failed)} failed")
-        logger.warning(f"Failed trials: {[trial['trial_name'] for trial in trials_failed]}")
+        logger.warning(
+            f"Upload completed with failures: {len(trials_uploaded)}/{len(trial_dirs)} trials uploaded, {len(trials_failed)} failed"
+        )
+        logger.warning(
+            f"Failed trials: {[trial['trial_name'] for trial in trials_failed]}"
+        )
     else:
-        logger.info(f"Upload completed successfully: {len(trials_uploaded)}/{len(trial_dirs)} trials uploaded")
-    
+        logger.info(
+            f"Upload completed successfully: {len(trials_uploaded)}/{len(trial_dirs)} trials uploaded"
+        )
+
     return summary
 
 
@@ -4172,7 +4745,7 @@ def upload_traces_to_hf(
             repo_type="dataset",
             private=private,
             token=token,
-            exist_ok=True
+            exist_ok=True,
         )
         logger.info(f"Repository {hf_repo_id} created or already exists")
     except Exception as e:
@@ -4183,7 +4756,7 @@ def upload_traces_to_hf(
     logger.info("Uploading dataset to HuggingFace Hub...")
     try:
         dataset.push_to_hub(hf_repo_id, token=token)
-        logger.info(f"Upload complete")
+        logger.info("Upload complete")
     except Exception as e:
         logger.error(f"Failed to upload to HuggingFace: {e}")
         raise
@@ -4205,7 +4778,7 @@ def create_job_entry_started(
     config: Dict[str, Any],
     n_trials: int,
     n_rep_eval: int,
-    harbor_package_version: Optional[str] = "-1.0.0"
+    harbor_package_version: Optional[str] = "-1.0.0",
 ) -> Dict[str, Any]:
     """
     Create initial sandbox_jobs entry with status='Started'.
@@ -4219,7 +4792,13 @@ def create_job_entry_started(
         if not agent:
             # Get latest agent by name
             client = get_supabase_client()
-            resp = client.table('agents').select('*').eq('name', agent_name).limit(1).execute()
+            resp = (
+                client.table("agents")
+                .select("*")
+                .eq("name", agent_name)
+                .limit(1)
+                .execute()
+            )
             if not resp.data:
                 return {"success": False, "error": f"Agent '{agent_name}' not found"}
             agent = resp.data[0]
@@ -4232,7 +4811,10 @@ def create_job_entry_started(
         benchmark_name = benchmark_hf_name.split("/")[-1]
         benchmark = get_benchmark_by_name(benchmark_name)
         if not benchmark:
-            return {"success": False, "error": f"Benchmark '{benchmark_name}' not found"}
+            return {
+                "success": False,
+                "error": f"Benchmark '{benchmark_name}' not found",
+            }
 
         # Create job row
         client = get_supabase_client()
@@ -4256,7 +4838,7 @@ def create_job_entry_started(
             "job_status": "Started",
         }
 
-        resp = client.table('sandbox_jobs').insert(job_data).execute()
+        resp = client.table("sandbox_jobs").insert(job_data).execute()
 
         if not resp.data:
             return {"success": False, "error": "Failed to insert job row"}
@@ -4269,8 +4851,7 @@ def create_job_entry_started(
 
 
 def get_latest_job_for_model_benchmark(
-    model_hf_name: str,
-    benchmark_hf_name: str
+    model_hf_name: str, benchmark_hf_name: str
 ) -> Optional[Dict]:
     """Get the most recent job for a model+benchmark combination."""
     try:
@@ -4284,13 +4865,15 @@ def get_latest_job_for_model_benchmark(
             return None
 
         client = get_supabase_client()
-        resp = client.table('sandbox_jobs')\
-            .select('*')\
-            .eq('model_id', model["id"])\
-            .eq('benchmark_id', benchmark["id"])\
-            .order('created_at', desc=True)\
-            .limit(1)\
+        resp = (
+            client.table("sandbox_jobs")
+            .select("*")
+            .eq("model_id", model["id"])
+            .eq("benchmark_id", benchmark["id"])
+            .order("created_at", desc=True)
+            .limit(1)
             .execute()
+        )
 
         return resp.data[0] if resp.data else None
 
@@ -4382,7 +4965,9 @@ def upload_eval_results(
     """
     # Validate error_mode
     if error_mode not in ("rollback_on_error", "skip_on_error"):
-        raise ValueError(f"Invalid error_mode: {error_mode}. Must be 'rollback_on_error' or 'skip_on_error'")
+        raise ValueError(
+            f"Invalid error_mode: {error_mode}. Must be 'rollback_on_error' or 'skip_on_error'"
+        )
 
     logger.info(f"Starting upload of evaluation results from {job_dir}")
     logger.info(f"Error mode: {error_mode}")
@@ -4416,7 +5001,9 @@ def upload_eval_results(
             # Handle based on error_mode
             if error_mode == "rollback_on_error":
                 # For rollback mode, return early with error details
-                logger.error("Rollback mode: Aborting entire upload process due to HF upload failure")
+                logger.error(
+                    "Rollback mode: Aborting entire upload process due to HF upload failure"
+                )
                 return {
                     "success": False,
                     "job_id": None,
@@ -4429,7 +5016,9 @@ def upload_eval_results(
                 }
             else:  # skip_on_error
                 # For skip mode, log warning and continue with DB upload
-                logger.warning(f"Skip mode: HF upload failed but continuing with DB upload. Error: {hf_upload_error}")
+                logger.warning(
+                    f"Skip mode: HF upload failed but continuing with DB upload. Error: {hf_upload_error}"
+                )
                 # Continue to DB upload even though HF failed
     else:
         logger.info("Step 1: Skipping HuggingFace upload (no hf_repo_id provided)")
@@ -4466,8 +5055,12 @@ def upload_eval_results(
             if error_mode == "skip_on_error" and db_result.get("success"):
                 db_result["partial_success"] = True
                 db_result["warnings"] = db_result.get("warnings", [])
-                db_result["warnings"].append(f"HuggingFace upload failed: {hf_upload_error}")
-                logger.warning("Upload completed with warnings: HF upload failed but DB records uploaded successfully")
+                db_result["warnings"].append(
+                    f"HuggingFace upload failed: {hf_upload_error}"
+                )
+                logger.warning(
+                    "Upload completed with warnings: HF upload failed but DB records uploaded successfully"
+                )
         elif hf_upload_attempted:
             db_result["hf_upload_success"] = True
 
@@ -4517,7 +5110,10 @@ def register_base_model(
     """
     try:
         if not base_model_name or not isinstance(base_model_name, str):
-            return {"success": False, "error": "base_model_name must be a non-empty string"}
+            return {
+                "success": False,
+                "error": "base_model_name must be a non-empty string",
+            }
 
         # If the model already exists, return or update depending on forced_update
         existing = get_model_by_name(base_model_name)
@@ -4525,7 +5121,11 @@ def register_base_model(
 
         # Derive created_by if not provided
         if not created_by:
-            created_by = base_model_name.split('/')[0] if '/' in base_model_name else "hf-uploader"
+            created_by = (
+                base_model_name.split("/")[0]
+                if "/" in base_model_name
+                else "hf-uploader"
+            )
 
         # Minimal training_parameters, with ability to extend
         tp = {
@@ -4585,7 +5185,9 @@ JOB_STATUS_STARTED = "Started"
 JOB_STATUS_FINISHED = "Finished"
 
 
-def get_job_by_model_benchmark(model_id: str, benchmark_id: str) -> Optional[Dict[str, Any]]:
+def get_job_by_model_benchmark(
+    model_id: str, benchmark_id: str
+) -> Optional[Dict[str, Any]]:
     """
     Get the most recent job for a given model and benchmark.
 
@@ -4599,11 +5201,11 @@ def get_job_by_model_benchmark(model_id: str, benchmark_id: str) -> Optional[Dic
     try:
         client = get_supabase_client()
         response = (
-            client.table('sandbox_jobs')
-            .select('*')
-            .eq('model_id', model_id)
-            .eq('benchmark_id', benchmark_id)
-            .order('created_at', desc=True)
+            client.table("sandbox_jobs")
+            .select("*")
+            .eq("model_id", model_id)
+            .eq("benchmark_id", benchmark_id)
+            .order("created_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -4611,9 +5213,11 @@ def get_job_by_model_benchmark(model_id: str, benchmark_id: str) -> Optional[Dic
         if not response.data:
             return None
 
-        return clean_sandbox_job_metadata(response.data[0])
+        return clean_sandbox_job_metadata(response.data[0])  # noqa: F405
     except Exception as e:
-        logger.error(f"Error getting job for model={model_id}, benchmark={benchmark_id}: {e}")
+        logger.error(
+            f"Error getting job for model={model_id}, benchmark={benchmark_id}: {e}"
+        )
         return None
 
 
@@ -4624,7 +5228,7 @@ def create_job_entry_pending(
     agent_name: str,
     slurm_job_id: str,
     username: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create a job entry with status="Pending" at SLURM submit time.
@@ -4652,35 +5256,45 @@ def create_job_entry_pending(
         model = get_model_by_name(model_hf)
         if not model:
             return {"success": False, "error": f"Model not found: {model_hf}"}
-        model_id = model['id']
+        model_id = model["id"]
 
         # Resolve benchmark (extract repo name from HF format)
-        benchmark_name = benchmark_hf.split("/")[-1] if "/" in benchmark_hf else benchmark_hf
+        benchmark_name = (
+            benchmark_hf.split("/")[-1] if "/" in benchmark_hf else benchmark_hf
+        )
         benchmark = get_benchmark_by_name(benchmark_name)
         if not benchmark:
             return {"success": False, "error": f"Benchmark not found: {benchmark_name}"}
-        benchmark_id = benchmark['id']
+        benchmark_id = benchmark["id"]
 
         # Check for existing job (any status) - prevent duplicates
         existing = get_job_by_model_benchmark(model_id, benchmark_id)
         if existing:
-            status = existing.get('job_status')
+            status = existing.get("job_status")
             if status == JOB_STATUS_FINISHED:
-                return {"success": False, "error": f"Job already finished", "job": existing}
+                return {
+                    "success": False,
+                    "error": "Job already finished",
+                    "job": existing,
+                }
             if status in (JOB_STATUS_PENDING, JOB_STATUS_STARTED):
                 return {"success": True, "job": existing, "exists": True}
 
         # Resolve or create agent
         agent_res = register_agent(name=agent_name)
-        if not agent_res.get('success'):
-            return {"success": False, "error": f"Failed to register agent: {agent_res.get('error')}"}
-        agent_id = agent_res['agent']['id']
+        if not agent_res.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to register agent: {agent_res.get('error')}",
+            }
+        agent_id = agent_res["agent"]["id"]
 
         # Build minimal job entry for Pending status
         now = datetime.now(timezone.utc)
         # Get harbor package version to satisfy sandbox_job_version_check constraint
         try:
             import harbor
+
             harbor_version = harbor.__version__
         except Exception:
             harbor_version = "unknown"
@@ -4717,7 +5331,7 @@ def update_job_status_to_started(
     n_trials: int,
     n_rep_eval: int,
     config: Dict[str, Any],
-    harbor_package_version: Optional[str] = None
+    harbor_package_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Update a Pending job to Started status when sbatch actually runs.
@@ -4743,12 +5357,12 @@ def update_job_status_to_started(
         if not existing:
             return {"success": False, "error": f"Job not found: {job_name}"}
 
-        job_id = existing['id']
-        current_status = existing.get('job_status')
+        job_id = existing["id"]
+        current_status = existing.get("job_status")
 
         # Validate state transition
         if current_status == JOB_STATUS_FINISHED:
-            return {"success": False, "error": f"Job already finished, cannot restart"}
+            return {"success": False, "error": "Job already finished, cannot restart"}
         if current_status == JOB_STATUS_STARTED:
             # Already started, just return success (idempotent)
             logger.info(f"Job {job_name} already in Started status")
@@ -4774,7 +5388,7 @@ def update_job_status_to_started(
         return {"success": False, "error": str(e)}
 
 
-def create_job_entry_started(
+def create_job_entry_started(  # noqa: F811
     model_hf_name: str,
     benchmark_hf_name: str,
     job_name: str,
@@ -4784,7 +5398,7 @@ def create_job_entry_started(
     agent_name: str,
     config: Dict[str, Any],
     n_trials: int,
-    n_rep_eval: int
+    n_rep_eval: int,
 ) -> Dict[str, Any]:
     """
     Create a job entry with status="Started" directly.
@@ -4814,7 +5428,7 @@ def create_job_entry_started(
         # First, check if a Pending entry exists and upgrade it
         existing = get_sandbox_job_by_name(job_name)
         if existing:
-            status = existing.get('job_status')
+            status = existing.get("job_status")
             if status == JOB_STATUS_PENDING:
                 # Upgrade Pending -> Started
                 return update_job_status_to_started(
@@ -4822,7 +5436,7 @@ def create_job_entry_started(
                     n_trials=n_trials,
                     n_rep_eval=n_rep_eval,
                     config=config,
-                    harbor_package_version=harbor_package_version
+                    harbor_package_version=harbor_package_version,
                 )
             elif status == JOB_STATUS_STARTED:
                 logger.info(f"Job {job_name} already Started")
@@ -4834,20 +5448,27 @@ def create_job_entry_started(
         model = get_model_by_name(model_hf_name)
         if not model:
             return {"success": False, "error": f"Model not found: {model_hf_name}"}
-        model_id = model['id']
+        model_id = model["id"]
 
         # Resolve benchmark
-        benchmark_name = benchmark_hf_name.split("/")[-1] if "/" in benchmark_hf_name else benchmark_hf_name
+        benchmark_name = (
+            benchmark_hf_name.split("/")[-1]
+            if "/" in benchmark_hf_name
+            else benchmark_hf_name
+        )
         benchmark = get_benchmark_by_name(benchmark_name)
         if not benchmark:
             return {"success": False, "error": f"Benchmark not found: {benchmark_name}"}
-        benchmark_id = benchmark['id']
+        benchmark_id = benchmark["id"]
 
         # Resolve or create agent
         agent_res = register_agent(name=agent_name)
-        if not agent_res.get('success'):
-            return {"success": False, "error": f"Failed to register agent: {agent_res.get('error')}"}
-        agent_id = agent_res['agent']['id']
+        if not agent_res.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to register agent: {agent_res.get('error')}",
+            }
+        agent_id = agent_res["agent"]["id"]
 
         # Build full job entry
         now = datetime.now(timezone.utc)

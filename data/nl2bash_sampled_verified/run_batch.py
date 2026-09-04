@@ -22,9 +22,15 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a batch of nl2bash teacher generations.",
     )
-    parser.add_argument("--num-tasks", type=int, default=100, help="Number of tasks to generate.")
-    parser.add_argument("--first-seed", type=int, default=0, help="Starting seed value.")
-    parser.add_argument("--split", type=str, default="train", help="Dataset split to sample.")
+    parser.add_argument(
+        "--num-tasks", type=int, default=100, help="Number of tasks to generate."
+    )
+    parser.add_argument(
+        "--first-seed", type=int, default=0, help="Starting seed value."
+    )
+    parser.add_argument(
+        "--split", type=str, default="train", help="Dataset split to sample."
+    )
     parser.add_argument(
         "--dataset-prefix-base",
         type=str,
@@ -118,7 +124,7 @@ def _build_specs(
         seed = first_seed + index
         output_dir = output_root / f"task_{index}"
         dataset_prefix = f"{dataset_prefix_base}-{index}"
-        
+
         dataset_index = None
         if sampling_config is not None:
             sample = sampling_config.get_sample(index)
@@ -127,7 +133,7 @@ def _build_specs(
                     f"Sampling config missing entry for task_index={index}"
                 )
             dataset_index = sample.dataset_index
-        
+
         specs.append(
             TaskGenerationSpec(
                 seed=seed,
@@ -212,7 +218,9 @@ def main() -> None:
             "jobs_dir": str(result.spec.jobs_dir),
             "success": result.success,
             "dataset_dir": str(result.dataset_dir) if result.dataset_dir else None,
-            "exception_path": str(result.exception_path) if result.exception_path else None,
+            "exception_path": str(result.exception_path)
+            if result.exception_path
+            else None,
         }
         serialisable.append(entry)
 

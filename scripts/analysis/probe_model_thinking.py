@@ -23,14 +23,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
-DEFAULT_DATASET = (
-    "DCAgent2/DCAgent_dev_set_v2_laion_exp_tas_timeout_multiplier_4_0_traces_20260211_064438"
-)
+DEFAULT_DATASET = "DCAgent2/DCAgent_dev_set_v2_laion_exp_tas_timeout_multiplier_4_0_traces_20260211_064438"
 DEFAULT_MODEL = (
     "laion/GLM-4_7-swesmith-sandboxes-with_tests-oracle_verified_120s-maxeps-131k"
 )
@@ -151,11 +148,13 @@ def extract_initial_prompts(
             continue
 
         task_id = row.get("task", row.get("trial_name", f"row_{i}"))
-        prompts.append({
-            "row_index": i,
-            "task": task_id,
-            "messages": [{"role": "user", "content": first_user_content}],
-        })
+        prompts.append(
+            {
+                "row_index": i,
+                "task": task_id,
+                "messages": [{"role": "user", "content": first_user_content}],
+            }
+        )
         print(f"  Row {i} ({task_id}): prompt length {len(first_user_content)} chars")
 
     return prompts
@@ -287,7 +286,9 @@ def run_inference(
 
     device_map, torch_dtype, device_label = _resolve_device_and_dtype(dtype)
 
-    print(f"\n[probe] Loading model: {model_name} (dtype={dtype}, device={device_label})")
+    print(
+        f"\n[probe] Loading model: {model_name} (dtype={dtype}, device={device_label})"
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -313,13 +314,21 @@ def run_inference(
         }
 
         sampling_kwargs = dict(
-            temperature=temperature, top_p=top_p, top_k=top_k, greedy=greedy,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            greedy=greedy,
         )
 
         # Run with thinking enabled
         thinking_on = _generate_once(
-            model, tokenizer, messages, max_new_tokens,
-            enable_thinking=True, label="thinking=ON", **sampling_kwargs,
+            model,
+            tokenizer,
+            messages,
+            max_new_tokens,
+            enable_thinking=True,
+            label="thinking=ON",
+            **sampling_kwargs,
         )
         if thinking_on is not None:
             result_entry["thinking_enabled"] = thinking_on
@@ -328,8 +337,13 @@ def run_inference(
 
         # Run with thinking disabled
         thinking_off = _generate_once(
-            model, tokenizer, messages, max_new_tokens,
-            enable_thinking=False, label="thinking=OFF", **sampling_kwargs,
+            model,
+            tokenizer,
+            messages,
+            max_new_tokens,
+            enable_thinking=False,
+            label="thinking=OFF",
+            **sampling_kwargs,
         )
         if thinking_off is not None:
             result_entry["thinking_disabled"] = thinking_off
@@ -344,6 +358,7 @@ def run_inference(
 def _default_output_path(model: str) -> str:
     """Build a default output filename from the model name and current time."""
     from datetime import datetime
+
     # Use the part after the last '/' (or the whole string) as the short name,
     # replacing characters that are awkward in filenames.
     short = model.rsplit("/", 1)[-1]
@@ -370,9 +385,14 @@ def main() -> None:
         sys.exit(1)
 
     sampling_mode = "greedy" if args.greedy else "sampling"
-    print(f"[probe] Generation: {sampling_mode}"
-          + (f" (temperature={args.temperature}, top_p={args.top_p}, top_k={args.top_k})"
-             if not args.greedy else ""))
+    print(
+        f"[probe] Generation: {sampling_mode}"
+        + (
+            f" (temperature={args.temperature}, top_p={args.top_p}, top_k={args.top_k})"
+            if not args.greedy
+            else ""
+        )
+    )
 
     results = run_inference(
         args.model,
@@ -396,7 +416,9 @@ def main() -> None:
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
-        } if not args.greedy else {"mode": "greedy"},
+        }
+        if not args.greedy
+        else {"mode": "greedy"},
         "results": results,
     }
 

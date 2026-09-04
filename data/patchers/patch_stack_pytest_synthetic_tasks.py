@@ -28,6 +28,7 @@ re-upload doesn't ship broken scripts.
 CLI shape mirrors the existing v3 patcher (`--root`, `--dry-run`,
 `--limit`, `--drop-log`).
 """
+
 from __future__ import annotations
 
 import argparse

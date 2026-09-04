@@ -5,21 +5,191 @@ replacing 50+ Hydra CLI arguments with a single --rl_config YAML file.
 
 Usage:
     from hpc.rl_config_utils import parse_rl_config, build_skyrl_hydra_args
+    from hpc.rl_paths import RLPathManager
 
     parsed = parse_rl_config("terminal_bench.yaml")
-    hydra_args = build_skyrl_hydra_args(parsed, exp_args, hpc)
+    run_paths = RLPathManager(job_name, canonical_root, launch_root).resolve()
+    hydra_args = build_skyrl_hydra_args(parsed, exp_args, hpc, run_paths=run_paths)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import copy
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
+from hpc.rl_paths import RLRunPaths
+
 # Directory containing built-in SkyRL config YAML files
 SKYRL_CONFIG_DIR = Path(__file__).parent / "skyrl_yaml"
+
+_CONTEXT_BUDGET_FIELDS = frozenset(
+    {
+        "request_window_tokens",
+        "max_new_tokens_per_turn",
+        "max_turns",
+    }
+)
+
+_DERIVED_CONTEXT_FIELDS = (
+    ("trainer", "max_prompt_length"),
+    ("generator", "max_input_length"),
+    ("generator", "max_turns"),
+    ("generator", "sampling_params", "max_generate_length"),
+    ("generator", "engine_init_kwargs", "max_model_len"),
+    ("terminal_bench", "harbor", "max_episodes"),
+    ("terminal_bench", "harbor", "max_turns"),
+    ("terminal_bench", "model_info", "max_input_tokens"),
+    ("terminal_bench", "model_info", "max_output_tokens"),
+)
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    """One coherent token budget for an RL rollout request."""
+
+    request_window_tokens: int
+    max_new_tokens_per_turn: int
+    max_turns: int
+
+    @property
+    def max_input_tokens(self) -> int:
+        """Return the input allowance after reserving one complete response."""
+        return self.request_window_tokens - self.max_new_tokens_per_turn
+
+    def as_dict(self) -> Dict[str, int]:
+        """Return the public contract with its derived client input allowance."""
+        return {
+            "request_window_tokens": self.request_window_tokens,
+            "max_new_tokens_per_turn": self.max_new_tokens_per_turn,
+            "max_turns": self.max_turns,
+            "max_input_tokens": self.max_input_tokens,
+        }
+
+
+def _path_is_declared(mapping: Dict[str, Any], path: tuple[str, ...]) -> bool:
+    value: Any = mapping
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return False
+        value = value[key]
+    return True
+
+
+def _validate_no_derived_context_fields(raw: Dict[str, Any], config_path: Path) -> None:
+    declared = [
+        ".".join(path)
+        for path in _DERIVED_CONTEXT_FIELDS
+        if _path_is_declared(raw, path)
+    ]
+    if declared:
+        raise ValueError(
+            f"{config_path} declares derived context fields: {', '.join(declared)}. "
+            "Declare only context_budget instead."
+        )
+
+
+def _remove_derived_context_fields(raw: Dict[str, Any]) -> None:
+    for path in _DERIVED_CONTEXT_FIELDS:
+        parent: Any = raw
+        for key in path[:-1]:
+            if not isinstance(parent, dict) or key not in parent:
+                parent = None
+                break
+            parent = parent[key]
+        if isinstance(parent, dict):
+            parent.pop(path[-1], None)
+
+
+def _require_positive_integer(value: Any, field_name: str, config_path: Path) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"{config_path}: context_budget.{field_name} must be a positive integer, got {value!r}"
+        )
+    return value
+
+
+def resolve_context_budget(raw: Dict[str, Any], config_path: Path) -> ContextBudget:
+    """Validate the one public context declaration and derive its input allowance."""
+    _validate_no_derived_context_fields(raw, config_path)
+    config = raw.get("context_budget")
+    if not isinstance(config, dict):
+        raise ValueError(f"{config_path}: context_budget must be a mapping")
+
+    unknown = set(config) - _CONTEXT_BUDGET_FIELDS
+    if unknown:
+        raise ValueError(
+            f"{config_path}: unknown context_budget fields: {', '.join(sorted(unknown))}"
+        )
+    missing = _CONTEXT_BUDGET_FIELDS - set(config)
+    if missing:
+        raise ValueError(
+            f"{config_path}: missing context_budget fields: {', '.join(sorted(missing))}"
+        )
+
+    budget = ContextBudget(
+        request_window_tokens=_require_positive_integer(
+            config["request_window_tokens"], "request_window_tokens", config_path
+        ),
+        max_new_tokens_per_turn=_require_positive_integer(
+            config["max_new_tokens_per_turn"], "max_new_tokens_per_turn", config_path
+        ),
+        max_turns=_require_positive_integer(
+            config["max_turns"], "max_turns", config_path
+        ),
+    )
+    if budget.max_input_tokens <= 0:
+        raise ValueError(
+            f"{config_path}: request_window_tokens ({budget.request_window_tokens}) must exceed "
+            f"max_new_tokens_per_turn ({budget.max_new_tokens_per_turn})"
+        )
+    return budget
+
+
+def _materialize_context_budget(
+    raw: Dict[str, Any], budget: ContextBudget
+) -> tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Populate SkyRL and Harbor configuration from one resolved context budget."""
+    trainer = copy.deepcopy(raw.get("trainer", {}))
+    generator = copy.deepcopy(raw.get("generator", {}))
+    terminal_bench = copy.deepcopy(raw.get("terminal_bench"))
+    materialized_raw = copy.deepcopy(raw)
+
+    trainer["max_prompt_length"] = budget.max_input_tokens
+    generator["max_input_length"] = budget.max_input_tokens
+    generator["max_turns"] = budget.max_turns
+    generator.setdefault("sampling_params", {})["max_generate_length"] = (
+        budget.max_new_tokens_per_turn
+    )
+    generator.setdefault("engine_init_kwargs", {})["max_model_len"] = (
+        budget.request_window_tokens
+    )
+
+    if terminal_bench is not None:
+        terminal_bench.setdefault("harbor", {})["max_turns"] = budget.max_turns
+        model_info = terminal_bench.get("model_info") or {}
+        model_info["max_input_tokens"] = budget.max_input_tokens
+        model_info["max_output_tokens"] = budget.max_new_tokens_per_turn
+        terminal_bench["model_info"] = model_info
+
+    materialized_raw["context_budget"] = budget.as_dict()
+    materialized_raw["trainer"] = copy.deepcopy(trainer)
+    materialized_raw["generator"] = copy.deepcopy(generator)
+    if terminal_bench is not None:
+        materialized_raw["terminal_bench"] = copy.deepcopy(terminal_bench)
+    return trainer, generator, terminal_bench, materialized_raw
+
+
+def _override_key(override: str) -> str:
+    key, separator, _value = override.lstrip("+").partition("=")
+    if not separator:
+        raise ValueError(f"Invalid SkyRL override {override!r}; expected KEY=VALUE")
+    return key
+
 
 # =============================================================================
 # SkyRL Internal Engine Kwargs - DO NOT SET IN YAML CONFIGS
@@ -30,44 +200,46 @@ SKYRL_CONFIG_DIR = Path(__file__).parent / "skyrl_yaml"
 # Source: skyrl_train/inference_engines/ray_wrapped_inference_engine.py
 # =============================================================================
 
-SKYRL_INTERNAL_ENGINE_KWARGS = frozenset({
-    # Hardcoded values
-    "trust_remote_code",        # Always True
-    "worker_extension_cls",     # vLLM SkyRL extension path
-    "data_parallel_backend",    # Hardcoded "mp"
-    "max_logprobs",             # Hardcoded 1
-    # Calculated from config/environment
-    "distributed_executor_backend",  # Calculated from TP size ("uni" or "ray")
-    "enforce_eager",            # Set from generator.enforce_eager config
-    "tensor_parallel_size",     # Set from generator config
-    "data_parallel_size",       # Set from generator config
-    "seed",                     # Set from config
-    "enable_prefix_caching",    # Set from generator config
-    "dtype",                    # Set from generator.model_dtype
-    "gpu_memory_utilization",   # Set from generator config
-    "max_num_batched_tokens",   # Set from generator config
-    "max_num_seqs",             # Set from generator config
-    "enable_sleep_mode",        # Set from trainer.placement.colocate_all
-    "vllm_v1_disable_multiproc",  # Set from generator config
-    # Ray internal management
-    "bundle_indices",           # Calculated from parallelism config
-    "num_gpus",                 # Ray resource allocation
-    "noset_visible_devices",    # Ray CUDA_VISIBLE_DEVICES handling
-    # SGLang-specific (if using SGLang backend)
-    "model_path",               # Set from trainer.policy.model.path
-    "tp_size",                  # Alias for tensor_parallel_size
-    "mem_fraction_static",      # Alias for gpu_memory_utilization
-    "random_seed",              # Alias for seed
-    "disable_radix_cache",      # Inverse of enable_prefix_caching
-    "max_prefill_tokens",       # Alias for max_num_batched_tokens
-    "max_running_requests",     # Alias for max_num_seqs
-    "mm_attention_backend",     # Hardcoded "fa3"
-    "attention_backend",        # Hardcoded "fa3"
-    "enable_memory_saver",      # Set from inference_engine_enable_sleep
-    "tokenizer",                # Passed from external tokenizer
-    "custom_weight_loader",     # Hardcoded SkyRL path
-    "skip_tokenizer_init",      # Hardcoded True for SGLang
-})
+SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
+    {
+        # Hardcoded values
+        "trust_remote_code",  # Always True
+        "worker_extension_cls",  # vLLM SkyRL extension path
+        "data_parallel_backend",  # Hardcoded "mp"
+        "max_logprobs",  # Hardcoded 1
+        # Calculated from config/environment
+        "distributed_executor_backend",  # Calculated from TP size ("uni" or "ray")
+        "enforce_eager",  # Set from generator.enforce_eager config
+        "tensor_parallel_size",  # Set from generator config
+        "data_parallel_size",  # Set from generator config
+        "seed",  # Set from config
+        "enable_prefix_caching",  # Set from generator config
+        "dtype",  # Set from generator.model_dtype
+        "gpu_memory_utilization",  # Set from generator config
+        "max_num_batched_tokens",  # Set from generator config
+        "max_num_seqs",  # Set from generator config
+        "enable_sleep_mode",  # Set from trainer.placement.colocate_all
+        "vllm_v1_disable_multiproc",  # Set from generator config
+        # Ray internal management
+        "bundle_indices",  # Calculated from parallelism config
+        "num_gpus",  # Ray resource allocation
+        "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
+        # SGLang-specific (if using SGLang backend)
+        "model_path",  # Set from trainer.policy.model.path
+        "tp_size",  # Alias for tensor_parallel_size
+        "mem_fraction_static",  # Alias for gpu_memory_utilization
+        "random_seed",  # Alias for seed
+        "disable_radix_cache",  # Inverse of enable_prefix_caching
+        "max_prefill_tokens",  # Alias for max_num_batched_tokens
+        "max_running_requests",  # Alias for max_num_seqs
+        "mm_attention_backend",  # Hardcoded "fa3"
+        "attention_backend",  # Hardcoded "fa3"
+        "enable_memory_saver",  # Set from inference_engine_enable_sleep
+        "tokenizer",  # Passed from external tokenizer
+        "custom_weight_loader",  # Hardcoded SkyRL path
+        "skip_tokenizer_init",  # Hardcoded True for SGLang
+    }
+)
 
 
 def validate_engine_init_kwargs(
@@ -95,7 +267,9 @@ def validate_engine_init_kwargs(
     if forbidden_found:
         config_context = f" in {config_path}" if config_path else ""
         forbidden_list = "\n".join(f"  - {k}" for k in sorted(forbidden_found))
-        all_forbidden = "\n".join(f"  - {k}" for k in sorted(SKYRL_INTERNAL_ENGINE_KWARGS))
+        all_forbidden = "\n".join(
+            f"  - {k}" for k in sorted(SKYRL_INTERNAL_ENGINE_KWARGS)
+        )
 
         raise ValueError(
             f"engine_init_kwargs{config_context} contains keys that SkyRL sets internally.\n"
@@ -133,6 +307,7 @@ class ParsedRLConfig:
     terminal_bench: Optional[Dict[str, Any]] = None
     teacher: Optional[Dict[str, Any]] = None
     tensor_parallel_size: int = 1
+    context_budget: Optional[ContextBudget] = None
 
 
 def resolve_rl_config_path(raw_path: str) -> Path:
@@ -194,12 +369,13 @@ def parse_rl_config(
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
 
+    context_budget = resolve_context_budget(raw, path)
+    trainer, generator, terminal_bench, materialized_raw = _materialize_context_budget(
+        raw, context_budget
+    )
     entrypoint = raw.get("entrypoint", "skyrl_train.entrypoints.main_base")
     config_groups = raw.get("config_groups", {})
-    trainer = raw.get("trainer", {})
-    generator = raw.get("generator", {})
     data = raw.get("data", {})
-    terminal_bench = raw.get("terminal_bench")
     teacher = raw.get("teacher")
 
     # Validate engine_init_kwargs doesn't contain SkyRL-internal keys
@@ -210,20 +386,23 @@ def parse_rl_config(
     # This ensures paths work regardless of working directory at runtime
     # Skip data.train_data and data.val_data as they may be HF repo IDs
     from hpc.cli_utils import resolve_paths_in_dict
+
     trainer = resolve_paths_in_dict(trainer, skip_keys={"policy.model.path"})
     generator = resolve_paths_in_dict(generator)
     # Don't resolve data paths - they're often HF repo IDs handled separately
 
     # Apply model override if provided
     if model_override:
-        trainer.setdefault("policy", {}).setdefault("model", {})["path"] = model_override
+        trainer.setdefault("policy", {}).setdefault("model", {})["path"] = (
+            model_override
+        )
 
     # Extract tensor parallel size from generator config
     tensor_parallel_size = generator.get("inference_engine_tensor_parallel_size", 1)
 
     return ParsedRLConfig(
         config_path=path,
-        raw=raw,
+        raw=materialized_raw,
         entrypoint=entrypoint,
         config_groups=config_groups,
         trainer=trainer,
@@ -232,6 +411,62 @@ def parse_rl_config(
         terminal_bench=terminal_bench,
         teacher=teacher,
         tensor_parallel_size=tensor_parallel_size,
+        context_budget=context_budget,
+    )
+
+
+def apply_context_budget_overrides(
+    parsed: ParsedRLConfig, overrides: List[str]
+) -> tuple[ParsedRLConfig, List[str]]:
+    """Resolve high-level context overrides and reject derived-field overrides."""
+    if parsed.context_budget is None:
+        raise ValueError("Parsed RL config has no context budget")
+
+    values = parsed.context_budget.as_dict()
+    passthrough: List[str] = []
+    derived_names = {".".join(path) for path in _DERIVED_CONTEXT_FIELDS}
+    for override in overrides:
+        key = _override_key(override)
+        if key.startswith("context_budget."):
+            field_name = key.removeprefix("context_budget.")
+            if field_name not in _CONTEXT_BUDGET_FIELDS:
+                raise ValueError(f"Unsupported context budget override {key!r}")
+            raw_value = override.partition("=")[2]
+            try:
+                values[field_name] = int(raw_value)
+            except ValueError as error:
+                raise ValueError(
+                    f"{key} must be an integer, got {raw_value!r}"
+                ) from error
+            continue
+        if key in derived_names:
+            raise ValueError(
+                f"{key} is derived from context_budget and cannot be overridden directly. "
+                "Override context_budget.request_window_tokens, context_budget.max_new_tokens_per_turn, "
+                "or context_budget.max_turns instead."
+            )
+        passthrough.append(override)
+
+    raw = copy.deepcopy(parsed.raw)
+    _remove_derived_context_fields(raw)
+    raw["context_budget"] = {field: values[field] for field in _CONTEXT_BUDGET_FIELDS}
+    budget = resolve_context_budget(raw, parsed.config_path)
+    trainer, generator, terminal_bench, materialized_raw = _materialize_context_budget(
+        raw, budget
+    )
+    return (
+        replace(
+            parsed,
+            raw=materialized_raw,
+            trainer=trainer,
+            generator=generator,
+            terminal_bench=terminal_bench,
+            context_budget=budget,
+            tensor_parallel_size=generator.get(
+                "inference_engine_tensor_parallel_size", 1
+            ),
+        ),
+        passthrough,
     )
 
 
@@ -282,7 +517,9 @@ def extract_terminal_bench_agent_env(parsed: ParsedRLConfig) -> tuple:
     return agent_name, harbor_env
 
 
-def _flatten_dict(d: Dict[str, Any], prefix: str = "", leaf_key_suffixes: tuple = ("rope_scaling",)) -> Dict[str, Any]:
+def _flatten_dict(
+    d: Dict[str, Any], prefix: str = "", leaf_key_suffixes: tuple = ("rope_scaling",)
+) -> Dict[str, Any]:
     """Flatten a nested dictionary to dotted keys.
 
     Example:
@@ -388,19 +625,14 @@ def _format_hydra_arg(key: str, value: Any, prefix: str = "") -> str:
                 return f"[{items}]"
             else:
                 return str(v)
-        dict_items = ", ".join(
-            f"{k}: {_fmt_val(v)}"
-            for k, v in value.items()
-        )
+
+        dict_items = ", ".join(f"{k}: {_fmt_val(v)}" for k, v in value.items())
         return f"{prefix}{key}={{{dict_items}}}"
     elif isinstance(value, (list, tuple)):
         # Format as YAML list WITHOUT outer quotes so Hydra parses it as a list
         # (with outer quotes like "['a']", Hydra treats it as a string literal)
         # Use double quotes around string items to handle paths with special chars
-        items = ",".join(
-            f'"{v}"' if isinstance(v, str) else str(v)
-            for v in value
-        )
+        items = ",".join(f'"{v}"' if isinstance(v, str) else str(v) for v in value)
         return f"{prefix}{key}=[{items}]"
     elif isinstance(value, str):
         # Quote strings that contain Hydra/shell special characters
@@ -412,16 +644,100 @@ def _format_hydra_arg(key: str, value: Any, prefix: str = "") -> str:
         return f"{prefix}{key}={value}"
 
 
+def resolve_placement(
+    trainer_config: Mapping[str, Any],
+    exp_args: Mapping[str, Any],
+    hpc: Any,
+) -> Dict[str, int]:
+    """Resolve the policy/ref placement (nodes x GPUs per node) for an RL launch.
+
+    Derives from num_nodes/gpus_per_node with these rules:
+    - ``policy_num_nodes``/``ref_num_nodes`` default to exp_args ``policy_num_nodes``
+      (if set) or the job's ``num_nodes`` unless the YAML placement pins them.
+    - ``*_num_gpus_per_node`` comes from the CLI (cluster-specific, not hardcoded in
+      YAML). EXCEPTION (rank-spread lever): honor an EXPLICIT YAML value when it is
+      <= the node's gpus_per_node. This lets policy/ref use FEWER GPUs per
+      (reserved whole) node than the node physically has — e.g. 4 policy ranks on a
+      reserved 8-GPU CoreWeave node — which spreads a fixed policy-rank count over
+      MORE nodes (fewer concurrent GDN scans / less cpu_offload host RAM per node).
+      Without this, the CLI gpus_per_node unconditionally clobbered the YAML to 8,
+      so sub-node policy placement was inexpressible (the 80B host-RAM-OOM lever).
+      Byte-identical for every existing config: those leave it None (-> clobber to
+      gpus_per_node, unchanged) or set it == gpus_per_node (8 <= 8 -> honored == 8).
+    """
+
+    num_nodes = int(exp_args.get("num_nodes", 1))
+    gpus_per_node = int(exp_args.get("gpus_per_node", getattr(hpc, "gpus_per_node", 4)))
+    placement = dict(trainer_config.get("placement") or {})
+
+    policy_num_nodes = exp_args.get("policy_num_nodes")
+    if placement.get("policy_num_nodes") is None:
+        placement["policy_num_nodes"] = (
+            policy_num_nodes if policy_num_nodes is not None else num_nodes
+        )
+    if placement.get("ref_num_nodes") is None:
+        placement["ref_num_nodes"] = (
+            policy_num_nodes if policy_num_nodes is not None else num_nodes
+        )
+
+    def _resolve_gpus_per_node(key: str) -> int:
+        yaml_val = placement.get(key)
+        if yaml_val is None:
+            return gpus_per_node
+        if exp_args.get("gpus_per_node") and int(yaml_val) > gpus_per_node:
+            # A YAML value LARGER than the node has is a mis-size; clamp to CLI.
+            return gpus_per_node
+        return int(yaml_val)
+
+    placement["policy_num_gpus_per_node"] = _resolve_gpus_per_node(
+        "policy_num_gpus_per_node"
+    )
+    placement["ref_num_gpus_per_node"] = _resolve_gpus_per_node("ref_num_gpus_per_node")
+    return placement
+
+
+def expected_rl_world_sizes(
+    placement: Mapping[str, Any],
+    overrides: Sequence[str] = (),
+) -> Dict[str, int]:
+    """Map a resolved placement to the per-component world sizes a resume must match.
+
+    Hydra CLI overrides (``trainer.placement.<component>_<dimension>=N``) win over
+    the placement mapping, mirroring how they override the built hydra args.
+    Components with incomplete placement information are omitted.
+    """
+
+    from hpc.rl_paths import hydra_override_values
+
+    values = hydra_override_values(overrides)
+    resolved = dict(placement)
+    for component in ("policy", "ref"):
+        for dimension in ("num_nodes", "num_gpus_per_node"):
+            key = f"trainer.placement.{component}_{dimension}"
+            if key in values and values[key] not in ("null", "None", "~", ""):
+                resolved[f"{component}_{dimension}"] = int(values[key])
+
+    world_sizes: Dict[str, int] = {}
+    for component in ("policy", "ref"):
+        nodes = resolved.get(f"{component}_num_nodes")
+        gpus = resolved.get(f"{component}_num_gpus_per_node")
+        if nodes is not None and gpus is not None:
+            world_sizes[component] = int(nodes) * int(gpus)
+    return world_sizes
+
+
 def build_skyrl_hydra_args(
     parsed: ParsedRLConfig,
     exp_args: Dict[str, Any],
     hpc: Any,
+    *,
+    run_paths: RLRunPaths,
 ) -> List[str]:
     """Convert parsed config + exp_args to Hydra CLI arguments.
 
     This function:
     1. Adds config groups with + prefix
-    2. Derives paths from experiments_dir/job_name if not set
+    2. Applies paths resolved by the RL path manager
     3. Computes num_inference_engines from cluster config
     4. Flattens nested dicts to dotted Hydra keys
     5. Applies data paths from CLI
@@ -430,6 +746,7 @@ def build_skyrl_hydra_args(
         parsed: ParsedRLConfig from parse_rl_config().
         exp_args: Experiment arguments dictionary from CLI.
         hpc: HPC configuration object with cluster settings.
+        run_paths: Validated checkpoint, export, trial, and resume paths.
 
     Returns:
         List of Hydra CLI argument strings.
@@ -444,36 +761,43 @@ def build_skyrl_hydra_args(
     trainer = dict(parsed.trainer)
     generator = dict(parsed.generator)
     data = dict(parsed.data)
+    job_name = run_paths.job_name
 
-    # Derive paths if null
-    experiments_dir = exp_args.get("experiments_dir", "")
-    job_name = exp_args.get("job_name", "")
-
-    if not trainer.get("run_name") and job_name:
+    if not trainer.get("run_name"):
         trainer["run_name"] = job_name
-    if not trainer.get("export_path") and experiments_dir and job_name:
-        trainer["export_path"] = f"{experiments_dir}/{job_name}/exports"
-        print(f"Auto-set trainer.export_path: {trainer['export_path']}")
-    if not trainer.get("ckpt_path") and experiments_dir and job_name:
-        trainer["ckpt_path"] = f"{experiments_dir}/{job_name}/checkpoints"
-        print(f"Auto-set trainer.ckpt_path: {trainer['ckpt_path']}")
+    trainer["export_path"] = str(run_paths.export_dir)
+    trainer["ckpt_path"] = str(run_paths.checkpoint_dir)
+    trainer["resume_mode"] = run_paths.resume_mode.value
+    trainer["resume_path"] = (
+        str(run_paths.resume_path) if run_paths.resume_path is not None else None
+    )
 
-    # Derive placement from num_nodes
+    # Compute nodes have no route to api.wandb.ai, which is why the launcher pins
+    # WANDB_MODE=offline on the apptainer --env list (see rl_launch_utils). SkyRL's
+    # Tracking() passes settings=wandb.Settings(mode="shared") to wandb.init(), and an
+    # explicit settings= argument overrides the environment, so the wandb backend still
+    # tries to reach the API. wandb.init() then never returns: the Go core retries the
+    # GraphQL POST against an unreachable host with unbounded backoff. Jobs 1429059 and
+    # 1431539 each held six Jupiter nodes at zero GPU utilization until they were cancelled.
+    #
+    # When wandb is going to run offline, downgrade the backend to console. No metrics are
+    # lost: RayPPOTrainer._log_metrics_stdout mirrors every tracker payload to the job log
+    # as WANDB_MIRROR lines whatever the backend is. Exporting WANDB_MODE=online opts back
+    # in for a cluster that does have egress.
+    if (
+        os.environ.get("WANDB_MODE", "offline") == "offline"
+        and trainer.get("logger") == "wandb"
+    ):
+        trainer["logger"] = "console"
+        print(
+            "WANDB_MODE=offline: trainer.logger wandb -> console "
+            "(offline wandb.init hangs on compute nodes; metrics stay in the job "
+            "log as WANDB_MIRROR lines)"
+        )
+
     num_nodes = int(exp_args.get("num_nodes", 1))
     gpus_per_node = int(exp_args.get("gpus_per_node", getattr(hpc, "gpus_per_node", 4)))
-    placement = dict(trainer.get("placement", {}))
-
-    policy_num_nodes = exp_args.get("policy_num_nodes")
-    if placement.get("policy_num_nodes") is None:
-        placement["policy_num_nodes"] = policy_num_nodes if policy_num_nodes is not None else num_nodes
-    if placement.get("ref_num_nodes") is None:
-        placement["ref_num_nodes"] = policy_num_nodes if policy_num_nodes is not None else num_nodes
-    # Derive gpus_per_node from CLI (cluster-specific, not hardcoded in YAML)
-    if placement.get("policy_num_gpus_per_node") is None or exp_args.get("gpus_per_node"):
-        placement["policy_num_gpus_per_node"] = gpus_per_node
-    if placement.get("ref_num_gpus_per_node") is None or exp_args.get("gpus_per_node"):
-        placement["ref_num_gpus_per_node"] = gpus_per_node
-    trainer["placement"] = placement
+    trainer["placement"] = resolve_placement(parsed.trainer, exp_args, hpc)
 
     # Compute num_inference_engines
     tp_size = parsed.tensor_parallel_size
@@ -487,6 +811,7 @@ def build_skyrl_hydra_args(
         if isinstance(train_data, str) and train_data.startswith("["):
             # Will be formatted properly by _format_hydra_arg
             import ast
+
             try:
                 train_data = ast.literal_eval(train_data)
             except (ValueError, SyntaxError):
@@ -497,6 +822,7 @@ def build_skyrl_hydra_args(
         val_data = exp_args["val_data"]
         if isinstance(val_data, str) and val_data.startswith("["):
             import ast
+
             try:
                 val_data = ast.literal_eval(val_data)
             except (ValueError, SyntaxError):
@@ -511,20 +837,19 @@ def build_skyrl_hydra_args(
         # Compute served_model_name: extract just the model name from "org/model" format.
         # Harbor/LiteLLM requires model names with exactly one '/' (e.g., "hosted_vllm/Qwen3-8B"),
         # so we strip the org prefix from HuggingFace model IDs like "Qwen/Qwen3-8B".
-        served_model_name = model_path.split("/")[-1] if "/" in model_path else model_path
-        generator.setdefault("engine_init_kwargs", {})["served_model_name"] = served_model_name
+        served_model_name = (
+            model_path.split("/")[-1] if "/" in model_path else model_path
+        )
+        generator.setdefault("engine_init_kwargs", {})["served_model_name"] = (
+            served_model_name
+        )
 
-    # HuggingFace Hub upload settings (for automatic checkpoint uploads)
-    # Default to laion/<job_name> if not explicitly provided
+    # HuggingFace Hub upload settings (for automatic checkpoint uploads).
+    # Publication is opt-in: a job name must never imply a public repository.
     hf_hub_repo_id = exp_args.get("hf_hub_repo_id")
-    if not hf_hub_repo_id and job_name:
-        hf_hub_repo_id = f"laion/{job_name}"
-        print(f"HF Hub upload auto-defaulted to: {hf_hub_repo_id}")
     if hf_hub_repo_id:
         trainer["hf_hub_repo_id"] = hf_hub_repo_id
-        if exp_args.get("hf_hub_repo_id"):
-            # Only print "enabled" if user explicitly provided the repo ID
-            print(f"HF Hub upload enabled: {hf_hub_repo_id}")
+        print(f"HF Hub upload enabled: {hf_hub_repo_id}")
     hf_hub_private = exp_args.get("hf_hub_private", False)
     if hf_hub_private:
         trainer["hf_hub_private"] = True
@@ -549,13 +874,32 @@ def build_skyrl_hydra_args(
     # - engine_init_kwargs: vLLM engine settings vary by config
     # - hf_hub_*: HuggingFace upload settings not in base config
     # - enable_db_registration: database registration setting
-    optional_patterns = {".engine_init_kwargs", ".hf_hub_", ".enable_db_registration", ".optimizer_kwargs", ".rope_scaling"}
+    # - wrap_policy: fsdp_config.wrap_policy.transformer_layer_cls_to_wrap is not in
+    #   SkyRL's base fsdp_config struct, so a bare override is rejected
+    #   ("Key 'wrap_policy' is not in struct"); ++ adds-or-overrides it.
+    optional_patterns = {
+        ".engine_init_kwargs",
+        ".hf_hub_",
+        ".enable_db_registration",
+        ".optimizer_kwargs",
+        ".rope_scaling",
+        ".wrap_policy",
+    }
 
-    for section, values in [("trainer", trainer), ("generator", generator), ("data", data)]:
+    # `rollout` (fanout coordinators, coordinator_rpc_timeout) is a real SkyRL section; dropping it
+    # silently left every arm on ppo_base_config defaults (jupiter-tasktrove-dapo, 2026-08-22).
+    for section, values in [
+        ("trainer", trainer),
+        ("generator", generator),
+        ("data", data),
+        ("rollout", parsed.raw.get("rollout", {})),
+    ]:
         for key, val in _flatten_dict(values, section).items():
             # Use ++ prefix for keys that may not exist in base config
             # (+ would fail if key already exists, empty prefix fails if key doesn't exist)
-            prefix = "++" if any(pattern in key for pattern in optional_patterns) else ""
+            prefix = (
+                "++" if any(pattern in key for pattern in optional_patterns) else ""
+            )
             args.append(_format_hydra_arg(key, val, prefix=prefix))
 
     # Teacher config (for on-policy distillation) — all keys use ++ since
@@ -564,17 +908,20 @@ def build_skyrl_hydra_args(
         for key, val in _flatten_dict(parsed.teacher, "teacher").items():
             args.append(_format_hydra_arg(key, val, prefix="++"))
 
-    # Terminal bench with + prefix (these are new keys added by the config group)
+    # Terminal bench with ++ prefix. Most of these keys are added by the config group and
+    # would need "+", but the group's own defaults have grown over time (trace_upload.enabled
+    # is one), and "+" hard-fails on a key that already exists. "++" adds or overrides and is
+    # correct for both cases, so the launcher does not have to track which keys the group
+    # happens to define.
     if parsed.terminal_bench:
         terminal_bench = dict(parsed.terminal_bench)
 
-        # Derive trials_dir from experiments_dir if not set
-        # This is where Harbor stores trial execution artifacts
-        if not terminal_bench.get("trials_dir") and experiments_dir and job_name:
-            terminal_bench["trials_dir"] = f"{experiments_dir}/{job_name}/trace_jobs"
+        terminal_bench["trials_dir"] = str(run_paths.trials_dir)
 
         for key, val in _flatten_dict(terminal_bench).items():
-            args.append(_format_hydra_arg(f"terminal_bench_config.{key}", val, prefix="+"))
+            args.append(
+                _format_hydra_arg(f"terminal_bench_config.{key}", val, prefix="++")
+            )
 
     return args
 
@@ -612,10 +959,13 @@ def get_skyrl_command_preview(
 
 __all__ = [
     "ParsedRLConfig",
+    "ContextBudget",
     "SKYRL_CONFIG_DIR",
     "SKYRL_INTERNAL_ENGINE_KWARGS",
     "IMPORT_PATH_TO_ENV_TYPE",
     "validate_engine_init_kwargs",
+    "resolve_context_budget",
+    "apply_context_budget_overrides",
     "resolve_rl_config_path",
     "parse_rl_config",
     "extract_terminal_bench_agent_env",

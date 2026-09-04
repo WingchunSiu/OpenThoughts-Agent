@@ -89,7 +89,11 @@ def fmt_stats(values: list[float], total_samples: int | None = None) -> str:
 def extract_node_name(path: Path) -> str:
     """Try to extract the node name (e.g. jpbo-027-18) from the path."""
     for part in path.parts:
-        if part.startswith("jpbo-") or part.startswith("lrdn") or part.startswith("nid"):
+        if (
+            part.startswith("jpbo-")
+            or part.startswith("lrdn")
+            or part.startswith("nid")
+        ):
             return part
     return path.parent.parent.parent.parent.name  # fallback
 

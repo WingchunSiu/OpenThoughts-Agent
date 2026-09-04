@@ -49,13 +49,13 @@ Per-row output format (rendered JSONL, axolotl chat_template:tokenizer_default):
     "messages": [{"role": str, "content": str, "train": bool}, ...]
   }
 """
+
 import argparse
 import gc
 import glob
 import json
 import os
 import random
-import xml.sax.saxutils as xml_utils
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -63,7 +63,7 @@ from huggingface_hub import HfApi, hf_hub_download
 
 
 SRC_REPO = "togethercomputer/CoderForge-Preview"
-SRC_SPLIT = "trajectories"           # raw messages (not tokenized)
+SRC_SPLIT = "trajectories"  # raw messages (not tokenized)
 SRC_SHARD_PATTERN = "filtered_reward1-*-of-*.parquet"
 SOURCE_TAG = f"{SRC_REPO}/{SRC_SPLIT}"
 TARGET_BASE = "laion/CoderForge-Preview-v6"
@@ -71,7 +71,9 @@ SUBSET_SIZES = [316, 1000]
 SEED = 42
 
 DEFAULT_STAGING = Path("/e/data1/datasets/playground/ot-baf/_cf_v6_staging")
-DEFAULT_MAC_STAGING = Path("/Users/benjaminfeuer/Documents/scripts_dataset_build/_cf_v6_staging")
+DEFAULT_MAC_STAGING = Path(
+    "/Users/benjaminfeuer/Documents/scripts_dataset_build/_cf_v6_staging"
+)
 
 # One filler reasoning fallback when no natural reasoning source is available
 # on an assistant turn.  Qwen3 prefers short, verb-initial think blocks.
@@ -107,10 +109,10 @@ def _render_param_value(val):
 
 def _render_function_xml(name, args):
     """Render a tool_call as OpenHands XML:
-        <function=NAME>
-        <parameter=K>V</parameter>
-        ...
-        </function>
+    <function=NAME>
+    <parameter=K>V</parameter>
+    ...
+    </function>
     """
     parts = [f"<function={name}>"]
     if isinstance(args, dict):
@@ -141,10 +143,14 @@ def _sanitize_reasoning_text(text):
     if not isinstance(text, str):
         return text
     junk = (
-        "<tool_call>", "</tool_call>",
-        "<tool_response>", "</tool_response>",
-        "<think>", "</think>",
-        "<|im_start|>", "<|im_end|>",
+        "<tool_call>",
+        "</tool_call>",
+        "<tool_response>",
+        "</tool_response>",
+        "<think>",
+        "</think>",
+        "<|im_start|>",
+        "<|im_end|>",
         "<|endoftext|>",
     )
     for tok in junk:
@@ -211,22 +217,22 @@ def transform_cf_messages(messages):
             if isinstance(text, list):
                 # defensive: flatten if it ever shows up as list
                 text = "\n".join(
-                    (p.get("text") if isinstance(p, dict) else str(p))
-                    for p in text
+                    (p.get("text") if isinstance(p, dict) else str(p)) for p in text
                 )
-            out.append({
-                "role": "user",
-                "content": _wrap_tool_response(text),
-                "train": False,
-            })
+            out.append(
+                {
+                    "role": "user",
+                    "content": _wrap_tool_response(text),
+                    "train": False,
+                }
+            )
             continue
 
         if role == "assistant":
             content = m.get("content") or ""
             if isinstance(content, list):
                 content = "\n".join(
-                    (p.get("text") if isinstance(p, dict) else str(p))
-                    for p in content
+                    (p.get("text") if isinstance(p, dict) else str(p)) for p in content
                 )
             tool_calls = m.get("tool_calls") or []
 
@@ -270,8 +276,7 @@ def transform_cf_messages(messages):
             content = m.get("content") or ""
             if isinstance(content, list):
                 content = "\n".join(
-                    (p.get("text") if isinstance(p, dict) else str(p))
-                    for p in content
+                    (p.get("text") if isinstance(p, dict) else str(p)) for p in content
                 )
             out.append({"role": "system", "content": content, "train": False})
             continue
@@ -280,8 +285,7 @@ def transform_cf_messages(messages):
         content = m.get("content") or ""
         if isinstance(content, list):
             content = "\n".join(
-                (p.get("text") if isinstance(p, dict) else str(p))
-                for p in content
+                (p.get("text") if isinstance(p, dict) else str(p)) for p in content
             )
         out.append({"role": role or "user", "content": content, "train": False})
 
@@ -326,7 +330,7 @@ def write_subsets(shards, staging_dir, sizes, full_size, seed):
     global_i = 0
 
     for si, sp in enumerate(shards):
-        print(f"  [shard {si+1}/{len(shards)}] {os.path.basename(sp)}", flush=True)
+        print(f"  [shard {si + 1}/{len(shards)}] {os.path.basename(sp)}", flush=True)
         tbl = pq.read_table(
             sp,
             columns=["trajectory_id", "reward", "messages"],
@@ -338,7 +342,10 @@ def write_subsets(shards, staging_dir, sizes, full_size, seed):
             except Exception as e:
                 n_skipped += 1
                 if n_skipped <= 5:
-                    print(f"  [warn] global_i={global_i}: transform failed: {type(e).__name__}: {e}", flush=True)
+                    print(
+                        f"  [warn] global_i={global_i}: transform failed: {type(e).__name__}: {e}",
+                        flush=True,
+                    )
                 global_i += 1
                 continue
             out_row = {
@@ -358,13 +365,19 @@ def write_subsets(shards, staging_dir, sizes, full_size, seed):
 
         # quick progress
         if n_transformed % 5000 == 0 and n_transformed > 0:
-            print(f"  streamed {global_i}/{full_size} (transformed={n_transformed}, skipped={n_skipped})", flush=True)
+            print(
+                f"  streamed {global_i}/{full_size} (transformed={n_transformed}, skipped={n_skipped})",
+                flush=True,
+            )
         # early-exit once all target subsets are filled — much faster when we
         # only want 316+1000 out of 155k rows spanning 224 shards.
         if all(counts[s] >= s for s in size_to_idxset):
             # verify all buckets full before stopping
             if all(counts[s] >= s for s in size_to_idxset):
-                print(f"  [early-stop] all buckets full at global_i={global_i}", flush=True)
+                print(
+                    f"  [early-stop] all buckets full at global_i={global_i}",
+                    flush=True,
+                )
                 break
         del tbl
         gc.collect()
@@ -372,7 +385,10 @@ def write_subsets(shards, staging_dir, sizes, full_size, seed):
     for f in size_to_file.values():
         f.close()
 
-    print(f"[write] transformed={n_transformed}  skipped={n_skipped}  global_seen={global_i}", flush=True)
+    print(
+        f"[write] transformed={n_transformed}  skipped={n_skipped}  global_seen={global_i}",
+        flush=True,
+    )
     for s, n in counts.items():
         print(f"[write] subset {s}: {n} rows", flush=True)
 
@@ -466,7 +482,10 @@ def push_dataset(api, target_repo, jsonl_path, size, full_size):
     api.create_repo(repo_id=target_repo, repo_type="dataset", exist_ok=True)
     readme_tmp = jsonl_path.parent / f"README_{size}.md"
     readme_tmp.write_text(make_readme(target_repo, size, full_size))
-    print(f"[push] uploading {jsonl_path.name} ({jsonl_path.stat().st_size / 1e6:.1f} MB) -> {target_repo}", flush=True)
+    print(
+        f"[push] uploading {jsonl_path.name} ({jsonl_path.stat().st_size / 1e6:.1f} MB) -> {target_repo}",
+        flush=True,
+    )
     api.upload_file(
         path_or_fileobj=str(jsonl_path),
         path_in_repo=jsonl_path.name,
@@ -485,15 +504,22 @@ def push_dataset(api, target_repo, jsonl_path, size, full_size):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--download-only", action="store_true", help="Download shards and exit")
+    ap.add_argument(
+        "--download-only", action="store_true", help="Download shards and exit"
+    )
     ap.add_argument("--skip-download", action="store_true", help="Shards already local")
-    ap.add_argument("--build-only", action="store_true", help="Write JSONLs, skip uploads")
-    ap.add_argument("--staging", type=Path, default=None,
-                    help="Override staging dir")
-    ap.add_argument("--max-shards", type=int, default=None,
-                    help="Only process the first N shards (fast subset build — "
-                    "since we sample with seed=42, just grabbing more than you need "
-                    "is fine).")
+    ap.add_argument(
+        "--build-only", action="store_true", help="Write JSONLs, skip uploads"
+    )
+    ap.add_argument("--staging", type=Path, default=None, help="Override staging dir")
+    ap.add_argument(
+        "--max-shards",
+        type=int,
+        default=None,
+        help="Only process the first N shards (fast subset build — "
+        "since we sample with seed=42, just grabbing more than you need "
+        "is fine).",
+    )
     args = ap.parse_args()
 
     token = os.environ["HF_TOKEN"]
@@ -517,7 +543,9 @@ def main():
         # download all filtered_reward1 shards (no wildcard in hf_hub_download;
         # we enumerate by number since we know there are 224)
         print("[download] filtered_reward1 shards (224 total)", flush=True)
-        shard_count = args.max_shards or 4  # 4 shards ~= ~2800 rows, plenty for 1000-row sample
+        shard_count = (
+            args.max_shards or 4
+        )  # 4 shards ~= ~2800 rows, plenty for 1000-row sample
         cache_root = None
         for i in range(shard_count):
             fname = f"{SRC_SPLIT}/filtered_reward1-{i:05d}-of-00224.parquet"
@@ -534,7 +562,7 @@ def main():
         source_dir = cache_root
     else:
         hits = glob.glob(
-            f"{os.environ.get('HF_HUB_CACHE','~/.cache/huggingface/hub')}"
+            f"{os.environ.get('HF_HUB_CACHE', '~/.cache/huggingface/hub')}"
             f"/datasets--togethercomputer--CoderForge-Preview/snapshots/*/{SRC_SPLIT}"
         )
         if not hits:

@@ -21,8 +21,12 @@ from typing import Optional
 
 import numpy as np
 
-from scripts.analysis.utils import extract_reward, extract_error_type
-from scripts.analysis.context_length_compare import (
+from scripts.analysis.utils import (
+    TOKEN_REPRESENTATIONS,
+    extract_reward,
+    extract_error_type,
+)
+from scripts.analysis.trace_metrics import (
     load_and_filter,
     tokenize_dataset,
 )
@@ -51,6 +55,7 @@ def _bin_label(threshold: int) -> str:
 
 # ── Per-bin statistics ───────────────────────────────────────────────────────
 
+
 @dataclass
 class BinStats:
     label: str
@@ -77,7 +82,11 @@ class BinStats:
 
     @property
     def error_rate(self) -> float:
-        return (self.n_timeout + self.n_ctx_exceeded + self.n_other_error) / self.n if self.n else 0.0
+        return (
+            (self.n_timeout + self.n_ctx_exceeded + self.n_other_error) / self.n
+            if self.n
+            else 0.0
+        )
 
 
 @dataclass
@@ -89,6 +98,7 @@ class DatasetResult:
 
 
 # ── Analysis ─────────────────────────────────────────────────────────────────
+
 
 def compute_bin_stats(
     ds,
@@ -153,6 +163,7 @@ def print_table(result: DatasetResult) -> None:
 
 
 # ── Plotting ─────────────────────────────────────────────────────────────────
+
 
 def plot_results(
     results: list[DatasetResult],
@@ -237,6 +248,7 @@ def plot_results(
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Solve/timeout/error rates binned by context length.",
@@ -255,6 +267,15 @@ def main(argv: Optional[list[str]] = None) -> None:
         "--split",
         default="train",
         help="Dataset split (default: train)",
+    )
+    parser.add_argument(
+        "--representation",
+        choices=TOKEN_REPRESENTATIONS,
+        default="conversation_text",
+        help=(
+            "Token input to bin by: concatenated conversation_text (the prior "
+            "default), serialized JSON, or tokenizer chat_template."
+        ),
     )
     parser.add_argument(
         "--filter",
@@ -285,16 +306,14 @@ def main(argv: Optional[list[str]] = None) -> None:
     from transformers import AutoTokenizer
 
     print(f"Loading tokenizer: {args.tokenizer}")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer, trust_remote_code=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
 
     all_results: list[DatasetResult] = []
 
     for repo_id in args.datasets:
         ds, _ = load_and_filter(repo_id, args.split, args.filter_spec)
         print(f"  Tokenizing {len(ds):,} rows...")
-        counts = tokenize_dataset(ds, tokenizer)
+        counts = tokenize_dataset(ds, tokenizer, representation=args.representation)
         bin_stats = compute_bin_stats(ds, counts, thresholds)
 
         short = repo_id.split("/")[-1]

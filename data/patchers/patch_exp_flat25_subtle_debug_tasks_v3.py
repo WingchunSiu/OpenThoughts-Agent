@@ -106,6 +106,7 @@ Daytona snapshot caps are HARD: this patcher only drops; it never
 grows the task set and never changes the Dockerfile, so snapshot
 identity is preserved across v2 → v3.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -122,8 +123,6 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from patch_exp_flat25_subtle_debug_tasks import (  # noqa: E402
-    NEW_TEST_SH,
-    V2_MARKER,
     patch_test_sh,
 )
 
@@ -133,65 +132,99 @@ from patch_exp_flat25_subtle_debug_tasks import (  # noqa: E402
 
 STDLIB: frozenset[str] = frozenset(getattr(sys, "stdlib_module_names", set()))
 
-ALWAYS_INSTALLED: frozenset[str] = frozenset({
-    "pytest", "_pytest", "py", "pluggy", "iniconfig", "packaging",
-    "tomli", "exceptiongroup",
-})
+ALWAYS_INSTALLED: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "_pytest",
+        "py",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "tomli",
+        "exceptiongroup",
+    }
+)
 
-WHITELIST_IMPORTS: frozenset[str] = frozenset({
-    "requests", "numpy", "pandas", "scipy", "sklearn", "torch",
-    "tensorflow", "tf", "keras", "httpx", "aiohttp", "ddtrace",
-    "django", "flask", "fastapi", "matplotlib", "seaborn", "PIL",
-    "pydantic", "pytest_mock", "requests_mock", "faker", "yaml",
-    "pytz", "cryptography", "bcrypt", "hypothesis",
-})
+WHITELIST_IMPORTS: frozenset[str] = frozenset(
+    {
+        "requests",
+        "numpy",
+        "pandas",
+        "scipy",
+        "sklearn",
+        "torch",
+        "tensorflow",
+        "tf",
+        "keras",
+        "httpx",
+        "aiohttp",
+        "ddtrace",
+        "django",
+        "flask",
+        "fastapi",
+        "matplotlib",
+        "seaborn",
+        "PIL",
+        "pydantic",
+        "pytest_mock",
+        "requests_mock",
+        "faker",
+        "yaml",
+        "pytz",
+        "cryptography",
+        "bcrypt",
+        "hypothesis",
+    }
+)
 
 # Dotted-path denylist: submodules of whitelist packages that no longer
 # exist in the pip-whitelist-installed versions. Match is "full ==
 # entry" OR "full.startswith(entry + '.')" so e.g.
 # ``pandas.util.testing.assert_frame_equal`` matches
 # ``pandas.util.testing``.
-KNOWN_BAD_DOTTED: frozenset[str] = frozenset({
-    # sklearn (>= 1.3)
-    "sklearn.utils.testing",
-    "sklearn.utils.mocking",
-    "sklearn.externals",
-    "sklearn.utils._IS_32BIT",
-    # pandas (>= 2.0)
-    "pandas.util.testing",
-    "pandas.compat.lrange",
-    "pandas.compat.zip",
-    "pandas.compat.StringIO",
-    "pandas.compat.PY37",
-    "pandas.compat.PY2",
-    "pandas.compat.PY3",
-    "pandas.NumericIndex",
-    "pandas.Float64Index",
-    "pandas.Int64Index",
-    "pandas.UInt64Index",
-    "pandas.core.api.Float64Index",
-    "pandas.core.api.NumericIndex",
-    "pandas._libs.tslib.NaT",
-    "pandas.core.dtypes.base.registry",
-    "pandas.core.base.SpecificationError",
-    # tensorflow (>= 2.16)
-    "tensorflow.python",
-    "tensorflow.contrib",
-    "tensorflow.keras.wrappers.scikit_learn",
-    # scipy (>= 1.11)
-    "scipy.spatial.distance.wminkowski",
-    "scipy.spatial.distance.kulsinski",
-    "scipy.spatial.distance.matching",
-    "scipy.spatial.distance.sokalmichener",
-    "scipy.spatial.distance.sokalsneath",
-    "scipy.signal.spectral",
-    "scipy.optimize.optimize",
-    # numpy (>= 2)
-    "numpy.core._rational_tests",
-    "numpy.compat",
-    # ddtrace (>= 2)
-    "ddtrace.compat",
-})
+KNOWN_BAD_DOTTED: frozenset[str] = frozenset(
+    {
+        # sklearn (>= 1.3)
+        "sklearn.utils.testing",
+        "sklearn.utils.mocking",
+        "sklearn.externals",
+        "sklearn.utils._IS_32BIT",
+        # pandas (>= 2.0)
+        "pandas.util.testing",
+        "pandas.compat.lrange",
+        "pandas.compat.zip",
+        "pandas.compat.StringIO",
+        "pandas.compat.PY37",
+        "pandas.compat.PY2",
+        "pandas.compat.PY3",
+        "pandas.NumericIndex",
+        "pandas.Float64Index",
+        "pandas.Int64Index",
+        "pandas.UInt64Index",
+        "pandas.core.api.Float64Index",
+        "pandas.core.api.NumericIndex",
+        "pandas._libs.tslib.NaT",
+        "pandas.core.dtypes.base.registry",
+        "pandas.core.base.SpecificationError",
+        # tensorflow (>= 2.16)
+        "tensorflow.python",
+        "tensorflow.contrib",
+        "tensorflow.keras.wrappers.scikit_learn",
+        # scipy (>= 1.11)
+        "scipy.spatial.distance.wminkowski",
+        "scipy.spatial.distance.kulsinski",
+        "scipy.spatial.distance.matching",
+        "scipy.spatial.distance.sokalmichener",
+        "scipy.spatial.distance.sokalsneath",
+        "scipy.signal.spectral",
+        "scipy.optimize.optimize",
+        # numpy (>= 2)
+        "numpy.core._rational_tests",
+        "numpy.compat",
+        # ddtrace (>= 2)
+        "ddtrace.compat",
+    }
+)
 
 # Local module names that we *always* drop. These can never be resolved
 # in the container's import path because they aren't pip-installable and
@@ -199,40 +232,77 @@ KNOWN_BAD_DOTTED: frozenset[str] = frozenset({
 # not ``/tests/app/__init__.py``). v2 allowed these if they appeared as
 # a token in instruction.md; that's too lax for these very-common
 # substring tokens.
-LOCAL_NAMES: frozenset[str] = frozenset({
-    "app", "helpers", "tests", "test", "utils", "conftest",
-    "adapt", "returns",
-})
+LOCAL_NAMES: frozenset[str] = frozenset(
+    {
+        "app",
+        "helpers",
+        "tests",
+        "test",
+        "utils",
+        "conftest",
+        "adapt",
+        "returns",
+    }
+)
 
 # Pytest builtin fixtures plus fixtures provided by whitelist plugins
 # (pytest-mock, pytest-django, faker, anyio, etc.).
-PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset({
-    # core pytest
-    "request", "tmp_path", "tmp_path_factory", "tmpdir",
-    "tmpdir_factory", "monkeypatch", "capsys", "capsysbinary",
-    "capfd", "capfdbinary", "caplog", "recwarn", "pytestconfig",
-    "cache", "doctest_namespace", "record_property",
-    "record_xml_attribute", "record_testsuite_property",
-    "testdir", "pytester",
-    # pytest-mock
-    "mocker", "class_mocker", "module_mocker", "package_mocker",
-    "session_mocker",
-    # pytest-requests-mock
-    "requests_mock", "rm", "requests_mocker",
-    # pytest-django (django in WHITELIST -> pytest-django not installed
-    # by default in test.sh, but tests use these names; keep liberal)
-    "db", "transactional_db", "admin_user", "admin_client",
-    "client", "rf", "settings", "live_server",
-    # faker
-    "faker",
-    # anyio / pytest-asyncio
-    "event_loop", "anyio_backend",
-    # hypothesis
-    "data",
-    # method receivers (not fixtures, but appear as first arg of test
-    # methods on classes)
-    "self", "cls",
-})
+PYTEST_BUILTIN_FIXTURES: frozenset[str] = frozenset(
+    {
+        # core pytest
+        "request",
+        "tmp_path",
+        "tmp_path_factory",
+        "tmpdir",
+        "tmpdir_factory",
+        "monkeypatch",
+        "capsys",
+        "capsysbinary",
+        "capfd",
+        "capfdbinary",
+        "caplog",
+        "recwarn",
+        "pytestconfig",
+        "cache",
+        "doctest_namespace",
+        "record_property",
+        "record_xml_attribute",
+        "record_testsuite_property",
+        "testdir",
+        "pytester",
+        # pytest-mock
+        "mocker",
+        "class_mocker",
+        "module_mocker",
+        "package_mocker",
+        "session_mocker",
+        # pytest-requests-mock
+        "requests_mock",
+        "rm",
+        "requests_mocker",
+        # pytest-django (django in WHITELIST -> pytest-django not installed
+        # by default in test.sh, but tests use these names; keep liberal)
+        "db",
+        "transactional_db",
+        "admin_user",
+        "admin_client",
+        "client",
+        "rf",
+        "settings",
+        "live_server",
+        # faker
+        "faker",
+        # anyio / pytest-asyncio
+        "event_loop",
+        "anyio_backend",
+        # hypothesis
+        "data",
+        # method receivers (not fixtures, but appear as first arg of test
+        # methods on classes)
+        "self",
+        "cls",
+    }
+)
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 
@@ -273,9 +343,11 @@ def _defined_fixtures(tree: ast.AST) -> set[str]:
                 fixtures.add(node.name)
                 if isinstance(dec, ast.Call):
                     for kw in dec.keywords:
-                        if (kw.arg == "name"
-                                and isinstance(kw.value, ast.Constant)
-                                and isinstance(kw.value.value, str)):
+                        if (
+                            kw.arg == "name"
+                            and isinstance(kw.value, ast.Constant)
+                            and isinstance(kw.value.value, str)
+                        ):
                             fixtures.add(kw.value.value)
     return fixtures
 
@@ -369,27 +441,37 @@ def evaluate_task_v3(task_dir: Path) -> dict:
     instruction_file = task_dir / "instruction.md"
 
     if not test_file.exists():
-        return {"kept": False, "reason": "no_test_file",
-                "bad_imports": [], "orphan_fixtures": []}
+        return {
+            "kept": False,
+            "reason": "no_test_file",
+            "bad_imports": [],
+            "orphan_fixtures": [],
+        }
 
     try:
         src = test_file.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        return {"kept": False, "reason": f"read_error: {type(exc).__name__}",
-                "bad_imports": [], "orphan_fixtures": []}
+        return {
+            "kept": False,
+            "reason": f"read_error: {type(exc).__name__}",
+            "bad_imports": [],
+            "orphan_fixtures": [],
+        }
 
     try:
         tree = ast.parse(src)
     except SyntaxError as exc:
-        return {"kept": False,
-                "reason": f"syntax_error: {(exc.msg or '')[:60]}",
-                "bad_imports": [], "orphan_fixtures": []}
+        return {
+            "kept": False,
+            "reason": f"syntax_error: {(exc.msg or '')[:60]}",
+            "bad_imports": [],
+            "orphan_fixtures": [],
+        }
 
     instr_tokens: set[str] = set()
     if instruction_file.exists():
         try:
-            instr_text = instruction_file.read_text(
-                encoding="utf-8", errors="replace")
+            instr_text = instruction_file.read_text(encoding="utf-8", errors="replace")
             instr_tokens = {t.lower() for t in _TOKEN_RE.findall(instr_text)}
         except OSError:
             pass
@@ -429,8 +511,12 @@ def evaluate_task_v3(task_dir: Path) -> dict:
         break
 
     if bad_imports:
-        return {"kept": False, "reason": bad_kind, "bad_imports": bad_imports,
-                "orphan_fixtures": []}
+        return {
+            "kept": False,
+            "reason": bad_kind,
+            "bad_imports": bad_imports,
+            "orphan_fixtures": [],
+        }
 
     # 2. (c) Fixture-orphan filter
     defined = _defined_fixtures(tree)
@@ -440,8 +526,12 @@ def evaluate_task_v3(task_dir: Path) -> dict:
 
     needed = (fn_params | used_marks) - defined - PYTEST_BUILTIN_FIXTURES - parametrize
     if needed:
-        return {"kept": False, "reason": "orphan_fixtures", "bad_imports": [],
-                "orphan_fixtures": sorted(needed)}
+        return {
+            "kept": False,
+            "reason": "orphan_fixtures",
+            "bad_imports": [],
+            "orphan_fixtures": sorted(needed),
+        }
 
     return {"kept": True, "reason": "", "bad_imports": [], "orphan_fixtures": []}
 
@@ -450,21 +540,41 @@ def evaluate_task_v3(task_dir: Path) -> dict:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N bad-import / orphan samples.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad",
+        type=int,
+        default=20,
+        help="Print the first N bad-import / orphan samples.",
+    )
     return p.parse_args()
 
 
@@ -478,8 +588,10 @@ def main() -> None:
     if args.limit:
         task_dirs = task_dirs[: args.limit]
 
-    print(f"[patch_exp_flat25_subtle_debug_v3] inspecting "
-          f"{len(task_dirs)} tasks under {root}")
+    print(
+        f"[patch_exp_flat25_subtle_debug_v3] inspecting "
+        f"{len(task_dirs)} tasks under {root}"
+    )
 
     counts: dict[str, int] = {
         "no_test_file": 0,
@@ -540,31 +652,50 @@ def main() -> None:
     total = len(task_dirs)
     print()
     print(f"[patch_exp_flat25_subtle_debug_v3] total:           {total}")
-    for k in ("no_test_file", "syntax_error", "missing_import",
-              "bad_submodule", "local_name", "orphan_fixtures",
-              "other", "kept"):
+    for k in (
+        "no_test_file",
+        "syntax_error",
+        "missing_import",
+        "bad_submodule",
+        "local_name",
+        "orphan_fixtures",
+        "other",
+        "kept",
+    ):
         print(f"[patch_exp_flat25_subtle_debug_v3] {k:<16}: {counts[k]:>5}")
     print()
-    print(f"[patch_exp_flat25_subtle_debug_v3] test.sh mutation (on KEPT tasks):")
-    for k in ("patched", "patched_unusual", "already",
-              "missing", "skipped_no_pytest", "unparseable"):
+    print("[patch_exp_flat25_subtle_debug_v3] test.sh mutation (on KEPT tasks):")
+    for k in (
+        "patched",
+        "patched_unusual",
+        "already",
+        "missing",
+        "skipped_no_pytest",
+        "unparseable",
+    ):
         print(f"  {k:<20}: {patch_counts.get(k, 0):>5}")
 
     if bad_samples:
         print()
-        print(f"[patch_exp_flat25_subtle_debug_v3] sample drop reasons (first {len(bad_samples)}):")
+        print(
+            f"[patch_exp_flat25_subtle_debug_v3] sample drop reasons (first {len(bad_samples)}):"
+        )
         for tid, kind, bad in bad_samples:
             print(f"  {tid}: ({kind}) {bad}")
     if orphan_samples:
         print()
-        print(f"[patch_exp_flat25_subtle_debug_v3] sample orphan fixtures (first {len(orphan_samples)}):")
+        print(
+            f"[patch_exp_flat25_subtle_debug_v3] sample orphan fixtures (first {len(orphan_samples)}):"
+        )
         for tid, orphans in orphan_samples:
             print(f"  {tid}: {orphans}")
 
     if args.report_json:
         args.report_json.write_text(json.dumps(verdicts, indent=2))
-        print(f"[patch_exp_flat25_subtle_debug_v3] wrote per-task verdicts: "
-              f"{args.report_json}")
+        print(
+            f"[patch_exp_flat25_subtle_debug_v3] wrote per-task verdicts: "
+            f"{args.report_json}"
+        )
 
     if args.dry_run:
         print("[patch_exp_flat25_subtle_debug_v3] dry-run: not deleting dropped tasks.")
@@ -578,7 +709,9 @@ def main() -> None:
         if target.exists():
             shutil.rmtree(target)
             removed += 1
-    print(f"[patch_exp_flat25_subtle_debug_v3] removed {removed} dropped task directories.")
+    print(
+        f"[patch_exp_flat25_subtle_debug_v3] removed {removed} dropped task directories."
+    )
 
 
 if __name__ == "__main__":

@@ -83,7 +83,11 @@ def _is_podman_docker() -> bool:
         )
         output = (result.stdout + result.stderr).lower()
         return "podman" in output
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         return False
 
 
@@ -155,7 +159,9 @@ def detect_docker_runtime() -> DockerRuntimeConfig:
                 socket_path=podman_socket,
                 extra_env={
                     "CONTAINER_RUNTIME": "podman_hpc",
-                    "_PODMAN_SOCKET_NEEDS_START": "1" if not _socket_exists(podman_socket) else "",
+                    "_PODMAN_SOCKET_NEEDS_START": "1"
+                    if not _socket_exists(podman_socket)
+                    else "",
                 },
             )
 
@@ -260,7 +266,11 @@ def try_start_podman_socket(timeout: int = 3) -> bool:
             check=False,
         )
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         pass
 
     try:
@@ -272,7 +282,11 @@ def try_start_podman_socket(timeout: int = 3) -> bool:
             check=False,
         )
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         pass
 
     return False
@@ -517,7 +531,9 @@ def setup_docker_runtime_if_needed(env_type: str, fail_fast: bool = True) -> Non
     success, message = verify_docker_connectivity_with_details(runtime, timeout=10)
     if not success:
         socket_path = runtime.socket_path or "unknown"
-        socket_exists_str = str(_socket_exists(socket_path)) if socket_path != "unknown" else "unknown"
+        socket_exists_str = (
+            str(_socket_exists(socket_path)) if socket_path != "unknown" else "unknown"
+        )
         error_msg = (
             f"{message}\n"
             f"[docker] DEBUG: DOCKER_HOST={runtime.docker_host}, socket_path={socket_path}, exists={socket_exists_str}\n"
@@ -615,8 +631,12 @@ def get_docker_image_for_providers(
         base_image = select_docker_image(accelerator)
 
     # Check provider docker support
-    supports_docker = [name for name, supported in provider_docker_support.items() if supported]
-    no_docker = [name for name, supported in provider_docker_support.items() if not supported]
+    supports_docker = [
+        name for name, supported in provider_docker_support.items() if supported
+    ]
+    no_docker = [
+        name for name, supported in provider_docker_support.items() if not supported
+    ]
 
     if not supports_docker:
         # No providers support Docker

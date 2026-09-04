@@ -146,6 +146,7 @@ bash /setup_files/setup_seeds.sh
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _relative_seed_path(member_name: str) -> str:
     """Extract the path relative to seeds/ from a tar member name.
 
@@ -155,7 +156,7 @@ def _relative_seed_path(member_name: str) -> str:
     idx = member_name.find(marker)
     if idx == -1:
         return member_name
-    return member_name[idx + len(marker):]
+    return member_name[idx + len(marker) :]
 
 
 def _build_setup_seeds_script(
@@ -191,6 +192,7 @@ def _build_setup_seeds_script(
 # ---------------------------------------------------------------------------
 # Extraction from parquet
 # ---------------------------------------------------------------------------
+
 
 def extract_tasks_from_parquet(parquet_path: str, output_dir: Path) -> list[Path]:
     """Extract tasks from a parquet file with compressed tar binaries."""
@@ -228,6 +230,7 @@ def extract_tasks_from_parquet(parquet_path: str, output_dir: Path) -> list[Path
 # Patching logic
 # ---------------------------------------------------------------------------
 
+
 def patch_task(
     task_dir: Path,
     output_dir: Path | None = None,
@@ -258,8 +261,8 @@ def patch_task(
 
     # --- Classify seed files ---
     seeds_dir = target / "environment" / "seeds"
-    small_seeds: list[tuple[str, int]] = []   # (rel_path, size)
-    large_seeds: list[tuple[str, int]] = []   # (rel_path, size)
+    small_seeds: list[tuple[str, int]] = []  # (rel_path, size)
+    large_seeds: list[tuple[str, int]] = []  # (rel_path, size)
 
     if seeds_dir.exists() and seeds_dir.is_dir():
         for seed_file in sorted(seeds_dir.rglob("*")):
@@ -348,7 +351,11 @@ def patch_task(
             insert_idx = 0
             for i, line in enumerate(lines):
                 stripped = line.strip()
-                if stripped and not stripped.startswith("#") and not stripped.startswith("!"):
+                if (
+                    stripped
+                    and not stripped.startswith("#")
+                    and not stripped.startswith("!")
+                ):
                     insert_idx = i
                     break
             patched_solve = (
@@ -379,7 +386,9 @@ def main():
         default=None,
         help="Write patched tasks to this directory (default: patch in-place)",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would change without writing"
+    )
     parser.add_argument(
         "--extract-dir",
         type=Path,
@@ -420,10 +429,15 @@ def main():
 
         tasks_root = extract_dir
 
-    task_dirs = sorted(
-        d for d in tasks_root.iterdir()
-        if d.is_dir() and (d / "instruction.md").exists()
-    ) if tasks_root.exists() else []
+    task_dirs = (
+        sorted(
+            d
+            for d in tasks_root.iterdir()
+            if d.is_dir() and (d / "instruction.md").exists()
+        )
+        if tasks_root.exists()
+        else []
+    )
     print(f"Found {len(task_dirs)} tasks in {tasks_root}")
 
     if args.output_dir and not args.dry_run:

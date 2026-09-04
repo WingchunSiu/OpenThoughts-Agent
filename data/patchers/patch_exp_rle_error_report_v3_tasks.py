@@ -151,17 +151,19 @@ from patch_rle_flat25_tasks import (  # noqa: E402
 # R1 extension — upstream-project-style local module names. A
 # ``test_solution.py`` that does ``from tests import X`` will fail because
 # the sandbox /tests dir only contains ``test_solution.py`` itself.
-LIKELY_LOCAL_MODS: frozenset[str] = frozenset({
-    "tests",
-    "test_utils",
-    "test_common",
-    "test_helpers",
-    "helpers",
-    "apis",
-    "conftest",
-    "fixtures",
-    "project",
-})
+LIKELY_LOCAL_MODS: frozenset[str] = frozenset(
+    {
+        "tests",
+        "test_utils",
+        "test_common",
+        "test_helpers",
+        "helpers",
+        "apis",
+        "conftest",
+        "fixtures",
+        "project",
+    }
+)
 
 # R2 — dotted-submodule prefixes that no longer exist in modern releases
 # of whitelisted packages.
@@ -188,61 +190,110 @@ DEPRECATED_DOTTED_PREFIXES: tuple[str, ...] = (
 
 # R3 — names removed from a *still-present* dotted module.
 DEPRECATED_NAMES_BY_MODULE: dict[str, frozenset[str]] = {
-    "scipy.spatial.distance": frozenset({
-        "kulsinski", "wminkowski", "matching",
-        "sokalmichener", "sokalsneath",
-    }),
-    "numpy": frozenset({
-        "int_", "float_", "bool_", "object_", "str_",
-        "long", "unicode", "typeDict",
-    }),
+    "scipy.spatial.distance": frozenset(
+        {
+            "kulsinski",
+            "wminkowski",
+            "matching",
+            "sokalmichener",
+            "sokalsneath",
+        }
+    ),
+    "numpy": frozenset(
+        {
+            "int_",
+            "float_",
+            "bool_",
+            "object_",
+            "str_",
+            "long",
+            "unicode",
+            "typeDict",
+        }
+    ),
 }
 
 # R6 — system binaries not present in the sandbox image. Test calls
 # ``subprocess.run(["X", ...])`` where ``X`` is one of these will
 # FileNotFoundError before any agent solution can run.
-SYSTEM_BINARIES_REQUIRED: frozenset[str] = frozenset({
-    "ray", "docker", "kubectl", "minio",
-    "redis-server", "mongod", "nomad", "consul", "helm",
-})
+SYSTEM_BINARIES_REQUIRED: frozenset[str] = frozenset(
+    {
+        "ray",
+        "docker",
+        "kubectl",
+        "minio",
+        "redis-server",
+        "mongod",
+        "nomad",
+        "consul",
+        "helm",
+    }
+)
 
 # R7 — pytest builtin/plugin fixtures that are always available.
-KNOWN_FIXTURES: frozenset[str] = frozenset({
-    # core pytest
-    "request",
-    "tmp_path", "tmp_path_factory", "tmpdir", "tmpdir_factory",
-    "capfd", "capsys", "capfdbinary", "capsysbinary", "capteesys",
-    "caplog", "monkeypatch", "cache", "doctest_namespace", "recwarn",
-    "record_property", "record_testsuite_property", "record_xml_attribute",
-    "pytestconfig",
-    # pytest-mock
-    "mocker", "class_mocker", "module_mocker", "package_mocker",
-    "session_mocker",
-    # Faker / pytest-faker
-    "faker", "_session_faker",
-    # requests-mock
-    "requests_mock",
-    # anyio
-    "anyio_backend", "anyio_backend_name", "anyio_backend_options",
-    # ddtrace
-    "ddspan", "ddtracer",
-    # pytest-subtests
-    "subtests",
-    # pytest-asyncio side fixtures occasionally exposed by plugins
-    "free_tcp_port", "free_tcp_port_factory",
-    "free_udp_port", "free_udp_port_factory",
-})
+KNOWN_FIXTURES: frozenset[str] = frozenset(
+    {
+        # core pytest
+        "request",
+        "tmp_path",
+        "tmp_path_factory",
+        "tmpdir",
+        "tmpdir_factory",
+        "capfd",
+        "capsys",
+        "capfdbinary",
+        "capsysbinary",
+        "capteesys",
+        "caplog",
+        "monkeypatch",
+        "cache",
+        "doctest_namespace",
+        "recwarn",
+        "record_property",
+        "record_testsuite_property",
+        "record_xml_attribute",
+        "pytestconfig",
+        # pytest-mock
+        "mocker",
+        "class_mocker",
+        "module_mocker",
+        "package_mocker",
+        "session_mocker",
+        # Faker / pytest-faker
+        "faker",
+        "_session_faker",
+        # requests-mock
+        "requests_mock",
+        # anyio
+        "anyio_backend",
+        "anyio_backend_name",
+        "anyio_backend_options",
+        # ddtrace
+        "ddspan",
+        "ddtracer",
+        # pytest-subtests
+        "subtests",
+        # pytest-asyncio side fixtures occasionally exposed by plugins
+        "free_tcp_port",
+        "free_tcp_port_factory",
+        "free_udp_port",
+        "free_udp_port_factory",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _instruction_tokens(text: str) -> set[str]:
     return {t.lower() for t in TOKEN_RE.findall(text)}
 
 
-def _collect_imports(tree: ast.AST) -> tuple[set[str], set[str], list[tuple[str, list[str]]]]:
+def _collect_imports(
+    tree: ast.AST,
+) -> tuple[set[str], set[str], list[tuple[str, list[str]]]]:
     """Return (top_level_names, dotted_module_paths, from_import_pairs)."""
     top: set[str] = set()
     dotted: set[str] = set()
@@ -332,6 +383,7 @@ def _defined_fixture_names(tree: ast.AST) -> set[str]:
 # Evaluator
 # ---------------------------------------------------------------------------
 
+
 def evaluate_task(task_dir: Path) -> dict:
     """Return a per-task verdict with rich diagnostics.
 
@@ -404,10 +456,16 @@ def evaluate_task(task_dir: Path) -> dict:
 
     # R4 — pytest.warns(None)
     if re.search(r"pytest\.warns\(\s*None\b", src):
-        return {"kept": False, "reason": "pytest_warns_none", "details": ["pytest.warns(None)"]}
+        return {
+            "kept": False,
+            "reason": "pytest_warns_none",
+            "details": ["pytest.warns(None)"],
+        }
 
     # R5 — django.contrib.* without settings configuration
-    if any(d == "django.contrib" or d.startswith("django.contrib.") for d in dotted_imports):
+    if any(
+        d == "django.contrib" or d.startswith("django.contrib.") for d in dotted_imports
+    ):
         if (
             "settings.configure" not in src
             and "DJANGO_SETTINGS_MODULE" not in src
@@ -417,11 +475,16 @@ def evaluate_task(task_dir: Path) -> dict:
 
     # R6 — system-binary subprocess call
     for binary in SYSTEM_BINARIES_REQUIRED:
-        list_arg = re.search(rf"""\[\s*["']{re.escape(binary)}["']\s*[,\]]""", src) is not None
-        positional_call = re.search(
-            rf"""(?:check_output|check_call|run|Popen)\s*\(\s*["']{re.escape(binary)}\s""",
-            src,
-        ) is not None
+        list_arg = (
+            re.search(rf"""\[\s*["']{re.escape(binary)}["']\s*[,\]]""", src) is not None
+        )
+        positional_call = (
+            re.search(
+                rf"""(?:check_output|check_call|run|Popen)\s*\(\s*["']{re.escape(binary)}\s""",
+                src,
+            )
+            is not None
+        )
         if (list_arg and "subprocess" in src) or positional_call:
             return {
                 "kept": False,
@@ -459,21 +522,41 @@ def evaluate_task(task_dir: Path) -> dict:
 # Driver
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--root", required=True, type=Path,
-                   help="Directory containing extracted task folders.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Only report counts; do not delete dropped task folders.")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only inspect the first N tasks (debug).")
-    p.add_argument("--report-json", type=Path, default=None,
-                   help="Write per-task verdict JSON to this file.")
-    p.add_argument("--show-bad", type=int, default=20,
-                   help="Print the first N drop samples per reason.")
+    p.add_argument(
+        "--root",
+        required=True,
+        type=Path,
+        help="Directory containing extracted task folders.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report counts; do not delete dropped task folders.",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only inspect the first N tasks (debug).",
+    )
+    p.add_argument(
+        "--report-json",
+        type=Path,
+        default=None,
+        help="Write per-task verdict JSON to this file.",
+    )
+    p.add_argument(
+        "--show-bad",
+        type=int,
+        default=20,
+        help="Print the first N drop samples per reason.",
+    )
     return p.parse_args()
 
 
@@ -487,7 +570,9 @@ def main() -> None:
     if args.limit:
         task_dirs = task_dirs[: args.limit]
 
-    print(f"[patch_exp_rle_error_report_v3] inspecting {len(task_dirs)} tasks under {root}")
+    print(
+        f"[patch_exp_rle_error_report_v3] inspecting {len(task_dirs)} tasks under {root}"
+    )
 
     by_reason: dict[str, int] = {}
     samples: dict[str, list[tuple[str, list[str]]]] = {}
@@ -513,7 +598,7 @@ def main() -> None:
     print(f"[patch_exp_rle_error_report_v3] total:           {total}")
     print(f"[patch_exp_rle_error_report_v3] kept:            {kept}")
     print(f"[patch_exp_rle_error_report_v3] dropped:         {dropped}")
-    print(f"[patch_exp_rle_error_report_v3] dropped breakdown:")
+    print("[patch_exp_rle_error_report_v3] dropped breakdown:")
     for reason, n in sorted(by_reason.items(), key=lambda kv: -kv[1]):
         print(f"    {reason:30s} {n:4d}")
 
@@ -525,7 +610,9 @@ def main() -> None:
 
     if args.report_json:
         args.report_json.write_text(json.dumps(verdicts, indent=2))
-        print(f"[patch_exp_rle_error_report_v3] wrote per-task verdicts: {args.report_json}")
+        print(
+            f"[patch_exp_rle_error_report_v3] wrote per-task verdicts: {args.report_json}"
+        )
 
     if args.dry_run:
         print("[patch_exp_rle_error_report_v3] dry-run: not deleting dropped tasks.")
@@ -539,7 +626,9 @@ def main() -> None:
         if target.exists():
             shutil.rmtree(target)
             removed += 1
-    print(f"[patch_exp_rle_error_report_v3] removed {removed} dropped task directories.")
+    print(
+        f"[patch_exp_rle_error_report_v3] removed {removed} dropped task directories."
+    )
 
 
 if __name__ == "__main__":

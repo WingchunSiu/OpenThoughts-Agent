@@ -194,7 +194,10 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict:
     """Patch a single task. Returns ``{"status": ..., "reason": ..., ...}``."""
     dockerfile = task_dir / "environment" / "Dockerfile"
     if not dockerfile.exists():
-        return {"status": "skipped_no_dockerfile", "reason": "no environment/Dockerfile"}
+        return {
+            "status": "skipped_no_dockerfile",
+            "reason": "no environment/Dockerfile",
+        }
 
     canonical = _canonical_source_name(task_dir)
     if canonical is None:
@@ -202,7 +205,10 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict:
 
     initial_path = task_dir / "tests" / "initial" / canonical
     if not initial_path.is_file():
-        return {"status": "skipped_no_initial", "reason": "tests/initial/<file>.c not a file"}
+        return {
+            "status": "skipped_no_initial",
+            "reason": "tests/initial/<file>.c not a file",
+        }
 
     initial_bytes = initial_path.read_bytes()
 
@@ -221,7 +227,10 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict:
             new_instr = _build_instruction(instr_text, canonical)
 
     if seed_in_sync and instr_already_patched:
-        return {"status": "skipped_already_patched", "reason": "marker present + seed in sync"}
+        return {
+            "status": "skipped_already_patched",
+            "reason": "marker present + seed in sync",
+        }
 
     if dry_run:
         return {

@@ -146,7 +146,10 @@ def patch_task(
 
     metadata = _read_metadata(task_dir)
     if metadata is None:
-        return {"status": "skipped_no_metadata", "reason": "missing/unreadable metadata.json"}
+        return {
+            "status": "skipped_no_metadata",
+            "reason": "missing/unreadable metadata.json",
+        }
 
     source = metadata.get("source", "")
     if not isinstance(source, str) or not source.startswith("bugsinpy_mf-"):

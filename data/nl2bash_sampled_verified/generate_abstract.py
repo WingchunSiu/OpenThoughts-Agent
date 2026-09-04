@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Optional
 
 from data.commons import (
@@ -27,8 +26,12 @@ class NL2BashGenerator(BaseDataGenerator):
     default_target_repo: Optional[str] = None
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--split", type=str, default="train", help="Dataset split to sample.")
-        parser.add_argument("--seed", type=int, default=None, help="Random seed for sampling.")
+        parser.add_argument(
+            "--split", type=str, default="train", help="Dataset split to sample."
+        )
+        parser.add_argument(
+            "--seed", type=int, default=None, help="Random seed for sampling."
+        )
         parser.add_argument(
             "--dataset-prefix",
             type=str,

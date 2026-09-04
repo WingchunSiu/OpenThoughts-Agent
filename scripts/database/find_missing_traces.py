@@ -38,7 +38,6 @@ import argparse
 import os
 import re
 import sys
-from collections import defaultdict
 
 # HF orgs to search for trace datasets
 HF_ORGS = ["DCAgent", "DCAgent2", "penfever", "laion"]
@@ -90,7 +89,7 @@ def _sanitize_for_search(name: str) -> str:
     # Remove common prefixes
     for prefix in ("eval-", "pending_", "laion/", "laion_"):
         if name.startswith(prefix):
-            name = name[len(prefix):]
+            name = name[len(prefix) :]
     # Remove trailing hash (8+ hex chars at end)
     name = re.sub(r"[_-][0-9a-f]{8,}$", "", name)
     # Replace underscores with hyphens for search
@@ -127,7 +126,9 @@ def main() -> None:
     while True:
         batch = (
             client.table("sandbox_jobs")
-            .select("id,job_name,model_id,benchmark_id,n_trials,hf_traces_link,job_status")
+            .select(
+                "id,job_name,model_id,benchmark_id,n_trials,hf_traces_link,job_status"
+            )
             .eq("job_status", args.status)
             .is_("hf_traces_link", "null")
             .range(offset, offset + page_size - 1)
@@ -149,7 +150,12 @@ def main() -> None:
 
     # Build a set of already-linked HF datasets (to exclude from candidates)
     print("\nStep 2: Building index of already-linked HF trace datasets...")
-    all_jobs = client.table("sandbox_jobs").select("hf_traces_link").not_.is_("hf_traces_link", "null").execute()
+    all_jobs = (
+        client.table("sandbox_jobs")
+        .select("hf_traces_link")
+        .not_.is_("hf_traces_link", "null")
+        .execute()
+    )
     linked_urls = set()
     for j in all_jobs.data:
         link = j.get("hf_traces_link", "")
@@ -197,7 +203,7 @@ def main() -> None:
         n_trials = job.get("n_trials", 0)
 
         if args.verbose:
-            print(f"\n  [{i+1}/{len(missing)}] {job_name[:60]} (trials={n_trials})")
+            print(f"\n  [{i + 1}/{len(missing)}] {job_name[:60]} (trials={n_trials})")
 
         # Generate search tokens from job name
         search_str = _sanitize_for_search(job_name)
@@ -208,7 +214,7 @@ def main() -> None:
 
         if not tokens:
             if args.verbose:
-                print(f"    No search tokens extracted")
+                print("    No search tokens extracted")
             no_candidates.append(job_name)
             continue
 
@@ -220,8 +226,12 @@ def main() -> None:
                 continue
             repo_lower = repo_id.lower().replace("-", "_")
             # Count token matches
-            matched_tokens = sum(1 for t in tokens if t.lower().replace("-", "_") in repo_lower)
-            if matched_tokens >= min(2, len(tokens)):  # At least 2 tokens match (or all if <2)
+            matched_tokens = sum(
+                1 for t in tokens if t.lower().replace("-", "_") in repo_lower
+            )
+            if matched_tokens >= min(
+                2, len(tokens)
+            ):  # At least 2 tokens match (or all if <2)
                 candidates.append((repo_id, matched_tokens))
 
         candidates.sort(key=lambda x: -x[1])
@@ -238,7 +248,9 @@ def main() -> None:
 
         # Step 5: Verify by trial name matching
         # Get trial names from DB
-        trial_query = client.table("sandbox_trials").select("trial_name").eq("job_id", job_id)
+        trial_query = (
+            client.table("sandbox_trials").select("trial_name").eq("job_id", job_id)
+        )
         if TRIAL_SAMPLE_SIZE > 0:
             trial_query = trial_query.limit(TRIAL_SAMPLE_SIZE)
         db_trials = trial_query.execute()
@@ -246,7 +258,7 @@ def main() -> None:
 
         if not db_trial_names:
             if args.verbose:
-                print(f"    No trials in DB to match against")
+                print("    No trials in DB to match against")
             no_candidates.append(job_name)
             continue
 
@@ -267,11 +279,19 @@ def main() -> None:
                 ratio = overlap / len(db_trial_names) if db_trial_names else 0
 
                 if args.verbose:
-                    print(f"    {repo_id}: {overlap}/{len(db_trial_names)} match ({ratio:.0%})")
+                    print(
+                        f"    {repo_id}: {overlap}/{len(db_trial_names)} match ({ratio:.0%})"
+                    )
 
                 if ratio > best_overlap:
                     best_overlap = ratio
-                    best_match = (repo_id, overlap, len(db_trial_names), len(hf_trial_names), ratio)
+                    best_match = (
+                        repo_id,
+                        overlap,
+                        len(db_trial_names),
+                        len(hf_trial_names),
+                        ratio,
+                    )
             except Exception as e:
                 if args.verbose:
                     print(f"    {repo_id}: ERROR loading - {e}")
@@ -300,9 +320,9 @@ def main() -> None:
             print(f"\nUpdating {len(matches)} jobs with HF trace links...")
             for job, (repo_id, *_) in matches:
                 hf_url = f"https://huggingface.co/datasets/{repo_id}"
-                client.table("sandbox_jobs").update(
-                    {"hf_traces_link": hf_url}
-                ).eq("id", job["id"]).execute()
+                client.table("sandbox_jobs").update({"hf_traces_link": hf_url}).eq(
+                    "id", job["id"]
+                ).execute()
                 print(f"  Updated {job['job_name'][:50]} -> {hf_url}")
     else:
         print("\nNo strong matches found.")
@@ -321,7 +341,9 @@ def main() -> None:
         if len(no_match) > 10:
             print(f"  ... and {len(no_match) - 10} more")
 
-    print(f"\nSummary: {len(matches)} matched, {len(no_candidates)} no candidates, {len(no_match)} no trial match")
+    print(
+        f"\nSummary: {len(matches)} matched, {len(no_candidates)} no candidates, {len(no_match)} no trial match"
+    )
 
 
 if __name__ == "__main__":

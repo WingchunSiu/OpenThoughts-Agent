@@ -230,24 +230,51 @@ def patch_task(task_dir: Path, dry_run: bool = False) -> dict[str, bool]:
     dockerfile = task_dir / "environment" / "Dockerfile"
 
     if dry_run:
-        changes["instruction.md"] = instruction.exists() and "pipe input automatically" not in instruction.read_text()
-        changes["test.sh"] = test_sh.exists() and "set -euo pipefail" not in test_sh.read_text()
-        changes["test_state.py"] = test_state.exists() and "SOLUTION_TIMEOUT_SEC" not in test_state.read_text()
-        changes["Dockerfile"] = dockerfile.exists() and "pytest" not in dockerfile.read_text()
+        changes["instruction.md"] = (
+            instruction.exists()
+            and "pipe input automatically" not in instruction.read_text()
+        )
+        changes["test.sh"] = (
+            test_sh.exists() and "set -euo pipefail" not in test_sh.read_text()
+        )
+        changes["test_state.py"] = (
+            test_state.exists() and "SOLUTION_TIMEOUT_SEC" not in test_state.read_text()
+        )
+        changes["Dockerfile"] = (
+            dockerfile.exists() and "pytest" not in dockerfile.read_text()
+        )
         return changes
 
-    changes["instruction.md"] = patch_instruction(instruction) if instruction.exists() else False
-    changes["test.sh"] = patch_file(test_sh, NEW_TEST_SH, "set -euo pipefail") if test_sh.exists() else False
-    changes["test_state.py"] = patch_file(test_state, NEW_TEST_STATE_PY, "SOLUTION_TIMEOUT_SEC") if test_state.exists() else False
-    changes["Dockerfile"] = patch_file(dockerfile, NEW_DOCKERFILE, "pytest") if dockerfile.exists() else False
+    changes["instruction.md"] = (
+        patch_instruction(instruction) if instruction.exists() else False
+    )
+    changes["test.sh"] = (
+        patch_file(test_sh, NEW_TEST_SH, "set -euo pipefail")
+        if test_sh.exists()
+        else False
+    )
+    changes["test_state.py"] = (
+        patch_file(test_state, NEW_TEST_STATE_PY, "SOLUTION_TIMEOUT_SEC")
+        if test_state.exists()
+        else False
+    )
+    changes["Dockerfile"] = (
+        patch_file(dockerfile, NEW_DOCKERFILE, "pytest")
+        if dockerfile.exists()
+        else False
+    )
 
     return changes
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Patch code-contests tasks for non-interactive execution")
+    parser = argparse.ArgumentParser(
+        description="Patch code-contests tasks for non-interactive execution"
+    )
     parser.add_argument("tasks_dir", help="Root directory containing task folders")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would change without writing"
+    )
     args = parser.parse_args()
 
     tasks_root = Path(args.tasks_dir)
@@ -255,7 +282,8 @@ def main():
         raise SystemExit(f"Not a directory: {tasks_root}")
 
     task_dirs = sorted(
-        d for d in tasks_root.iterdir()
+        d
+        for d in tasks_root.iterdir()
         if d.is_dir() and (d / "instruction.md").exists()
     )
     print(f"Found {len(task_dirs)} tasks in {tasks_root}")

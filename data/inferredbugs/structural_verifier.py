@@ -4,7 +4,6 @@ Logic for authoring and injecting structural Python verifiers for InferredBugs.
 
 import os
 import re
-import json
 from pathlib import Path
 from typing import List, Tuple
 
@@ -127,62 +126,91 @@ if __name__ == "__main__":
 {instruction}
 """
 
-def author_verifier_harness(instruction: str, task_name: str, model_name: str = "gpt-5-nano") -> Tuple[str, str]:
+
+def author_verifier_harness(
+    instruction: str, task_name: str, model_name: str = "gpt-5-nano"
+) -> Tuple[str, str]:
     """Calls the LLM to author both test.sh and test_state.py."""
     try:
         from openai import OpenAI
         from openai.types.chat import ChatCompletionUserMessageParam
+
         client = OpenAI()
-        
+
         prompt = AUTHORING_PROMPT_TEMPLATE.format(instruction=instruction)
-        
+
         messages: List[ChatCompletionUserMessageParam] = [
             {
                 "role": "user",
                 "content": prompt,
             }
         ]
-        
+
         response = client.chat.completions.create(
             model=model_name,
             messages=messages,
         )
-        
+
         content = response.choices[0].message.content
-        
+
         # Extract Bash script
         bash_match = re.search(r"<bash_script>(.*?)</bash_script>", content, re.DOTALL)
         if not bash_match:
             print(f"ERROR [{task_name}]: Model response is missing <bash_script> tags.")
-        bash_script = bash_match.group(1).strip() if bash_match else "# Error: No bash script authored"
-        
+        bash_script = (
+            bash_match.group(1).strip()
+            if bash_match
+            else "# Error: No bash script authored"
+        )
+
         # Extract Python script
-        python_match = re.search(r"<python_script>(.*?)</python_script>", content, re.DOTALL)
+        python_match = re.search(
+            r"<python_script>(.*?)</python_script>", content, re.DOTALL
+        )
         if not python_match:
-            print(f"ERROR [{task_name}]: Model response is missing <python_script> tags.")
-        python_script = python_match.group(1).strip() if python_match else "# Error: No python script authored"
-        
+            print(
+                f"ERROR [{task_name}]: Model response is missing <python_script> tags."
+            )
+        python_script = (
+            python_match.group(1).strip()
+            if python_match
+            else "# Error: No python script authored"
+        )
+
         return bash_script, python_script
-        
+
     except Exception as e:
         print(f"Error calling LLM for verifier authoring on {task_name}: {e}")
         return f"#!/bin/bash\\necho 'Error: {e}'\\nexit 1", f"# Error: {str(e)}"
 
-def inject_inferredbugs_verifier(dataset_dir: str, questions: List[str], model_name: str = "gpt-5-nano", max_workers: int = 30):
+
+def inject_inferredbugs_verifier(
+    dataset_dir: str,
+    questions: List[str],
+    model_name: str = "gpt-5-nano",
+    max_workers: int = 30,
+):
     """Orchestrates the authoring and injection of verifiers into tasks."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     tasks_root = Path(dataset_dir)
-    task_dirs = sorted([d for d in tasks_root.iterdir() if d.is_dir()], key=lambda x: x.name)
+    task_dirs = sorted(
+        [d for d in tasks_root.iterdir() if d.is_dir()], key=lambda x: x.name
+    )
 
-    print(f"Authoring verifier harnesses for {len(task_dirs)} tasks using {model_name} (workers={max_workers})...")
+    print(
+        f"Authoring verifier harnesses for {len(task_dirs)} tasks using {model_name} (workers={max_workers})..."
+    )
     """Orchestrates the authoring and injection of verifiers into tasks."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     tasks_root = Path(dataset_dir)
-    task_dirs = sorted([d for d in tasks_root.iterdir() if d.is_dir()], key=lambda x: x.name)
+    task_dirs = sorted(
+        [d for d in tasks_root.iterdir() if d.is_dir()], key=lambda x: x.name
+    )
 
-    print(f"Authoring verifier harnesses for {len(task_dirs)} tasks using {model_name} (workers={max_workers})...")
+    print(
+        f"Authoring verifier harnesses for {len(task_dirs)} tasks using {model_name} (workers={max_workers})..."
+    )
 
     def process_task(task_dir, instruction):
         tests_dir = task_dir / "tests"
@@ -194,9 +222,13 @@ def inject_inferredbugs_verifier(dataset_dir: str, questions: List[str], model_n
             print(f"  - Verifier already exists for {task_dir.name}. Skipping.")
             return
 
-        bash_code, python_code = author_verifier_harness(instruction, task_dir.name, model_name)
+        bash_code, python_code = author_verifier_harness(
+            instruction, task_dir.name, model_name
+        )
 
-        if python_code.startswith("# Error:") or bash_code.startswith("#!/bin/bash\necho 'Error:"):
+        if python_code.startswith("# Error:") or bash_code.startswith(
+            "#!/bin/bash\necho 'Error:"
+        ):
             print(f"  - Skipping {task_dir.name}: LLM authoring failed.")
             return
 
@@ -210,6 +242,9 @@ def inject_inferredbugs_verifier(dataset_dir: str, questions: List[str], model_n
         print(f"  - Harness generated for {task_dir.name}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_task, td, instr) for td, instr in zip(task_dirs, questions)]
+        futures = [
+            executor.submit(process_task, td, instr)
+            for td, instr in zip(task_dirs, questions)
+        ]
         for f in as_completed(futures):
             f.result()

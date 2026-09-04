@@ -48,6 +48,7 @@ Anomalies / known limitations:
     agent will need to either re-import or implement. We list these as
     "free helper functions" so the agent knows they're calls, not types.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -66,9 +67,7 @@ RE_FQTN = re.compile(r"\b((?:[a-z][a-zA-Z0-9_]*\.){2,}[A-Z][a-zA-Z0-9_]*)\b")
 RE_CAP_IDENT = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\b")
 
 # Type.method(...) calls — capture the receiver type and the method name.
-RE_TYPE_METHOD = re.compile(
-    r"\b([A-Z][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*)\s*\("
-)
+RE_TYPE_METHOD = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*)\s*\(")
 
 # bare lowercase function calls like `singletonList(...)`, `createMock(...)`
 RE_BARE_CALL = re.compile(r"\b([a-z_][A-Za-z0-9_]*)\s*\(")
@@ -78,37 +77,115 @@ RE_BARE_CALL = re.compile(r"\b([a-z_][A-Za-z0-9_]*)\s*\(")
 # `String`".
 JAVA_BUILTIN = {
     # primitives + wrappers + base types
-    "String", "Integer", "Long", "Boolean", "Double", "Float", "Short",
-    "Byte", "Character", "Object", "Number", "Math", "System", "Class",
-    "Void", "Iterable", "Iterator", "Comparable", "Comparator",
+    "String",
+    "Integer",
+    "Long",
+    "Boolean",
+    "Double",
+    "Float",
+    "Short",
+    "Byte",
+    "Character",
+    "Object",
+    "Number",
+    "Math",
+    "System",
+    "Class",
+    "Void",
+    "Iterable",
+    "Iterator",
+    "Comparable",
+    "Comparator",
     # collections / generics
-    "List", "ArrayList", "LinkedList", "Set", "HashSet", "TreeSet",
-    "Map", "HashMap", "LinkedHashMap", "TreeMap", "Collection",
-    "Collections", "Arrays", "Optional", "Stream", "Stream",
-    "Function", "BiFunction", "Predicate", "Consumer", "Supplier",
+    "List",
+    "ArrayList",
+    "LinkedList",
+    "Set",
+    "HashSet",
+    "TreeSet",
+    "Map",
+    "HashMap",
+    "LinkedHashMap",
+    "TreeMap",
+    "Collection",
+    "Collections",
+    "Arrays",
+    "Optional",
+    "Stream",
+    "Stream",
+    "Function",
+    "BiFunction",
+    "Predicate",
+    "Consumer",
+    "Supplier",
     # JUnit Jupiter
-    "Test", "BeforeEach", "BeforeAll", "AfterEach", "AfterAll",
-    "DisplayName", "Disabled", "Tag", "Nested", "TestInstance",
-    "ParameterizedTest", "RepeatedTest", "ValueSource", "MethodSource",
-    "Assertions", "Assumptions", "Assert", "Order", "TestMethodOrder",
-    "MethodOrderer", "Timeout",
+    "Test",
+    "BeforeEach",
+    "BeforeAll",
+    "AfterEach",
+    "AfterAll",
+    "DisplayName",
+    "Disabled",
+    "Tag",
+    "Nested",
+    "TestInstance",
+    "ParameterizedTest",
+    "RepeatedTest",
+    "ValueSource",
+    "MethodSource",
+    "Assertions",
+    "Assumptions",
+    "Assert",
+    "Order",
+    "TestMethodOrder",
+    "MethodOrderer",
+    "Timeout",
     # exceptions / common
-    "Exception", "RuntimeException", "Throwable", "Error",
-    "IllegalArgumentException", "NullPointerException",
-    "NoSuchMethodException", "IOException", "InterruptedException",
+    "Exception",
+    "RuntimeException",
+    "Throwable",
+    "Error",
+    "IllegalArgumentException",
+    "NullPointerException",
+    "NoSuchMethodException",
+    "IOException",
+    "InterruptedException",
     # time
-    "Instant", "Duration", "LocalDate", "LocalDateTime", "LocalTime",
-    "ZonedDateTime", "OffsetDateTime", "ZoneId", "ZoneOffset",
+    "Instant",
+    "Duration",
+    "LocalDate",
+    "LocalDateTime",
+    "LocalTime",
+    "ZonedDateTime",
+    "OffsetDateTime",
+    "ZoneId",
+    "ZoneOffset",
     # java.lang reflection
-    "Method", "Field", "Constructor", "Modifier",
+    "Method",
+    "Field",
+    "Constructor",
+    "Modifier",
     # math
-    "BigInteger", "BigDecimal",
+    "BigInteger",
+    "BigDecimal",
     # NIO / IO
-    "Path", "Paths", "Files", "File", "InputStream", "OutputStream",
-    "Reader", "Writer", "BufferedReader", "BufferedWriter",
+    "Path",
+    "Paths",
+    "Files",
+    "File",
+    "InputStream",
+    "OutputStream",
+    "Reader",
+    "Writer",
+    "BufferedReader",
+    "BufferedWriter",
     # misc lang
-    "Objects", "Override", "SuppressWarnings", "Deprecated",
-    "FunctionalInterface", "SafeVarargs",
+    "Objects",
+    "Override",
+    "SuppressWarnings",
+    "Deprecated",
+    "FunctionalInterface",
+    "SafeVarargs",
     # JUnit5 helpers some tests use
     "InOrder",
 }
@@ -117,20 +194,67 @@ JAVA_BUILTIN = {
 # under "free helper functions" the agent must implement (they're imported).
 JUNIT_FREE_HELPERS = {
     # JUnit Jupiter Assertions (static-imported via line 2)
-    "assertEquals", "assertNotEquals", "assertTrue", "assertFalse",
-    "assertNull", "assertNotNull", "assertSame", "assertNotSame",
-    "assertThrows", "assertDoesNotThrow", "assertAll", "assertArrayEquals",
-    "assertIterableEquals", "assertLinesMatch", "assertTimeout",
-    "assertTimeoutPreemptively", "fail",
+    "assertEquals",
+    "assertNotEquals",
+    "assertTrue",
+    "assertFalse",
+    "assertNull",
+    "assertNotNull",
+    "assertSame",
+    "assertNotSame",
+    "assertThrows",
+    "assertDoesNotThrow",
+    "assertAll",
+    "assertArrayEquals",
+    "assertIterableEquals",
+    "assertLinesMatch",
+    "assertTimeout",
+    "assertTimeoutPreemptively",
+    "fail",
     # Java keywords that look like calls
-    "if", "for", "while", "switch", "return", "throw", "new", "this",
-    "super", "do", "catch", "try", "synchronized",
+    "if",
+    "for",
+    "while",
+    "switch",
+    "return",
+    "throw",
+    "new",
+    "this",
+    "super",
+    "do",
+    "catch",
+    "try",
+    "synchronized",
     # very common idioms agents understand without help
-    "println", "print", "format", "printf", "valueOf", "toString",
-    "equals", "hashCode", "compareTo", "length", "size", "isEmpty",
-    "contains", "indexOf", "substring", "split", "trim", "replace",
-    "get", "set", "add", "remove", "put", "containsKey", "containsValue",
-    "keys", "values", "entrySet", "keySet",
+    "println",
+    "print",
+    "format",
+    "printf",
+    "valueOf",
+    "toString",
+    "equals",
+    "hashCode",
+    "compareTo",
+    "length",
+    "size",
+    "isEmpty",
+    "contains",
+    "indexOf",
+    "substring",
+    "split",
+    "trim",
+    "replace",
+    "get",
+    "set",
+    "add",
+    "remove",
+    "put",
+    "containsKey",
+    "containsValue",
+    "keys",
+    "values",
+    "entrySet",
+    "keySet",
 }
 
 
@@ -231,9 +355,7 @@ def parse_test_body(java_src: str) -> tuple[str, list[str], list[str], list[str]
     # FQ as if it were a separate bare reference.
     masked_for_caps = masked
     for fqt in fq:
-        masked_for_caps = masked_for_caps.replace(
-            fqt, " " * len(fqt)
-        )
+        masked_for_caps = masked_for_caps.replace(fqt, " " * len(fqt))
 
     # Capitalised single-identifier symbols in the body. Filter to those that
     # are not Java/JUnit builtins and not the test class itself.
@@ -308,8 +430,7 @@ def render_instruction(
         lines.append("")
     if top_types:
         lines.append(
-            "**Top-level types/constants the test uses (not Java/JUnit "
-            "builtins):**"
+            "**Top-level types/constants the test uses (not Java/JUnit builtins):**"
         )
         for t in top_types:
             lines.append(f"- `{t}`")
@@ -439,8 +560,7 @@ def main() -> int:
 
         if i % 500 == 0 or i == n_total:
             print(
-                f"[{i}/{n_total}] parsed={n_parsed} kept={n_kept} "
-                f"dropped={n_dropped}",
+                f"[{i}/{n_total}] parsed={n_parsed} kept={n_kept} dropped={n_dropped}",
                 flush=True,
             )
 

@@ -38,6 +38,7 @@ def merge_datasets(dataset_ids: List[str], split: str = "train") -> Dataset:
 
     return concatenate_datasets(datasets)
 
+
 @gcs_cache()
 def train_fasttext_model(
     positive_dataset: Dataset,
@@ -88,7 +89,9 @@ def train_fasttext_model(
                 text = example[text_column].replace("\n", " ")
                 f.write(f"__label__negative {text}\n")
 
-        logger.info(f"Training FastText model with {len(positive_dataset)} positive and {len(negative_dataset)} negative examples")
+        logger.info(
+            f"Training FastText model with {len(positive_dataset)} positive and {len(negative_dataset)} negative examples"
+        )
 
         # Train the model
         model = fasttext.train_supervised(
@@ -105,7 +108,10 @@ def train_fasttext_model(
         logger.info(f"Model trained and saved to temporary file: {model_file}")
 
         # Copy to final destination
-        os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
+        os.makedirs(
+            os.path.dirname(save_path) if os.path.dirname(save_path) else ".",
+            exist_ok=True,
+        )
         with open(model_file, "rb") as src, open(save_path, "wb") as dst:
             dst.write(src.read())
 
@@ -186,7 +192,9 @@ def get_fasttext_model(
             )
 
         # Use temporary file for training
-        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False, dir=tmpdir) as tmp_file:
+        with tempfile.NamedTemporaryFile(
+            suffix=".bin", delete=False, dir=tmpdir
+        ) as tmp_file:
             save_path = tmp_file.name
 
         # Train the model
@@ -213,21 +221,26 @@ def main():
     Train and return a FastText model using positive and negative samples.
     """
     import sys
+
     sys.path.append(str(Path(__file__).parent.parent.parent))
-    from data.freelancer_filtering.embedding_filter_mean import create_positive_negative_samples
-    from data.commons import get_all_dcagent_positive_samples, get_code_contests_negative_samples
-    
+    from data.freelancer_filtering.embedding_filter_mean import (
+        create_positive_negative_samples,
+    )
+
     # Create positive and negative samples
     logger.info("Creating positive and negative samples...")
     positive_samples, negative_samples = create_positive_negative_samples()
-    
+
     # Convert to Dataset format
     from datasets import Dataset
+
     positive_dataset = Dataset.from_dict({"text": positive_samples})
     negative_dataset = Dataset.from_dict({"text": negative_samples})
-    
-    logger.info(f"Created {len(positive_dataset)} positive and {len(negative_dataset)} negative samples")
-    
+
+    logger.info(
+        f"Created {len(positive_dataset)} positive and {len(negative_dataset)} negative samples"
+    )
+
     # Train the model
     model_path = train_fasttext_model(
         positive_dataset=positive_dataset,
@@ -241,9 +254,9 @@ def main():
         word_ngrams=3,
         min_count=2,  # Lower min_count for more vocabulary
     )
-    
+
     logger.info(f"Model trained and saved to: {model_path}")
-    
+
     # Load and return the trained model
     model = fasttext.load_model(model_path)
     return model

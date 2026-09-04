@@ -169,7 +169,7 @@ cd $SCRATCH/SkyRL && git pull && cd $SCRATCH/harbor && git pull
 cd $SCRATCH/OpenThoughts-Agent
 
 python -m hpc.launch \
-  --job_type eval \
+  --job_type eval_listener \
   --model_path laion/<cf_v6plus_hub_id> \
   --tasks_input_path DCAgent2/swebench-verified-random-100-folders \
   --trace_harbor_config hpc/harbor_yaml/eval/openhands_ctx32k_eval_.yaml \

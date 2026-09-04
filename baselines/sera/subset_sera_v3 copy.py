@@ -27,11 +27,11 @@ no HF-datasets parquet conversion. Axolotl consumes this with:
         ds_type: json
         message_field_training: train
 """
+
 import argparse
 import json
 import os
 import random
-import shutil
 from pathlib import Path
 
 from huggingface_hub import HfApi
@@ -40,8 +40,10 @@ from huggingface_hub import HfApi
 SERA_JSONL = "/Users/benjaminfeuer/.cache/huggingface/hub/datasets--allenai--Sera-4.5A-Full-T1/snapshots/6e97fe0156fc2a89ee11bb565f4e0e21617ef9ca/sera-4.5a-full-t1_72118_string_enriched.jsonl"
 SOURCE_TAG = "allenai/Sera-4.5A-Full-T1"
 TARGET_BASE = "laion/Sera-4.5A-Full-T1-v3"
-SUBSET_SIZES = [316, 1000, 3160, 10000, 31600]   # 100000 skipped (dataset is 72k)
-STAGING_DIR = Path("/Users/benjaminfeuer/Documents/scripts_dataset_build/_sera_v3_staging")
+SUBSET_SIZES = [316, 1000, 3160, 10000, 31600]  # 100000 skipped (dataset is 72k)
+STAGING_DIR = Path(
+    "/Users/benjaminfeuer/Documents/scripts_dataset_build/_sera_v3_staging"
+)
 SEED = 42
 
 
@@ -57,7 +59,7 @@ def add_train_key(messages):
     """Mirror sera/datagen/data/postprocess/utils.py::add_train_key — only
     assistant messages contribute to loss. Mutates in-place."""
     for m in messages:
-        m["train"] = (m.get("role") == "assistant")
+        m["train"] = m.get("role") == "assistant"
     return messages
 
 
@@ -188,7 +190,10 @@ def push_dataset(api, target_repo, jsonl_path, size, full_size):
     readme_tmp = jsonl_path.parent / f"README_{size}.md"
     readme_tmp.write_text(make_readme(target_repo, size, full_size))
 
-    print(f"[push] uploading {jsonl_path.name} ({jsonl_path.stat().st_size / 1e9:.2f} GB) -> {target_repo}", flush=True)
+    print(
+        f"[push] uploading {jsonl_path.name} ({jsonl_path.stat().st_size / 1e9:.2f} GB) -> {target_repo}",
+        flush=True,
+    )
     api.upload_file(
         path_or_fileobj=str(jsonl_path),
         path_in_repo=jsonl_path.name,
@@ -207,9 +212,19 @@ def push_dataset(api, target_repo, jsonl_path, size, full_size):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--skip-full", action="store_true", help="Don't upload the full (72118) dataset")
-    ap.add_argument("--only-full", action="store_true", help="Only upload the full dataset (skip subsets)")
-    ap.add_argument("--build-only", action="store_true", help="Write JSONL files locally, skip HF uploads")
+    ap.add_argument(
+        "--skip-full", action="store_true", help="Don't upload the full (72118) dataset"
+    )
+    ap.add_argument(
+        "--only-full",
+        action="store_true",
+        help="Only upload the full dataset (skip subsets)",
+    )
+    ap.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Write JSONL files locally, skip HF uploads",
+    )
     args = ap.parse_args()
 
     token = os.environ["HF_TOKEN"]

@@ -153,7 +153,10 @@ class StackExchangeGenerator(BaseDataGenerator):
         if limit and limit > 0:
             target_samples = min(target_samples, limit)
 
-        if config.get("upsample", False) and _count_task_directories(current_root) < target_samples:
+        if (
+            config.get("upsample", False)
+            and _count_task_directories(current_root) < target_samples
+        ):
             upsampled = Path(
                 upsample_tasks_directory(
                     str(current_root),
@@ -177,7 +180,9 @@ class StackExchangeGenerator(BaseDataGenerator):
                 temp_paths.add(subsampled)
                 current_root = subsampled
 
-        output_path = finalize_dataset_output(str(current_root), getattr(args, "output_dir", None))
+        output_path = finalize_dataset_output(
+            str(current_root), getattr(args, "output_dir", None)
+        )
         dataset_path = str(output_path)
 
         for candidate in temp_paths:
@@ -190,7 +195,9 @@ class StackExchangeGenerator(BaseDataGenerator):
             upload_tasks_to_hf(dataset_path, target_repo)
             uploaded_repo = target_repo
         elif getattr(args, "no_upload", False):
-            print(f"Skipping upload (--no-upload). Dataset available at: {dataset_path}")
+            print(
+                f"Skipping upload (--no-upload). Dataset available at: {dataset_path}"
+            )
 
         artifacts = {
             "task_type": task_type,

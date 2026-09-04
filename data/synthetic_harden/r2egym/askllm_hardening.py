@@ -10,15 +10,27 @@ import random
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from data.synthetic_harden.utils import harden_instructions
-from data.r2egym.utils import load_r2egym_instances, create_r2egym_instruction, create_r2egym_task_toml
-from data.commons import generate_tasks_to_hdf5, extract_hdf5_to_task_paths, upload_tasks_to_hf, create_standard_dockerfile, upsample_list
+from data.r2egym.utils import (
+    load_r2egym_instances,
+    create_r2egym_instruction,
+    create_r2egym_task_toml,
+)
+from data.commons import (
+    generate_tasks_to_hdf5,
+    extract_hdf5_to_task_paths,
+    upload_tasks_to_hf,
+    create_standard_dockerfile,
+    upsample_list,
+)
 
 
 def main() -> str:
     random.seed(42)
 
     instances = load_r2egym_instances()
-    instructions = upsample_list([create_r2egym_instruction(inst) for inst in instances], 10_000)
+    instructions = upsample_list(
+        [create_r2egym_instruction(inst) for inst in instances], 10_000
+    )
     hardened_instructions = harden_instructions(instructions, model="gpt-4o-mini")
 
     dockerfile = create_standard_dockerfile()

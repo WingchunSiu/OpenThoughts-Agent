@@ -35,13 +35,17 @@ def load_validation_results(jobs_dir: Path) -> List[Dict]:
                 continue
 
             try:
-                with open(result_path, 'r') as f:
+                with open(result_path, "r") as f:
                     result = json.load(f)
-                    trial_results.append({
-                        "task_name": result.get("task_name", "unknown"),
-                        "trial_name": result.get("trial_name", trial_dir.name),
-                        "reward": result.get("verifier_result", {}).get("reward", 0.0),
-                    })
+                    trial_results.append(
+                        {
+                            "task_name": result.get("task_name", "unknown"),
+                            "trial_name": result.get("trial_name", trial_dir.name),
+                            "reward": result.get("verifier_result", {}).get(
+                                "reward", 0.0
+                            ),
+                        }
+                    )
             except Exception as e:
                 print(f"Warning: Failed to load {result_path}: {e}", file=sys.stderr)
 
@@ -60,7 +64,9 @@ def extract_verified_tasks(run_dir: Path) -> None:
     verified_dir = run_dir / "verified_tasks"
 
     if not validation_dir.exists():
-        print(f"Error: Validation directory not found: {validation_dir}", file=sys.stderr)
+        print(
+            f"Error: Validation directory not found: {validation_dir}", file=sys.stderr
+        )
         return
 
     if not tasks_flat_dir.exists():
@@ -104,21 +110,24 @@ def extract_verified_tasks(run_dir: Path) -> None:
         manifest_path = source_task / "task_manifest.json"
         metadata = {}
         if manifest_path.exists():
-            with open(manifest_path, 'r') as f:
+            with open(manifest_path, "r") as f:
                 metadata = json.load(f)
 
-        verified_tasks.append({
-            "task_name": task_name,
-            "trial_name": trial_name,
-            "reward": trial_result["reward"],
-            "original_nl": metadata.get("original_nl", ""),
-            "original_bash": metadata.get("original_bash", ""),
-            "mutated_nl": metadata.get("mutated_nl", ""),
-            "mutated_bash": metadata.get("mutated_bash", ""),
-        })
+        verified_tasks.append(
+            {
+                "task_name": task_name,
+                "trial_name": trial_name,
+                "reward": trial_result["reward"],
+                "original_nl": metadata.get("original_nl", ""),
+                "original_bash": metadata.get("original_bash", ""),
+                "mutated_nl": metadata.get("mutated_nl", ""),
+                "mutated_bash": metadata.get("mutated_bash", ""),
+            }
+        )
 
     # Create manifest
     from datetime import datetime
+
     manifest = {
         "run_name": run_dir.name,
         "extraction_date": datetime.now().isoformat(),
@@ -129,7 +138,7 @@ def extract_verified_tasks(run_dir: Path) -> None:
     }
 
     manifest_path = verified_dir / "manifest.json"
-    with open(manifest_path, 'w') as f:
+    with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
     # Print summary
@@ -181,5 +190,5 @@ def main():
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

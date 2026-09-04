@@ -20,7 +20,6 @@ Usage:
 from __future__ import annotations
 
 import os
-import shlex
 import signal
 import subprocess
 import time
@@ -44,21 +43,33 @@ class PinggyConfig:
     local_host: str = "localhost"  # Local host to tunnel (can be IP from vLLM endpoint)
     health_check_timeout: int = 60  # Seconds to wait for tunnel to be ready
     health_check_interval: int = 2  # Seconds between health checks
-    pinggy_host: str = "pro.pinggy.io"  # Pinggy server (pro.pinggy.io or free.pinggy.io)
+    pinggy_host: str = (
+        "pro.pinggy.io"  # Pinggy server (pro.pinggy.io or free.pinggy.io)
+    )
     # On no-internet clusters (JSC Jupiter/Jureca/Juwels, Leonardo) the compute
     # nodes cannot reach pro.pinggy.io directly, so the outbound ssh must be
     # wrapped with proxychains. Set this to e.g.
     #   "/path/to/proxychains4 -f /path/to/proxychains.conf"
     # and it will be prepended to the ssh invocation.
     proxychains_wrapper: Optional[str] = None
+    # Full URL to GET to confirm the tunnel is actually forwarding (e.g.
+    # "https://xxx.a.pinggy.link/v1/models"). If set, _wait_for_healthy treats
+    # any HTTP response as proof the reverse tunnel is bound. Leave None on hosts
+    # that can't resolve the public URL (no external DNS, or a poisoned resolver);
+    # there the log-banner scan is used instead.
+    health_check_url: Optional[str] = None
 
     def get_ssh_command(self) -> str:
         """Build the SSH command for the Pinggy tunnel."""
         ssh_prefix = f"{self.proxychains_wrapper} " if self.proxychains_wrapper else ""
-        # Build a robust SSH command with auto-reconnect loop
+        # Build a robust SSH command with auto-reconnect loop. `-n` redirects ssh's
+        # stdin from /dev/null so it never reads the controlling terminal (a
+        # backgrounded ssh that touches the tty gets SIGTTIN-stopped → state T →
+        # silently forwards nothing). Combined with stdin=DEVNULL + setsid in
+        # start(), the tunnel can't be job-control-stopped.
         return (
             f"while true; do "
-            f"{ssh_prefix}ssh -p 443 "
+            f"{ssh_prefix}ssh -p 443 -n "
             f"-R0:{self.local_host}:{self.local_port} "
             f"-o StrictHostKeyChecking=no "
             f"-o ServerAliveInterval=30 "
@@ -111,10 +122,10 @@ class PinggyTunnel:
             print(f"Pinggy tunnel already running at {self.public_endpoint}")
             return self.public_endpoint
 
-        print(f"=== Starting Pinggy Tunnel ===")
+        print("=== Starting Pinggy Tunnel ===")
         print(f"  Persistent URL: {self.config.persistent_url}")
         print(f"  Local target: {self.config.local_host}:{self.config.local_port}")
-        print(f"==============================")
+        print("==============================")
 
         # Open log file if path provided
         if self.log_path:
@@ -134,10 +145,16 @@ class PinggyTunnel:
         try:
             self._process = subprocess.Popen(
                 cmd,
+                # /dev/null stdin so ssh never reads the controlling tty (would
+                # otherwise SIGTTIN-stop the backgrounded process → state T).
+                stdin=subprocess.DEVNULL,
                 stdout=stdout_dest,
                 stderr=stderr_dest,
-                # Don't let the tunnel inherit our signal handlers
-                preexec_fn=os.setpgrp if hasattr(os, "setpgrp") else None,
+                # setsid detaches from the controlling terminal entirely, so the
+                # tunnel can't be sent SIGTTIN/SIGTTOU and can't be Ctrl-Z'd; it
+                # also becomes its own session/process-group leader (pgid == pid),
+                # which stop()/killpg rely on.
+                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
             )
         except Exception as e:
             raise RuntimeError(f"Failed to start Pinggy tunnel: {e}")
@@ -149,9 +166,9 @@ class PinggyTunnel:
         # Wait for tunnel to be healthy
         self._wait_for_healthy()
 
-        print(f"=== Pinggy Tunnel Ready ===")
+        print("=== Pinggy Tunnel Ready ===")
         print(f"  Public endpoint: {self.public_endpoint}")
-        print(f"===========================")
+        print("===========================")
 
         return self.public_endpoint
 
@@ -193,34 +210,129 @@ class PinggyTunnel:
             self._log_file.close()
             self._log_file = None
 
-    def _wait_for_healthy(self) -> None:
-        """Wait for the Pinggy tunnel process to start and stabilize.
-
-        We don't verify by hitting the external URL because HPC compute nodes
-        often lack external DNS resolution. Instead, we verify the tunnel process
-        is running and give it time to establish the SSH connection.
-        """
-        print(f"  Waiting for tunnel process to stabilize...")
-
-        # Give the tunnel a few seconds to establish the SSH connection
-        stabilize_time = 5
-        for i in range(stabilize_time):
-            time.sleep(1)
-            # Check if process died during startup
-            if self._process and self._process.poll() is not None:
-                raise RuntimeError(
-                    f"Pinggy tunnel process exited unexpectedly (code {self._process.returncode}). "
-                    f"Check logs at {self.log_path}"
-                )
-
-        # Final check that process is still alive
-        if self._process and self._process.poll() is not None:
-            raise RuntimeError(
-                f"Pinggy tunnel process exited unexpectedly (code {self._process.returncode}). "
-                f"Check logs at {self.log_path}"
+    def _process_state(self) -> Optional[str]:
+        """OS process-state code of the tunnel (e.g. 'S', 'R', 'T'), or None if gone."""
+        if self._process is None:
+            return None
+        try:
+            out = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(self._process.pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
+        except Exception:
+            return None
+        return out.stdout.strip() or None
 
-        print(f"  Tunnel process running (PID: {self._process.pid}), assuming healthy")
+    def _resume_if_stopped(self) -> bool:
+        """If the tunnel's process group is job-control-stopped (state T), SIGCONT it.
+
+        Backstop for the SIGTTIN/SIGTTOU stop that silently kills forwarding while
+        leaving the process 'alive'. start() now prevents the stop (stdin=DEVNULL +
+        setsid), but resuming here costs nothing and recovers a tunnel stopped by
+        some other means. Returns True if it was stopped.
+        """
+        state = self._process_state()
+        if state and state.startswith("T"):
+            try:
+                os.killpg(os.getpgid(self._process.pid), signal.SIGCONT)
+                print(
+                    "  [pinggy] tunnel was job-control-stopped (state T); sent SIGCONT to resume"
+                )
+            except (ProcessLookupError, PermissionError):
+                pass
+            return True
+        return False
+
+    def _probe_url(self, url: str) -> bool:
+        """True if the public URL returns ANY HTTP response (tunnel is forwarding).
+
+        An HTTPError still proves the reverse tunnel is bound and reaching the
+        local server; only connection-level failures (reset/timeout/DNS) mean the
+        tunnel isn't forwarding.
+        """
+        req = urllib.request.Request(url, headers={"User-Agent": "pinggy-healthcheck"})
+        try:
+            with urllib.request.urlopen(req, timeout=10):
+                return True
+        except urllib.error.HTTPError:
+            return True
+        except Exception:
+            return False
+
+    def _log_shows_bound(self) -> bool:
+        """True once Pinggy has echoed the public URL to the log (reverse tunnel bound)."""
+        if not self.log_path or not self.log_path.exists():
+            return False
+        try:
+            text = self.log_path.read_text(errors="ignore")
+        except Exception:
+            return False
+        return self.config.persistent_url in text or "pinggy.link" in text
+
+    def _wait_for_healthy(self) -> None:
+        """Wait until the tunnel is confirmed forwarding (or the process dies).
+
+        Verification, in order of preference:
+          1. ``health_check_url`` set → GET it; any HTTP response proves the tunnel
+             forwards. (Don't set it on hosts that can't resolve the public URL —
+             no external DNS, or a resolver that poisons ``*.a.pinggy.link``.)
+          2. else, scan the log for Pinggy's URL banner → the reverse tunnel bound.
+          3. else (no URL, no log: e.g. DEVNULL output on an air-gapped node) →
+             fall back to a brief process-alive stabilize, as before.
+
+        Throughout, a job-control-stopped process is auto-resumed (SIGCONT).
+        """
+        can_verify = bool(self.config.health_check_url) or bool(self.log_path)
+        if not can_verify:
+            print(
+                "  Waiting for tunnel process to stabilize (no URL/log to verify against)..."
+            )
+            for _ in range(5):
+                time.sleep(1)
+                if self._process and self._process.poll() is not None:
+                    raise RuntimeError(
+                        f"Pinggy tunnel exited (code {self._process.returncode}); "
+                        f"check logs at {self.log_path}"
+                    )
+                self._resume_if_stopped()
+            print(
+                f"  Tunnel process running (PID: {self._process.pid}), assuming healthy"
+            )
+            return
+
+        print("  Waiting for tunnel to confirm forwarding...")
+        deadline = time.time() + self.config.health_check_timeout
+        while time.time() < deadline:
+            if self._process and self._process.poll() is not None:
+                tail = ""
+                if self.log_path and self.log_path.exists():
+                    tail = self.log_path.read_text(errors="ignore")[-800:]
+                raise RuntimeError(
+                    f"Pinggy tunnel exited (code {self._process.returncode}). Log tail:\n{tail}"
+                )
+            self._resume_if_stopped()
+            if self.config.health_check_url:
+                if self._probe_url(self.config.health_check_url):
+                    print(
+                        f"  [pinggy] tunnel confirmed forwarding via {self.config.health_check_url}"
+                    )
+                    return
+            elif self._log_shows_bound():
+                print(f"  [pinggy] tunnel bound (URL banner in {self.log_path})")
+                return
+            time.sleep(self.config.health_check_interval)
+
+        if self.config.health_check_url:
+            raise RuntimeError(
+                f"Pinggy tunnel process is alive but {self.config.health_check_url} never "
+                f"responded within {self.config.health_check_timeout}s — tunnel not forwarding."
+            )
+        print(
+            f"  [pinggy] WARNING: could not confirm tunnel binding from log within "
+            f"{self.config.health_check_timeout}s; process alive, proceeding."
+        )
 
     def __enter__(self) -> "PinggyTunnel":
         """Context manager entry - start the tunnel."""
@@ -388,7 +500,7 @@ if __name__ == "__main__":
 
     print(f"Testing Pinggy tunnel to {config.persistent_url}")
     print(f"SSH command: {config.get_ssh_command()}")
-    print(f"Press Ctrl+C to stop")
+    print("Press Ctrl+C to stop")
 
     try:
         with PinggyTunnel(config) as tunnel:
@@ -398,5 +510,3 @@ if __name__ == "__main__":
                 time.sleep(1)
     except KeyboardInterrupt:
         print("\nStopping...")
-
-

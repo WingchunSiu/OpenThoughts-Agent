@@ -10,8 +10,18 @@ import random
 
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
-from data.stackexchange.generate_codereview import download_and_extract_dataset, parse_posts_xml, extract_questions_from_data
-from data.commons import generate_tasks_to_hdf5, extract_hdf5_to_task_paths, upload_tasks_to_hf, create_standard_dockerfile, create_standard_task_toml
+from data.stackexchange.generate_codereview import (
+    download_and_extract_dataset,
+    parse_posts_xml,
+    extract_questions_from_data,
+)
+from data.commons import (
+    generate_tasks_to_hdf5,
+    extract_hdf5_to_task_paths,
+    upload_tasks_to_hf,
+    create_standard_dockerfile,
+    create_standard_task_toml,
+)
 
 TARGET_TOTAL = 10_000
 UPSAMPLE_RATIO = 40
@@ -59,7 +69,9 @@ def main() -> str:
     random.seed(42)
 
     # Load tezos data
-    posts_xml_path = download_and_extract_dataset("https://archive.org/download/stackexchange/tezos.stackexchange.com.7z")
+    posts_xml_path = download_and_extract_dataset(
+        "https://archive.org/download/stackexchange/tezos.stackexchange.com.7z"
+    )
     questions_data = parse_posts_xml(posts_xml_path)
     questions = extract_questions_from_data(questions_data)
 

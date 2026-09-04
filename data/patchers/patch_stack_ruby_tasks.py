@@ -41,6 +41,7 @@ Usage:
   python data/patchers/patch_stack_ruby_tasks.py --root <dir> [--dry-run] [--limit N]
   python data/patchers/patch_stack_ruby_tasks.py --root <dir> --skip-test-sh
 """
+
 from __future__ import annotations
 
 import argparse
@@ -113,72 +114,285 @@ _SSTRING_RE = re.compile(r"'(?:\\.|[^'\\])*'")
 # need a `gem install`. The Dockerfile (`gem install rspec minitest`) plus
 # stdlib covers these; everything else is a 3rd-party gem the agent
 # probably needs.
-_RUBY_STDLIB_GEMS = frozenset({
-    # core ruby stdlib (no gem install needed)
-    "json", "yaml", "csv", "set", "ostruct", "stringio", "tempfile",
-    "fileutils", "pathname", "uri", "net/http", "net/https", "net/smtp",
-    "net/ftp", "net/imap", "open3", "open-uri", "openssl", "digest",
-    "digest/md5", "digest/sha1", "digest/sha2", "base64", "securerandom",
-    "socket", "tmpdir", "shellwords", "etc", "rbconfig", "delegate",
-    "forwardable", "singleton", "observer", "thread", "monitor", "timeout",
-    "logger", "benchmark", "cgi", "erb", "fiddle", "find", "io/console",
-    "ipaddr", "irb", "matrix", "optparse", "prime", "psych", "racc",
-    "readline", "rexml", "scanf", "sdbm", "shell", "syslog", "tracer",
-    "tsort", "weakref", "win32ole", "zlib", "date", "time", "bigdecimal",
-    "complex", "rational", "rubygems", "rss", "drb", "rinda",
-    "io/wait", "io/event", "io/event/selector",
-    # we explicitly install these in the dockerfile
-    "rspec", "minitest", "minitest/autorun", "minitest/spec", "minitest/pride",
-    "minitest/unit",
-    # rspec sub-modules also present once rspec is installed
-    "rspec/core", "rspec/expectations", "rspec/mocks", "rspec/version",
-    "rspec/autorun",
-})
+_RUBY_STDLIB_GEMS = frozenset(
+    {
+        # core ruby stdlib (no gem install needed)
+        "json",
+        "yaml",
+        "csv",
+        "set",
+        "ostruct",
+        "stringio",
+        "tempfile",
+        "fileutils",
+        "pathname",
+        "uri",
+        "net/http",
+        "net/https",
+        "net/smtp",
+        "net/ftp",
+        "net/imap",
+        "open3",
+        "open-uri",
+        "openssl",
+        "digest",
+        "digest/md5",
+        "digest/sha1",
+        "digest/sha2",
+        "base64",
+        "securerandom",
+        "socket",
+        "tmpdir",
+        "shellwords",
+        "etc",
+        "rbconfig",
+        "delegate",
+        "forwardable",
+        "singleton",
+        "observer",
+        "thread",
+        "monitor",
+        "timeout",
+        "logger",
+        "benchmark",
+        "cgi",
+        "erb",
+        "fiddle",
+        "find",
+        "io/console",
+        "ipaddr",
+        "irb",
+        "matrix",
+        "optparse",
+        "prime",
+        "psych",
+        "racc",
+        "readline",
+        "rexml",
+        "scanf",
+        "sdbm",
+        "shell",
+        "syslog",
+        "tracer",
+        "tsort",
+        "weakref",
+        "win32ole",
+        "zlib",
+        "date",
+        "time",
+        "bigdecimal",
+        "complex",
+        "rational",
+        "rubygems",
+        "rss",
+        "drb",
+        "rinda",
+        "io/wait",
+        "io/event",
+        "io/event/selector",
+        # we explicitly install these in the dockerfile
+        "rspec",
+        "minitest",
+        "minitest/autorun",
+        "minitest/spec",
+        "minitest/pride",
+        "minitest/unit",
+        # rspec sub-modules also present once rspec is installed
+        "rspec/core",
+        "rspec/expectations",
+        "rspec/mocks",
+        "rspec/version",
+        "rspec/autorun",
+    }
+)
 
 # Common spec-helper file names — these are project-internal and need to be
 # created by the agent (typically a no-op spec_helper.rb at /app or at the
 # referenced relative path).
-_SPEC_HELPER_HINTS = frozenset({
-    "helper", "spec_helper", "test_helper", "minitest_helper",
-    "rails_helper", "chef_helper", "vcr_helper", "init_test",
-    "spec_fast_helper",
-})
+_SPEC_HELPER_HINTS = frozenset(
+    {
+        "helper",
+        "spec_helper",
+        "test_helper",
+        "minitest_helper",
+        "rails_helper",
+        "chef_helper",
+        "vcr_helper",
+        "init_test",
+        "spec_fast_helper",
+    }
+)
 
 # Method names we DON'T want to surface as "SUT methods" because they're
 # obvious RSpec / Ruby builtins and would be noise.
-_RSPEC_BUILTIN_METHODS = frozenset({
-    "to", "not_to", "to_not", "and", "or", "be", "be_a", "be_an",
-    "be_kind_of", "be_instance_of", "eq", "eql", "equal", "match",
-    "include", "have_attributes", "raise_error", "respond_to",
-    "have", "should", "should_not", "expect", "allow", "receive",
-    "and_return", "and_call_original", "and_raise", "with", "ordered",
-    "describe", "context", "it", "specify", "before", "after", "around",
-    "let", "let!", "subject", "shared_examples", "it_behaves_like",
-    "it_should_behave_like", "include_examples", "shared_context",
-    "double", "instance_double", "class_double", "object_double",
-    "stub", "stub_const", "hide_const",
-    # Ruby builtins
-    "new", "inspect", "to_s", "to_str", "to_a", "to_ary", "to_h",
-    "to_hash", "to_i", "to_int", "to_f", "to_proc", "to_sym",
-    "size", "length", "count", "first", "last", "each", "map", "select",
-    "reject", "reduce", "inject", "find", "any?", "all?", "none?",
-    "empty?", "nil?", "is_a?", "kind_of?", "instance_of?",
-    "respond_to?", "send", "public_send", "method", "methods",
-    "instance_variable_get", "instance_variable_set",
-    "class", "ancestors", "class_eval", "instance_eval", "module_eval",
-    "freeze", "dup", "clone", "tap", "then", "yield_self",
-    "puts", "print", "p", "pp", "warn", "raise", "throw", "catch",
-    "format", "sprintf", "printf", "gets", "readline",
-    "[]", "[]=", "<<", "push", "pop", "shift", "unshift", "concat",
-    "merge", "merge!", "fetch", "delete", "store", "values", "keys",
-    "split", "join", "strip", "chomp", "chop", "downcase", "upcase",
-    "capitalize", "reverse", "sort", "sort_by", "uniq", "compact",
-    "flatten", "zip", "group_by", "partition", "slice", "chunk",
-    # Ruby's open-uri / IO basics
-    "open", "close", "read", "write", "puts", "gets",
-    # ActiveSupport-ish (often referenced)
-    "create", "build", "save", "destroy", "update", "update!",
-})
+_RSPEC_BUILTIN_METHODS = frozenset(
+    {
+        "to",
+        "not_to",
+        "to_not",
+        "and",
+        "or",
+        "be",
+        "be_a",
+        "be_an",
+        "be_kind_of",
+        "be_instance_of",
+        "eq",
+        "eql",
+        "equal",
+        "match",
+        "include",
+        "have_attributes",
+        "raise_error",
+        "respond_to",
+        "have",
+        "should",
+        "should_not",
+        "expect",
+        "allow",
+        "receive",
+        "and_return",
+        "and_call_original",
+        "and_raise",
+        "with",
+        "ordered",
+        "describe",
+        "context",
+        "it",
+        "specify",
+        "before",
+        "after",
+        "around",
+        "let",
+        "let!",
+        "subject",
+        "shared_examples",
+        "it_behaves_like",
+        "it_should_behave_like",
+        "include_examples",
+        "shared_context",
+        "double",
+        "instance_double",
+        "class_double",
+        "object_double",
+        "stub",
+        "stub_const",
+        "hide_const",
+        # Ruby builtins
+        "new",
+        "inspect",
+        "to_s",
+        "to_str",
+        "to_a",
+        "to_ary",
+        "to_h",
+        "to_hash",
+        "to_i",
+        "to_int",
+        "to_f",
+        "to_proc",
+        "to_sym",
+        "size",
+        "length",
+        "count",
+        "first",
+        "last",
+        "each",
+        "map",
+        "select",
+        "reject",
+        "reduce",
+        "inject",
+        "find",
+        "any?",
+        "all?",
+        "none?",
+        "empty?",
+        "nil?",
+        "is_a?",
+        "kind_of?",
+        "instance_of?",
+        "respond_to?",
+        "send",
+        "public_send",
+        "method",
+        "methods",
+        "instance_variable_get",
+        "instance_variable_set",
+        "class",
+        "ancestors",
+        "class_eval",
+        "instance_eval",
+        "module_eval",
+        "freeze",
+        "dup",
+        "clone",
+        "tap",
+        "then",
+        "yield_self",
+        "puts",
+        "print",
+        "p",
+        "pp",
+        "warn",
+        "raise",
+        "throw",
+        "catch",
+        "format",
+        "sprintf",
+        "printf",
+        "gets",
+        "readline",
+        "[]",
+        "[]=",
+        "<<",
+        "push",
+        "pop",
+        "shift",
+        "unshift",
+        "concat",
+        "merge",
+        "merge!",
+        "fetch",
+        "delete",
+        "store",
+        "values",
+        "keys",
+        "split",
+        "join",
+        "strip",
+        "chomp",
+        "chop",
+        "downcase",
+        "upcase",
+        "capitalize",
+        "reverse",
+        "sort",
+        "sort_by",
+        "uniq",
+        "compact",
+        "flatten",
+        "zip",
+        "group_by",
+        "partition",
+        "slice",
+        "chunk",
+        # Ruby's open-uri / IO basics
+        "open",
+        "close",
+        "read",
+        "write",
+        "puts",
+        "gets",
+        # ActiveSupport-ish (often referenced)
+        "create",
+        "build",
+        "save",
+        "destroy",
+        "update",
+        "update!",
+    }
+)
 
 
 def _strip_comments_and_strings(src: str) -> str:
@@ -244,7 +458,11 @@ def parse_test_ruby(src: str) -> dict | None:
     for m in _NEW_CALL_RE.finditer(clean):
         cls = m.group(1)
         args = m.group(2).strip()
-        arity = 0 if not args else len([a for a in _split_top_level(args, ",") if a.strip()])
+        arity = (
+            0
+            if not args
+            else len([a for a in _split_top_level(args, ",") if a.strip()])
+        )
         constructors.setdefault(cls, set()).add(arity)
 
     # Qualified constants (Foo::Bar — Ruby's `::` separator) — strong SUT signal
@@ -259,7 +477,11 @@ def parse_test_ruby(src: str) -> dict | None:
         if name in _RSPEC_BUILTIN_METHODS:
             continue
         args = m.group(2).strip()
-        arity = 0 if not args else len([a for a in _split_top_level(args, ",") if a.strip()])
+        arity = (
+            0
+            if not args
+            else len([a for a in _split_top_level(args, ",") if a.strip()])
+        )
         method_calls.setdefault(name, set()).add(arity)
 
     # Build the final SUT-type set:
@@ -276,25 +498,99 @@ def parse_test_ruby(src: str) -> dict | None:
     sut_types.difference_update(test_defined_consts)
     # Also remove a few obvious Ruby-stdlib namespaces
     _STDLIB_NS = {
-        "Object", "BasicObject", "Class", "Module", "Kernel", "String",
-        "Integer", "Float", "Numeric", "Array", "Hash", "Symbol", "Proc",
-        "Lambda", "Range", "Regexp", "MatchData", "Time", "Date", "DateTime",
-        "Struct", "OpenStruct", "Set", "File", "Dir", "IO", "StringIO",
-        "Tempfile", "Pathname", "URI", "Net", "JSON", "YAML", "CSV",
-        "Logger", "Mutex", "Thread", "Process", "Signal", "Math",
-        "Comparable", "Enumerable", "Enumerator", "Numeric", "Random",
-        "ENV", "ARGV", "STDOUT", "STDERR", "STDIN", "Errno", "Exception",
-        "StandardError", "RuntimeError", "ArgumentError", "TypeError",
-        "NameError", "NoMethodError", "LoadError", "NotImplementedError",
-        "ZeroDivisionError", "RangeError", "IndexError", "KeyError",
-        "FrozenError", "IOError", "EOFError", "SystemCallError",
-        "RSpec", "Minitest", "MiniTest", "Test", "Test::Unit",
-        "RSpec::Mocks", "RSpec::Matchers", "RSpec::Expectations",
-        "RSpec::Core", "MiniTest::Unit", "MiniTest::Spec",
-        "Mocha", "FactoryBot", "FactoryGirl", "VCR", "WebMock",
+        "Object",
+        "BasicObject",
+        "Class",
+        "Module",
+        "Kernel",
+        "String",
+        "Integer",
+        "Float",
+        "Numeric",
+        "Array",
+        "Hash",
+        "Symbol",
+        "Proc",
+        "Lambda",
+        "Range",
+        "Regexp",
+        "MatchData",
+        "Time",
+        "Date",
+        "DateTime",
+        "Struct",
+        "OpenStruct",
+        "Set",
+        "File",
+        "Dir",
+        "IO",
+        "StringIO",
+        "Tempfile",
+        "Pathname",
+        "URI",
+        "Net",
+        "JSON",
+        "YAML",
+        "CSV",
+        "Logger",
+        "Mutex",
+        "Thread",
+        "Process",
+        "Signal",
+        "Math",
+        "Comparable",
+        "Enumerable",
+        "Enumerator",
+        "Numeric",
+        "Random",
+        "ENV",
+        "ARGV",
+        "STDOUT",
+        "STDERR",
+        "STDIN",
+        "Errno",
+        "Exception",
+        "StandardError",
+        "RuntimeError",
+        "ArgumentError",
+        "TypeError",
+        "NameError",
+        "NoMethodError",
+        "LoadError",
+        "NotImplementedError",
+        "ZeroDivisionError",
+        "RangeError",
+        "IndexError",
+        "KeyError",
+        "FrozenError",
+        "IOError",
+        "EOFError",
+        "SystemCallError",
+        "RSpec",
+        "Minitest",
+        "MiniTest",
+        "Test",
+        "Test::Unit",
+        "RSpec::Mocks",
+        "RSpec::Matchers",
+        "RSpec::Expectations",
+        "RSpec::Core",
+        "MiniTest::Unit",
+        "MiniTest::Spec",
+        "Mocha",
+        "FactoryBot",
+        "FactoryGirl",
+        "VCR",
+        "WebMock",
         # ActiveSupport / ActiveRecord / Rails
-        "ActiveSupport", "ActiveRecord", "ActionController", "ActionView",
-        "ActionMailer", "ActiveModel", "ActiveJob", "Rails",
+        "ActiveSupport",
+        "ActiveRecord",
+        "ActionController",
+        "ActionView",
+        "ActionMailer",
+        "ActiveModel",
+        "ActiveJob",
+        "Rails",
     }
     sut_types -= _STDLIB_NS
     # Also drop anything that is itself a namespace prefix of a stdlib type
@@ -319,69 +615,218 @@ def parse_test_ruby(src: str) -> dict | None:
     # these, we treat it as a 3rd-party gem (the gem will provide foo/bar).
     # Otherwise, multi-segment requires are treated as local project files
     # the agent must create under /app/.
-    _KNOWN_GEM_HEADS = frozenset({
-        "rspec", "minitest", "test", "mocha", "chefspec", "serverspec",
-        "rspec-mocks", "rspec-core", "rspec-expectations",
-        "google", "gapic", "grpc", "protobuf", "googleapis",
-        "active_support", "active_record", "active_model", "activerecord",
-        "actionpack", "actioncontroller", "actionview", "rails", "rspec-rails",
-        "factory_bot", "factory_girl", "faker", "vcr", "webmock", "capybara",
-        "selenium", "watir", "cucumber", "aruba",
-        "sinatra", "rack", "tilt", "haml", "erubis", "slim",
-        "json", "yaml", "csv", "nokogiri", "oj", "msgpack",
-        "redis", "dalli", "memcached", "mongo", "mongoid", "pg", "mysql2",
-        "sequel", "sqlite3",
-        "logstash", "fluentd", "fluent",
-        "openssl", "bcrypt", "jwt", "sass", "uglifier", "compass",
-        "rake", "thor", "ruby-progressbar", "tty",
-        "cocaine", "paperclip", "carrierwave", "shrine",
-        "kpeg", "treetop", "racc", "rly",
-        "flipper", "rollout", "pundit", "cancancan", "cancan",
-        "concurrent", "concurrent-ruby", "sidekiq", "resque", "delayed_job",
-        "puma", "unicorn", "thin", "passenger",
-        "msf", "metasploit", "hpcloud", "fog", "aws", "aws-sdk",
-        "chef", "knife", "berkshelf", "test-kitchen", "kitchen",
-        "puppet", "moneta", "padrino",
-        "octokit", "github", "gitlab",
-        "rubocop", "reek", "flog", "flay", "metric_fu",
-        "graphql", "graphiql", "absinthe",
-        "io", "logger", "ruby", "ruby-debug",
-        "dry", "dry-system", "dry-container", "rom",
-        "hanami", "trailblazer", "shrine",
-        "elasticsearch", "kafka", "ruby-kafka",
-        "ratchet", "websocket", "faye", "eventmachine", "celluloid",
-        "rspec-puppet", "berkshelf",
-        "openstruct", "ostruct",
-        "mail", "actionmailer", "premailer",
-        "rmagick", "minimagick", "mini_magick",
-        "geocoder", "ruby-saml", "saml",
-        "i18n", "globalize",
-        "rspec-its",
-        "fast_jsonapi", "active_model_serializers",
-        "cancan", "cancancan", "rolify",
-        "devise", "doorkeeper", "warden",
-        "cbor", "msgpack", "bson",
-        "ddtrace", "datadog", "statsd-ruby", "statsd",
-        "raven", "sentry-raven", "appsignal", "newrelic_rpm", "new_relic",
-        "logstash-event", "logstash-input-beats",
-        "stripe", "braintree", "paypal-sdk",
-        "twilio", "sendgrid",
-        "kubernetes", "kube_client", "kubeclient",
-        "thrift", "avro",
-        "kpeg", "polyglot",
-        "cnab_rb", "cfn-nag", "banhammer",
-        "hydramata", "htty", "grably",
-        "new_relic", "user_agent",
-        "workato", "workato-connector-sdk",
-        "ansi", "tty-prompt", "tty-spinner",
-        "config", "dry-configurable",
-        "kpeg",
-        "cardano_wallet", "cardanowallet",
-        "shrine", "rmagick", "vips",
-        "logstash", "fluentd",
-        "kpeg",
-        "gooddata",
-    })
+    _KNOWN_GEM_HEADS = frozenset(
+        {
+            "rspec",
+            "minitest",
+            "test",
+            "mocha",
+            "chefspec",
+            "serverspec",
+            "rspec-mocks",
+            "rspec-core",
+            "rspec-expectations",
+            "google",
+            "gapic",
+            "grpc",
+            "protobuf",
+            "googleapis",
+            "active_support",
+            "active_record",
+            "active_model",
+            "activerecord",
+            "actionpack",
+            "actioncontroller",
+            "actionview",
+            "rails",
+            "rspec-rails",
+            "factory_bot",
+            "factory_girl",
+            "faker",
+            "vcr",
+            "webmock",
+            "capybara",
+            "selenium",
+            "watir",
+            "cucumber",
+            "aruba",
+            "sinatra",
+            "rack",
+            "tilt",
+            "haml",
+            "erubis",
+            "slim",
+            "json",
+            "yaml",
+            "csv",
+            "nokogiri",
+            "oj",
+            "msgpack",
+            "redis",
+            "dalli",
+            "memcached",
+            "mongo",
+            "mongoid",
+            "pg",
+            "mysql2",
+            "sequel",
+            "sqlite3",
+            "logstash",
+            "fluentd",
+            "fluent",
+            "openssl",
+            "bcrypt",
+            "jwt",
+            "sass",
+            "uglifier",
+            "compass",
+            "rake",
+            "thor",
+            "ruby-progressbar",
+            "tty",
+            "cocaine",
+            "paperclip",
+            "carrierwave",
+            "shrine",
+            "kpeg",
+            "treetop",
+            "racc",
+            "rly",
+            "flipper",
+            "rollout",
+            "pundit",
+            "cancancan",
+            "cancan",
+            "concurrent",
+            "concurrent-ruby",
+            "sidekiq",
+            "resque",
+            "delayed_job",
+            "puma",
+            "unicorn",
+            "thin",
+            "passenger",
+            "msf",
+            "metasploit",
+            "hpcloud",
+            "fog",
+            "aws",
+            "aws-sdk",
+            "chef",
+            "knife",
+            "berkshelf",
+            "test-kitchen",
+            "kitchen",
+            "puppet",
+            "moneta",
+            "padrino",
+            "octokit",
+            "github",
+            "gitlab",
+            "rubocop",
+            "reek",
+            "flog",
+            "flay",
+            "metric_fu",
+            "graphql",
+            "graphiql",
+            "absinthe",
+            "io",
+            "logger",
+            "ruby",
+            "ruby-debug",
+            "dry",
+            "dry-system",
+            "dry-container",
+            "rom",
+            "hanami",
+            "trailblazer",
+            "shrine",
+            "elasticsearch",
+            "kafka",
+            "ruby-kafka",
+            "ratchet",
+            "websocket",
+            "faye",
+            "eventmachine",
+            "celluloid",
+            "rspec-puppet",
+            "berkshelf",
+            "openstruct",
+            "ostruct",
+            "mail",
+            "actionmailer",
+            "premailer",
+            "rmagick",
+            "minimagick",
+            "mini_magick",
+            "geocoder",
+            "ruby-saml",
+            "saml",
+            "i18n",
+            "globalize",
+            "rspec-its",
+            "fast_jsonapi",
+            "active_model_serializers",
+            "cancan",
+            "cancancan",
+            "rolify",
+            "devise",
+            "doorkeeper",
+            "warden",
+            "cbor",
+            "msgpack",
+            "bson",
+            "ddtrace",
+            "datadog",
+            "statsd-ruby",
+            "statsd",
+            "raven",
+            "sentry-raven",
+            "appsignal",
+            "newrelic_rpm",
+            "new_relic",
+            "logstash-event",
+            "logstash-input-beats",
+            "stripe",
+            "braintree",
+            "paypal-sdk",
+            "twilio",
+            "sendgrid",
+            "kubernetes",
+            "kube_client",
+            "kubeclient",
+            "thrift",
+            "avro",
+            "kpeg",
+            "polyglot",
+            "cnab_rb",
+            "cfn-nag",
+            "banhammer",
+            "hydramata",
+            "htty",
+            "grably",
+            "new_relic",
+            "user_agent",
+            "workato",
+            "workato-connector-sdk",
+            "ansi",
+            "tty-prompt",
+            "tty-spinner",
+            "config",
+            "dry-configurable",
+            "kpeg",
+            "cardano_wallet",
+            "cardanowallet",
+            "shrine",
+            "rmagick",
+            "vips",
+            "logstash",
+            "fluentd",
+            "kpeg",
+            "gooddata",
+        }
+    )
     for r in dict.fromkeys(requires):  # preserve order, dedupe
         # Strip trailing '.rb' if present (some tests use require 'foo.rb')
         norm = r[:-3] if r.endswith(".rb") else r
@@ -432,6 +877,7 @@ def parse_test_ruby(src: str) -> dict | None:
 # Gem-name resolution for `gem install`
 # --------------------------------------------------------------------------- #
 
+
 def _gem_name_for_require(req: str) -> str | None:
     """
     Given a `require` string, return the top-level gem name to install
@@ -446,7 +892,12 @@ def _gem_name_for_require(req: str) -> str | None:
     For simplicity we use the head component; this is good enough for
     `gem install || true` since failures are silently ignored.
     """
-    if not req or req.startswith(".") or "/" in req and req.split("/")[0] in _SPEC_HELPER_HINTS:
+    if (
+        not req
+        or req.startswith(".")
+        or "/" in req
+        and req.split("/")[0] in _SPEC_HELPER_HINTS
+    ):
         return None
     norm = req[:-3] if req.endswith(".rb") else req
     head = norm.split("/")[0]
@@ -482,12 +933,16 @@ def _format_test_contract(parsed: dict) -> str:
 
     # Test framework hint
     fw = "RSpec / minitest"  # generic; specific framework not always detectable
-    lines.append(f"**Test framework hint**: {fw} (test.sh runs `rspec` if `RSpec`/`describe` "
-                 "is detected, otherwise plain `ruby`)")
+    lines.append(
+        f"**Test framework hint**: {fw} (test.sh runs `rspec` if `RSpec`/`describe` "
+        "is detected, otherwise plain `ruby`)"
+    )
 
     if parsed["describe_targets"]:
         lines.append("")
-        lines.append("**Top-level types under test (from `describe`/`RSpec.describe`)**:")
+        lines.append(
+            "**Top-level types under test (from `describe`/`RSpec.describe`)**:"
+        )
         lines.append("")
         for d in parsed["describe_targets"][:15]:
             lines.append(f"- `{d}`")
@@ -534,15 +989,16 @@ def _format_test_contract(parsed: dict) -> str:
             ctor = parsed["constructors"].get(s)
             if ctor is not None:
                 ar_str = ", ".join(f"{a} arg{'s' if a != 1 else ''}" for a in ctor)
-                lines.append(f"- `{s}` — constructed via `{s}.new(...)` with arities: {ar_str}")
+                lines.append(
+                    f"- `{s}` — constructed via `{s}.new(...)` with arities: {ar_str}"
+                )
             else:
                 lines.append(f"- `{s}`")
         if more > 0:
             lines.append(f"- ... and {more} more")
 
     methods = sorted(
-        (n, a) for n, a in parsed["method_calls"].items()
-        if not n.startswith("_")
+        (n, a) for n, a in parsed["method_calls"].items() if not n.startswith("_")
     )
     if methods:
         lines.append("")
@@ -563,18 +1019,26 @@ def _format_test_contract(parsed: dict) -> str:
     lines.append("")
     lines.append("## Build & test environment")
     lines.append("")
-    lines.append("- Base image: `ruby:3.2-slim` with `build-essential`, `ruby-dev`, "
-                 "`libffi-dev` for native extensions.")
-    lines.append("- Pre-installed gems: `rspec`, `minitest`. Other 3rd-party gems "
-                 "(see list above) are best-effort `gem install`-ed by `tests/test.sh` "
-                 "before running the test.")
-    lines.append("- The grader (`tests/test.sh`) runs `bundle install` if `/app/Gemfile` "
-                 "exists, then auto-requires every `*.rb` file under `/app/` (recursively) "
-                 "via `$LOAD_PATH.unshift('/app')`. So you can place sources at any "
-                 "depth under `/app/` as long as relative-require paths resolve.")
-    lines.append("- For each `require 'foo/bar'` in the test, ensure either the `foo` "
-                 "gem provides it OR you create `/app/foo/bar.rb` with the required "
-                 "constants.")
+    lines.append(
+        "- Base image: `ruby:3.2-slim` with `build-essential`, `ruby-dev`, "
+        "`libffi-dev` for native extensions."
+    )
+    lines.append(
+        "- Pre-installed gems: `rspec`, `minitest`. Other 3rd-party gems "
+        "(see list above) are best-effort `gem install`-ed by `tests/test.sh` "
+        "before running the test."
+    )
+    lines.append(
+        "- The grader (`tests/test.sh`) runs `bundle install` if `/app/Gemfile` "
+        "exists, then auto-requires every `*.rb` file under `/app/` (recursively) "
+        "via `$LOAD_PATH.unshift('/app')`. So you can place sources at any "
+        "depth under `/app/` as long as relative-require paths resolve."
+    )
+    lines.append(
+        "- For each `require 'foo/bar'` in the test, ensure either the `foo` "
+        "gem provides it OR you create `/app/foo/bar.rb` with the required "
+        "constants."
+    )
     lines.append("")
 
     return "\n".join(lines)
@@ -584,7 +1048,9 @@ def rewrite_instruction(original: str, parsed: dict) -> str:
     """Produce the new instruction.md content."""
     contract = _format_test_contract(parsed)
 
-    title_hint = parsed["describe_targets"][0] if parsed["describe_targets"] else "Ruby task"
+    title_hint = (
+        parsed["describe_targets"][0] if parsed["describe_targets"] else "Ruby task"
+    )
     header = (
         f"# {title_hint} — Ruby task\n\n"
         f"{_V2_MARKER}\n\n"
@@ -605,7 +1071,10 @@ def rewrite_instruction(original: str, parsed: dict) -> str:
         keep = _PROMPT_CAP - len(header) - len(contract) - 200
         if keep < 500:
             keep = 500
-        truncated_orig = original.strip()[:keep] + "\n\n[... description truncated to fit prompt budget ...]\n"
+        truncated_orig = (
+            original.strip()[:keep]
+            + "\n\n[... description truncated to fit prompt budget ...]\n"
+        )
         body = (
             header
             + contract
@@ -620,6 +1089,7 @@ def rewrite_instruction(original: str, parsed: dict) -> str:
 # test.sh patcher (gem-install required gems before running the tests)
 # --------------------------------------------------------------------------- #
 
+
 def patch_test_sh(test_sh: str, gem_names: list[str]) -> str:
     """Insert `gem install <name> --no-document || true` lines for each gem before
     the `# Install dependencies if Gemfile exists` step. Idempotent via marker."""
@@ -631,7 +1101,9 @@ def patch_test_sh(test_sh: str, gem_names: list[str]) -> str:
     install_block_lines = [_V2_TESTSH_MARKER]
     for g in dict.fromkeys(gem_names):
         # quote-safe: gem names are restricted to [a-z0-9_-] by _gem_name_for_require
-        install_block_lines.append(f"gem install {g} --no-document >/dev/null 2>&1 || true")
+        install_block_lines.append(
+            f"gem install {g} --no-document >/dev/null 2>&1 || true"
+        )
     install_block = "\n".join(install_block_lines) + "\n"
 
     # Insert just before the `# Install dependencies if Gemfile exists` line
@@ -655,15 +1127,22 @@ def patch_test_sh(test_sh: str, gem_names: list[str]) -> str:
 # Main
 # --------------------------------------------------------------------------- #
 
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--limit", type=int, default=0)
-    p.add_argument("--skip-test-sh", action="store_true",
-                   help="Don't modify tests/test.sh; only rewrite instruction.md")
-    p.add_argument("--drop-unparseable", action="store_true",
-                   help="Delete task dir if test_solution.rb can't be parsed (default: leave untouched)")
+    p.add_argument(
+        "--skip-test-sh",
+        action="store_true",
+        help="Don't modify tests/test.sh; only rewrite instruction.md",
+    )
+    p.add_argument(
+        "--drop-unparseable",
+        action="store_true",
+        help="Delete task dir if test_solution.rb can't be parsed (default: leave untouched)",
+    )
     args = p.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -671,7 +1150,9 @@ def main() -> int:
         print(f"Not a directory: {root}", file=sys.stderr)
         return 2
 
-    task_dirs = sorted(d for d in root.iterdir() if d.is_dir() and (d / "instruction.md").exists())
+    task_dirs = sorted(
+        d for d in root.iterdir() if d.is_dir() and (d / "instruction.md").exists()
+    )
     if not task_dirs:
         print(f"No task dirs (with instruction.md) under {root}", file=sys.stderr)
         return 2

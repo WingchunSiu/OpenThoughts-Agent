@@ -1,34 +1,8 @@
-# NOTE 2026-05-22: DECOMMISSIONED for now. GLM-5.1's architecture is not
-# in tpu-inference's JAX-native list; would go through PyTorch-on-XLA
-# fallback at 754B AWQ scale — projected 3-8× slower than JAX-native MoE
-# (qwen3_moe.py-class). User pivoted to Qwen3.5-397B-A17B for the big-MoE
-# smoke. Leaving this YAML in place as a reference for when GLM-5.1 lands
-# in tpu-inference's JAX-native models/ directory.
-#
-# GLM-5.1-AWQ on v6e-32 TPU — RESEARCH BET. tpu-inference 0.20.0 registers
-# VllmAWQConfig but AWQ kernels for GLM family on TPU are unproven.
-# This is also our first cross-host slice beyond 2-host (v6e-32 = 8 hosts);
-# JAX cross-host coordination at this scale has not been validated.
-# Possible failure modes: weight-loader rejection, OOM during XLA compile,
-# cross-host JAX init timeout, or slow per-token throughput.
-#
-# Translated from hpc/datagen_yaml/glm_51_awq_jupiter_2node_32k.yaml.
-# Dropped on TPU port: --enforce-eager, --kv-cache-dtype fp8,
-# use_deep_gemm / use_flashinfer_sampler / use_flashinfer_moe_fp16
-# (all CUDA/Triton-only env flags; no-ops or counterproductive on TPU).
-#
-# Hardware: v6e-32 = 32 chips on 8 hosts (4 chips/host), ~500 GB total
-# HBM. AWQ 4-bit weights for ~754B params ≈ 392 GB → TP=32 →
-# ~12.3 GB/chip, leaves ~3.6 GB/chip at gpu_memory_utilization=0.85
-# for KV + activations + XLA scratch. Tight; raise max_num_seqs only if
-# the first run shows comfortable headroom.
 engine:
   type: vllm_local
-  # s3:// (not gs://) because the streamer speaks AWS-style. See the
-  # HMAC-key prerequisite in gemma4_31b_runai_v6e8_32k.yaml's header.
   model: s3://marin-eu-west4/ot-agent/models/QuantTrio/GLM-5.1-AWQ/
   max_output_tokens: 4096
-  healthcheck_interval: 1800   # 754B AWQ → slow weight stream + XLA compile
+  healthcheck_interval: 1800
   vllm_local: {}
 backend:
   type: ray
@@ -45,15 +19,12 @@ vllm_server:
   gpu_memory_utilization: 0.85
   enable_expert_parallel: true
   enable_auto_tool_choice: true
-  # Parsers cribbed from the Jupiter GLM-5.1 reference config.
   tool_call_parser: glm47
   reasoning_parser: glm45
   trust_remote_code: true
   extra_args:
   - --dtype
   - bfloat16
-  # Stream from gs:// via S3-compat endpoint; required for 392 GB AWQ
-  # weights on 100 GB-disk workers.
   - --load-format
   - runai_streamer
   - --block-size

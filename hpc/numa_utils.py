@@ -48,6 +48,7 @@ def _nvidia_smi_env() -> Dict[str, str]:
 # Method 1: nvidia-smi topo -m (fastest, but unreliable under proxychains)
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=1)
 def _parse_nvidia_smi_topo() -> Optional[Dict[int, Tuple[List[int], int]]]:
     """Parse nvidia-smi topo -m to get GPU -> (cpu_list, numa_node) mapping.
@@ -59,7 +60,9 @@ def _parse_nvidia_smi_topo() -> Optional[Dict[int, Tuple[List[int], int]]]:
     try:
         result = subprocess.run(
             ["nvidia-smi", "topo", "-m"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
             env=_nvidia_smi_env(),
         )
         if result.returncode != 0:
@@ -115,6 +118,7 @@ def _parse_cpu_range(cpu_str: str) -> List[int]:
 # Method 2: Pure sysfs + numactl (no nvidia-smi needed)
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=1)
 def _enumerate_gpus_from_sysfs() -> Optional[Dict[int, int]]:
     """Enumerate NVIDIA GPUs and their NUMA nodes directly from sysfs.
@@ -166,7 +170,9 @@ def _parse_numactl_hardware() -> Optional[Dict[int, List[int]]]:
     try:
         result = subprocess.run(
             ["numactl", "--hardware"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return None
@@ -187,7 +193,9 @@ def _parse_numactl_hardware() -> Optional[Dict[int, List[int]]]:
 
     if node_cpus:
         node_summary = {k: f"{v[0]}-{v[-1]}" for k, v in sorted(node_cpus.items())}
-        logger.debug("NUMA: numactl found %d nodes with CPUs: %s", len(node_cpus), node_summary)
+        logger.debug(
+            "NUMA: numactl found %d nodes with CPUs: %s", len(node_cpus), node_summary
+        )
     return node_cpus if node_cpus else None
 
 
@@ -223,12 +231,16 @@ def _find_closest_cpu_numa_node(
     if best_node is not None:
         logger.debug(
             "NUMA: GPU NUMA node %d -> closest CPU NUMA node %d (distance=%d)",
-            gpu_numa_node, best_node, best_dist,
+            gpu_numa_node,
+            best_node,
+            best_dist,
         )
     return best_node
 
 
-def _get_affinity_via_sysfs_numactl(gpu_physical_id: int) -> Optional[Tuple[List[int], int]]:
+def _get_affinity_via_sysfs_numactl(
+    gpu_physical_id: int,
+) -> Optional[Tuple[List[int], int]]:
     """Get GPU CPU affinity using sysfs GPU enumeration + numactl, no nvidia-smi.
 
     Steps:
@@ -262,6 +274,7 @@ def _get_affinity_via_sysfs_numactl(gpu_physical_id: int) -> Optional[Tuple[List
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def get_gpu_cpu_affinity(gpu_physical_id: int) -> Optional[Tuple[List[int], int]]:
     """Get the optimal CPU list and NUMA node for a GPU.
@@ -324,14 +337,19 @@ def set_numa_affinity_for_gpu(gpu_id: int) -> None:
             "(%d CPUs). This is likely a SLURM cgroup restriction. "
             "Consider adding '--cpu-bind=none' to srun or setting "
             "'TaskPluginParam=none' in slurm.conf.",
-            cpu_list[0], cpu_list[-1], numa_node,
-            min(allowed_cpus), max(allowed_cpus), len(allowed_cpus),
+            cpu_list[0],
+            cpu_list[-1],
+            numa_node,
+            min(allowed_cpus),
+            max(allowed_cpus),
+            len(allowed_cpus),
         )
         if overlap:
             target_cpus = overlap
             logger.info(
                 "NUMA affinity: falling back to %d overlapping CPUs for GPU %d",
-                len(overlap), gpu_id,
+                len(overlap),
+                gpu_id,
             )
         else:
             logger.warning(
@@ -345,7 +363,10 @@ def set_numa_affinity_for_gpu(gpu_id: int) -> None:
         os.sched_setaffinity(0, target_cpus)
         logger.info(
             "NUMA affinity: bound process to CPUs %d-%d (NUMA node %d) for GPU %d",
-            min(target_cpus), max(target_cpus), numa_node, gpu_id,
+            min(target_cpus),
+            max(target_cpus),
+            numa_node,
+            gpu_id,
         )
     except (OSError, AttributeError) as e:
         logger.warning("NUMA affinity: os.sched_setaffinity failed: %s", e)

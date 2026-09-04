@@ -163,5 +163,5 @@ More context
         self.assertEqual(result["category"], "other_error")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

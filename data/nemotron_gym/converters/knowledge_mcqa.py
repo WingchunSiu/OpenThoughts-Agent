@@ -5,7 +5,6 @@ from __future__ import annotations
 from ..adapter import (
     HarborTask,
     STANDARD_TEST_SH,
-    SanitizationError,
     render_dockerfile,
     render_metadata,
     sanitize_text,
@@ -42,10 +41,14 @@ def _convert(row: dict, source_dataset: str, *, row_idx: int) -> HarborTask | No
     if isinstance(tmpl, dict):
         candidate = tmpl.get("output_regex")
         if isinstance(candidate, str) and 0 < len(candidate) <= _MAX_REGEX_LEN:
-            pattern = sanitize_text(candidate, field_name="output_regex", max_len=_MAX_REGEX_LEN)
+            pattern = sanitize_text(
+                candidate, field_name="output_regex", max_len=_MAX_REGEX_LEN
+            )
     dockerfile = render_dockerfile(base=_BASE_IMAGE)
     uuid = row.get("uuid") if isinstance(row.get("uuid"), str) else None
-    task_id = task_id_for(source_dataset.split("/")[-1], (uuid or prompt[:128]) + "|" + expected)
+    task_id = task_id_for(
+        source_dataset.split("/")[-1], (uuid or prompt[:128]) + "|" + expected
+    )
     return HarborTask(
         task_id=task_id,
         instruction_md=_INSTRUCTION_HEADER + prompt,
@@ -71,4 +74,6 @@ def convert_knowledge_mcqa(row: dict, row_idx: int) -> HarborTask | None:
 
 @register("nvidia/Nemotron-RL-knowledge-web_search-mcqa")
 def convert_web_search_mcqa(row: dict, row_idx: int) -> HarborTask | None:
-    return _convert(row, "nvidia/Nemotron-RL-knowledge-web_search-mcqa", row_idx=row_idx)
+    return _convert(
+        row, "nvidia/Nemotron-RL-knowledge-web_search-mcqa", row_idx=row_idx
+    )

@@ -75,6 +75,24 @@ ENV UV_RETRIES=5
 RUN . /opt/openthoughts/.venv/bin/activate && \
     uv pip install -e ".[datagen-tpu,cloud]"
 
+# Pin harbor to an IMMUTABLE COMMIT and force-reinstall from source (mirrors the
+# gpu-rl image). The base extra above installs harbor from the FLOATING
+# marin-community/harbor@main branch, whose install layer kaniko
+# caches by the (unchanged) COPYed pyproject.toml + RUN string — so a harbor bump
+# on the branch does NOT bust that cache and a STALE wheel gets baked. Bumping
+# HARBOR_COMMIT below changes THIS layer's cache key (guaranteed rebuild), and
+# --force-reinstall makes uv rebuild harbor from the exact pinned commit
+# regardless of any cached wheel. This is why datagen resume/export-push fixes
+# reach the worker deterministically. Bump HARBOR_COMMIT for every harbor change
+# that must ship in the image. Keep this aligned with the Harbor pin in uv.lock;
+# the worker's frozen sync is the runtime authority.
+ENV HARBOR_COMMIT=41f4320c0471ea3362a6d3160df8b6c75f0126f7
+RUN . /opt/openthoughts/.venv/bin/activate && \
+    uv pip install --no-deps --force-reinstall \
+        "harbor[daytona] @ git+https://github.com/marin-community/harbor.git@${HARBOR_COMMIT}" && \
+    python -c "import harbor, importlib.metadata as m; print('baked harbor', m.version('harbor'))" && \
+    echo "baked harbor commit: ${HARBOR_COMMIT}"
+
 RUN echo "ulimit -n 65535" >> /etc/profile.d/openthoughts-ulimit.sh
 
 # Force JAX onto TPU rather than letting it auto-detect (which has been known

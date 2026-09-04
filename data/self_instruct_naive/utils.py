@@ -1,6 +1,6 @@
-import re 
+import re
 import json
-import random 
+import random
 from pathlib import Path
 
 import litellm
@@ -17,11 +17,12 @@ def calculate_request_cost(response) -> float:
         print(f"[cost-warning] Unable to compute request cost: {exc}")
         return 0.0
 
+
 def get_few_shot_example(fs_tasks_dir: Path):
     """Load a random few-shot example from the few-shots directory."""
     task_dir = random.choice([d for d in fs_tasks_dir.iterdir() if d.is_dir()])
     example = {"task-name": task_dir.name}
-    
+
     for file_path in task_dir.rglob("*"):
         if file_path.is_file():
             rel_path = file_path.relative_to(task_dir)
@@ -32,11 +33,13 @@ def get_few_shot_example(fs_tasks_dir: Path):
                 example[str(rel_path)] = "some content..."
     return example
 
+
 def sanitize_task_name(task_name: str) -> str:
     """Sanitize task name to be filesystem-safe."""
     task_name = "-".join(task_name.lower().split())
-    task_name = re.sub(r'[^a-zA-Z0-9_.-]', '-', task_name)
+    task_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", task_name)
     return task_name
+
 
 def extract_json_from_response(response_text: str) -> dict:
     """Extract JSON from LLM response, handling markdown code blocks."""

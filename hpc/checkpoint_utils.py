@@ -23,8 +23,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 # Log prefix for consistent messaging
 LOG_PREFIX = "[checkpoint]"
@@ -96,7 +95,11 @@ def is_huggingface_repo(path_or_repo: str) -> bool:
         return False
 
     # Absolute or relative paths
-    if path_or_repo.startswith("/") or path_or_repo.startswith("./") or path_or_repo.startswith("../"):
+    if (
+        path_or_repo.startswith("/")
+        or path_or_repo.startswith("./")
+        or path_or_repo.startswith("../")
+    ):
         return False
 
     # HF repo IDs have format "org/repo" or just "repo"
@@ -167,7 +170,9 @@ def pre_download_model(
     # Check if it looks like a HF repo
     if not is_huggingface_repo(model_path):
         # Might be a path that doesn't exist yet - return as-is
-        log_warn(f"Model path doesn't exist and doesn't look like HF repo: {model_path}")
+        log_warn(
+            f"Model path doesn't exist and doesn't look like HF repo: {model_path}"
+        )
         return DownloadResult(
             original_path=model_path,
             local_path=model_path,
@@ -180,7 +185,9 @@ def pre_download_model(
         from huggingface_hub import snapshot_download
         from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
     except ImportError:
-        raise ImportError("huggingface_hub is required for pre-downloading. Install with: pip install huggingface_hub")
+        raise ImportError(
+            "huggingface_hub is required for pre-downloading. Install with: pip install huggingface_hub"
+        )
 
     log_info(f"Downloading model: {model_path}")
     if revision:
@@ -189,7 +196,9 @@ def pre_download_model(
     try:
         # Get token from environment if not provided
         if token is None:
-            token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+            token = os.environ.get("HF_TOKEN") or os.environ.get(
+                "HUGGING_FACE_HUB_TOKEN"
+            )
 
         local_path = snapshot_download(
             repo_id=model_path,
@@ -248,7 +257,9 @@ def pre_download_dataset(
 
     # Check if it looks like a HF repo
     if not is_huggingface_repo(dataset_path):
-        log_warn(f"Dataset path doesn't exist and doesn't look like HF repo: {dataset_path}")
+        log_warn(
+            f"Dataset path doesn't exist and doesn't look like HF repo: {dataset_path}"
+        )
         return DownloadResult(
             original_path=dataset_path,
             local_path=dataset_path,
@@ -261,7 +272,9 @@ def pre_download_dataset(
         from huggingface_hub import snapshot_download
         from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
     except ImportError:
-        raise ImportError("huggingface_hub is required for pre-downloading. Install with: pip install huggingface_hub")
+        raise ImportError(
+            "huggingface_hub is required for pre-downloading. Install with: pip install huggingface_hub"
+        )
 
     log_info(f"Downloading dataset: {dataset_path}")
     if revision:
@@ -269,7 +282,9 @@ def pre_download_dataset(
 
     try:
         if token is None:
-            token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+            token = os.environ.get("HF_TOKEN") or os.environ.get(
+                "HUGGING_FACE_HUB_TOKEN"
+            )
 
         local_path = snapshot_download(
             repo_id=dataset_path,
@@ -327,7 +342,9 @@ def pre_download_artifacts(
     if skip_if_internet and not force and hpc is not None:
         if not needs_pre_download(hpc):
             cluster_name = getattr(hpc, "name", "unknown")
-            log_info(f"Cluster {cluster_name} has internet on compute nodes - skipping pre-download")
+            log_info(
+                f"Cluster {cluster_name} has internet on compute nodes - skipping pre-download"
+            )
             # Return empty results but don't fail
             if model_path:
                 results["model"] = DownloadResult(
@@ -361,7 +378,9 @@ def pre_download_artifacts(
     # Summary
     downloaded_count = sum(1 for r in results.values() if r.was_downloaded)
     total_count = len(results)
-    log_info(f"Pre-download complete: {downloaded_count}/{total_count} artifacts downloaded")
+    log_info(
+        f"Pre-download complete: {downloaded_count}/{total_count} artifacts downloaded"
+    )
 
     return results
 
@@ -440,6 +459,7 @@ def parse_dataset_list(dataset_arg: Union[str, List[str], None]) -> List[str]:
 
     # Try JSON parsing first
     import json
+
     try:
         parsed = json.loads(dataset_arg)
         if isinstance(parsed, list):

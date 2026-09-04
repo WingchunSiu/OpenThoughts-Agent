@@ -27,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from datasets import Dataset
+from datasets import Dataset  # noqa: E402
 
 try:
     from data.commons import upload_traces_to_hf
@@ -62,7 +62,12 @@ def _format_blocks(blocks: Any) -> str:
                 continue
             btype = block.get("type")
             text = block.get("text")
-            if btype in {"input_text", "output_text", "text", "reasoning"} and isinstance(text, str):
+            if btype in {
+                "input_text",
+                "output_text",
+                "text",
+                "reasoning",
+            } and isinstance(text, str):
                 parts.append(text)
                 continue
             if btype == "code":
@@ -128,7 +133,9 @@ def _format_function_call(payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]
     }
 
 
-def _format_function_output(payload: Dict[str, Any]) -> Tuple[str, Optional[str], Dict[str, Any]]:
+def _format_function_output(
+    payload: Dict[str, Any],
+) -> Tuple[str, Optional[str], Dict[str, Any]]:
     call_id = payload.get("call_id")
     output_raw = payload.get("output")
     output_payload = _safe_json_loads(output_raw)
@@ -142,8 +149,16 @@ def _format_function_output(payload: Dict[str, Any]) -> Tuple[str, Optional[str]
     else:
         content = str(output_payload or "")
     text = content if content else "[tool-output] (empty)"
-    serialized_meta = json.dumps(metadata, ensure_ascii=False) if isinstance(metadata, (dict, list)) else metadata
-    return text, call_id, {"call_id": call_id, "output": content, "metadata": serialized_meta}
+    serialized_meta = (
+        json.dumps(metadata, ensure_ascii=False)
+        if isinstance(metadata, (dict, list))
+        else metadata
+    )
+    return (
+        text,
+        call_id,
+        {"call_id": call_id, "output": content, "metadata": serialized_meta},
+    )
 
 
 def _build_system_message(meta: Dict[str, Any]) -> Optional[str]:
@@ -215,7 +230,9 @@ def parse_rollout(path: Path, root: Path) -> Optional[Dict[str, Any]]:
                     continue
 
                 if payload_type == "reasoning":
-                    conversations.append({"role": "assistant", "content": _format_reasoning(payload)})
+                    conversations.append(
+                        {"role": "assistant", "content": _format_reasoning(payload)}
+                    )
                     continue
 
                 if payload_type == "function_call":
@@ -243,7 +260,12 @@ def parse_rollout(path: Path, root: Path) -> Optional[Dict[str, Any]]:
                 )
                 continue
 
-            if etype in {"message", "reasoning", "function_call", "function_call_output"}:
+            if etype in {
+                "message",
+                "reasoning",
+                "function_call",
+                "function_call_output",
+            }:
                 payload_type = etype
                 if payload_type == "message":
                     role = payload.get("role") or "assistant"
@@ -253,7 +275,9 @@ def parse_rollout(path: Path, root: Path) -> Optional[Dict[str, Any]]:
                     continue
 
                 if payload_type == "reasoning":
-                    conversations.append({"role": "assistant", "content": _format_reasoning(payload)})
+                    conversations.append(
+                        {"role": "assistant", "content": _format_reasoning(payload)}
+                    )
                     continue
 
                 if payload_type == "function_call":
@@ -280,7 +304,10 @@ def parse_rollout(path: Path, root: Path) -> Optional[Dict[str, Any]]:
 
             role = payload.get("role") or "assistant"
             conversations.append(
-                {"role": role, "content": f"[{etype}] {json.dumps(payload, ensure_ascii=False)}"}
+                {
+                    "role": role,
+                    "content": f"[{etype}] {json.dumps(payload, ensure_ascii=False)}",
+                }
             )
 
     if not conversations:
@@ -298,7 +325,9 @@ def parse_rollout(path: Path, root: Path) -> Optional[Dict[str, Any]]:
     row: Dict[str, Any] = {
         "conversations": conversations,
         "agent": session_meta.get("originator") or "codex",
-        "model": last_turn_context.get("model") or session_meta.get("model") or "unknown",
+        "model": last_turn_context.get("model")
+        or session_meta.get("model")
+        or "unknown",
         "model_provider": session_meta.get("model_provider") or "openai",
         "date": date_str,
         "task": f"codex_session::{session_id}",
@@ -374,7 +403,9 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     rows = collect_rollouts(sessions_root, args.limit)
     if not rows:
-        raise SystemExit("No conversations were extracted from the provided sessions root.")
+        raise SystemExit(
+            "No conversations were extracted from the provided sessions root."
+        )
 
     dataset = Dataset.from_list(rows)
     print(f"[codex-chats] Built dataset with {len(dataset)} rows from {sessions_root}")

@@ -119,6 +119,7 @@ Usage
     python -m data.patchers.patch_mix_h10_reward_proportional_tasks --root <dir> --dry-run
     python -m data.patchers.patch_mix_h10_reward_proportional_tasks --root <dir> --limit 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -151,7 +152,10 @@ def patch_task(task_dir: Path, dry_run: bool) -> dict:
     """Process a single task. Returns ``{"status": ..., "reason": ...}``."""
     source = _task_source(task_dir)
     if source is None:
-        return {"status": "skipped_no_metadata", "reason": "missing/unreadable metadata.json"}
+        return {
+            "status": "skipped_no_metadata",
+            "reason": "missing/unreadable metadata.json",
+        }
 
     if not source.startswith(DROP_SOURCE_PREFIX):
         return {"status": "skipped_other_source", "reason": f"source={source}"}

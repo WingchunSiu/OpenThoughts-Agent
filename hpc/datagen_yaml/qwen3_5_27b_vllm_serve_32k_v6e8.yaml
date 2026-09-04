@@ -10,38 +10,24 @@ backend:
 vllm_server:
   model_path: Qwen/Qwen3.5-27B
   num_replicas: 1
-  # v6e-8 = 8 chips on 2 hosts (4 chips/host); tp=8 spans the full slice.
-  # Qwen3.5-27B at bf16 ≈ 54 GB weights; v6e-8 has ~125 GB HBM total,
-  # ~88 GB usable at gpu_memory_utilization=0.85 → ~34 GB headroom for
-  # KV cache + activations + XLA scratch on 32k context.
   tensor_parallel_size: 8
   pipeline_parallel_size: 1
   data_parallel_size: 1
   time_limit: '48:00:00'
   max_model_len: 32768
-  # 27B activations grow faster than the 4B baseline; keep concurrency
-  # tight on first run, raise if HBM headroom shows.
   max_num_seqs: 2
   gpu_memory_utilization: 0.85
   enable_expert_parallel: false
   enable_auto_tool_choice: true
-  # Qwen3.5 family — hermes tool-call format + qwen3 reasoning parser
-  # (same as Qwen3-8B / Qwen3.5-4B configs).
   tool_call_parser: hermes
   reasoning_parser: qwen3
   trust_remote_code: true
   extra_args:
   - --dtype
   - bfloat16
-  # vllm-tpu prefers larger KV blocks than the CUDA backend's default-16.
   - --block-size
   - '64'
   - --max-num-partial-prefills
   - '1'
-  # Qwen3.5 is a multimodal model (image-text-to-text architecture);
-  # vllm-tpu refuses to compile MM tower kernels on TPU unless we cap
-  # MM inputs to zero. Text-only eval workloads ignore the cap.
   - --limit-mm-per-prompt
   - '{"image":0,"video":0}'
-  # See qwen3_8b_vllm_serve_32k_v6e8.yaml for why chunked prefill /
-  # prefix caching are omitted on TPU.

@@ -17,6 +17,7 @@ Fix: replace the entire test.sh with a stricter version that
 All 10000 tasks share the same test.sh (verified by md5sum), so the patch is
 a single-file replacement applied uniformly.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -134,7 +135,10 @@ def main() -> int:
 
     # Sanity: marker present in patched file
     if PATCHED_TEST_SH.find(marker) < 0:
-        print("WARNING: patch marker not found in PATCHED_TEST_SH constant", file=sys.stderr)
+        print(
+            "WARNING: patch marker not found in PATCHED_TEST_SH constant",
+            file=sys.stderr,
+        )
 
     print(f"Done. {n_changed}/{n_total} files modified (dry_run={args.dry_run}).")
     return 0

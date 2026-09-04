@@ -42,6 +42,7 @@ We intentionally do NOT stub sudo or other missing tools: a task that needs
 sudo to verify the agent's solution was never actually verifiable, so failing
 loudly is the correct behavior (no new false positives, no new false negatives).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -111,10 +112,10 @@ DISPATCH_REPLACEMENT = (
     "{indent}# /app: many tasks short-circuit run_verifier with `exit 0`\n"
     "{indent}# when invoked with no args, so a 0 exit with empty /app is a\n"
     "{indent}# false positive.\n"
-    "{indent}if [ -d /app ] && [ -z \"$(ls -A /app 2>/dev/null)\" ]; then\n"
+    '{indent}if [ -d /app ] && [ -z "$(ls -A /app 2>/dev/null)" ]; then\n'
     "{indent}    _rv_rc=1\n"
     "{indent}fi\n"
-    "{indent}if [ \"$_rv_rc\" -eq 0 ]; then"
+    '{indent}if [ "$_rv_rc" -eq 0 ]; then'
 )
 
 
@@ -139,7 +140,7 @@ def patch_test_sh(text: str) -> tuple[str, bool]:
 
     m = SHEBANG_RE.match(text)
     if m:
-        text = m.group(1) + PREAMBLE + text[m.end():]
+        text = m.group(1) + PREAMBLE + text[m.end() :]
     else:
         text = "#!/bin/bash\n" + PREAMBLE + text
 
@@ -179,10 +180,14 @@ def main() -> int:
             if not args.dry_run:
                 p.write_text(patched)
         if i % 1000 == 0 or i == n_total:
-            print(f"[{i}/{n_total}] patched={n_changed} no_runv={n_no_runv}", flush=True)
+            print(
+                f"[{i}/{n_total}] patched={n_changed} no_runv={n_no_runv}", flush=True
+            )
 
-    print(f"Done. {n_changed}/{n_total} files modified (dry_run={args.dry_run}, "
-          f"tasks_without_run_verifier={n_no_runv}).")
+    print(
+        f"Done. {n_changed}/{n_total} files modified (dry_run={args.dry_run}, "
+        f"tasks_without_run_verifier={n_no_runv})."
+    )
     return 0
 
 

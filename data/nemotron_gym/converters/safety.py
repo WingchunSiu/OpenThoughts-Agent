@@ -76,7 +76,9 @@ def convert_safety(row: dict, row_idx: int) -> HarborTask | None:
     principle = row.get("principle")
     if not isinstance(principle, str) or not principle.strip():
         return None
-    principle = sanitize_text(principle, field_name="principle", max_len=_MAX_PRINCIPLE_BYTES)
+    principle = sanitize_text(
+        principle, field_name="principle", max_len=_MAX_PRINCIPLE_BYTES
+    )
     rid = row.get("id") if isinstance(row.get("id"), str) else None
     task_id = task_id_for(
         "safety",

@@ -38,14 +38,12 @@ from __future__ import annotations
 import copy
 import fcntl
 import json
-import os
 import shutil
 import sys
-import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 # -----------------------------------------------------------------------------
@@ -72,6 +70,7 @@ class ResumeAction(str, Enum):
 @dataclass
 class ConfigFieldDrift:
     """A single field-level diff between prior on-disk and new planned config."""
+
     path: Tuple[Any, ...]
     old: Any
     new: Any
@@ -83,12 +82,12 @@ class TrialConfigDrift:
     trial_name: str
     drifts: List[ConfigFieldDrift]
     fatal: bool = False
-    orphan: bool = False   # existing trial whose agent.name no longer in plan
+    orphan: bool = False  # existing trial whose agent.name no longer in plan
 
 
 @dataclass
 class CoverageStats:
-    n_existing: int = 0                       # total existing trial dirs
+    n_existing: int = 0  # total existing trial dirs
     n_with_result: int = 0
     n_without_result: int = 0
     n_orphans: int = 0
@@ -165,8 +164,8 @@ _MUTABLE_JOB_TOP_LEVEL = {
     "retry",
 }
 _MUTABLE_JOB_NESTED_ROOTS = {
-    ("orchestrator",),     # whole orchestrator subtree
-    ("retry",),            # whole retry subtree (mirror)
+    ("orchestrator",),  # whole orchestrator subtree
+    ("retry",),  # whole retry subtree (mirror)
 }
 
 # Per-trial config.json: path prefixes that may be rewritten on mutation.
@@ -221,7 +220,7 @@ def _is_synthetic_vllm_id_rotation(drift: ConfigFieldDrift) -> bool:
     def _is_synthetic(s: str) -> bool:
         if not s.startswith(_HOSTED_VLLM_PREFIX):
             return False
-        return s[len(_HOSTED_VLLM_PREFIX):].isdigit()
+        return s[len(_HOSTED_VLLM_PREFIX) :].isdigit()
 
     return _is_synthetic(old) or _is_synthetic(new)
 
@@ -262,7 +261,10 @@ def _is_mutable_top_level(drift: ConfigFieldDrift) -> bool:
 
 def _is_mutable_trial_field(drift: ConfigFieldDrift) -> bool:
     for prefix in _MUTABLE_TRIAL_PREFIXES:
-        if len(drift.path) >= len(prefix) and tuple(drift.path[: len(prefix)]) == prefix:
+        if (
+            len(drift.path) >= len(prefix)
+            and tuple(drift.path[: len(prefix)]) == prefix
+        ):
             return True
     for pred in _SPECIAL_CASE_MUTABLE_PREDICATES:
         if pred(drift):
@@ -429,7 +431,9 @@ def _enumerate_trial_dirs(job_dir: Path) -> List[Path]:
     return out
 
 
-def _trial_result_summary(result: Dict[str, Any]) -> Tuple[Optional[str], Optional[float]]:
+def _trial_result_summary(
+    result: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[float]]:
     """Extract (exception_type, reward) from a parsed trial result blob."""
     exc = (result.get("exception_info") or {}).get("exception_type")
     rewards = (result.get("verifier_result") or {}).get("rewards") or {}
@@ -514,7 +518,9 @@ def inspect_resume(
             coverage.n_with_result += 1
             exc, reward = _trial_result_summary(trial_result)
             if exc:
-                coverage.by_exception_type[exc] = coverage.by_exception_type.get(exc, 0) + 1
+                coverage.by_exception_type[exc] = (
+                    coverage.by_exception_type.get(exc, 0) + 1
+                )
             coverage.reward_distribution[_reward_bucket(reward)] = (
                 coverage.reward_distribution.get(_reward_bucket(reward), 0) + 1
             )
@@ -541,7 +547,9 @@ def inspect_resume(
         # (api_base, model_name via the synthetic-ID predicate, timeouts);
         # other drifts are not tracked at the trial level since they can't
         # be safely patched.
-        drifts = _diff_trial_against_plan(trial_config, planned_top_level_config, planned_first_agent_kwargs)
+        drifts = _diff_trial_against_plan(
+            trial_config, planned_top_level_config, planned_first_agent_kwargs
+        )
         if drifts:
             annotated = [_annotate_drift(d) for d in drifts]
             fatal = any(not _is_mutable_trial_field(d) for d in annotated)
@@ -758,7 +766,9 @@ def plan_mutation(
             # re-creates it.
             trial_wipes.append(trial_dir)
             continue
-        patched = _apply_trial_mutations(trial_config, td.drifts, planned_top_level_config, planned_agent_kwargs)
+        patched = _apply_trial_mutations(
+            trial_config, td.drifts, planned_top_level_config, planned_agent_kwargs
+        )
         trial_rewrites.append(
             (trial_dir / "config.json", json.dumps(patched, indent=2, sort_keys=False))
         )
@@ -788,7 +798,12 @@ def _apply_trial_mutations(
         if not path:
             continue
         head = path[0]
-        if head == "agent" and len(path) >= 2 and path[1] == "kwargs" and len(path) == 3:
+        if (
+            head == "agent"
+            and len(path) >= 2
+            and path[1] == "kwargs"
+            and len(path) == 3
+        ):
             field_name = path[2]
             new_val = planned_agent_kwargs.get(field_name)
             if new_val is None and field_name in kwargs_block:
@@ -934,7 +949,9 @@ def render_bail_message(
     ]
 
     if report.state == ResumeState.ALREADY_COMPLETE:
-        lines.append("  Status: job is ALREADY COMPLETE on disk (finished_at set, all trials done).")
+        lines.append(
+            "  Status: job is ALREADY COMPLETE on disk (finished_at set, all trials done)."
+        )
         if report.coverage:
             lines.append(
                 f"           {report.coverage.n_with_result} trials with result.json, "
@@ -942,7 +959,9 @@ def render_bail_message(
             )
         lines.append("")
         lines.append("  Choose one:")
-        lines.append("    --allow_overwrite                     wipe + re-run from scratch")
+        lines.append(
+            "    --allow_overwrite                     wipe + re-run from scratch"
+        )
         lines.append(
             "    --experiments_dir <fresh_path>        land at a fresh path; leave existing dir alone"
         )
@@ -952,7 +971,9 @@ def render_bail_message(
         lines.append("  Status: prior config.json is CORRUPT (unparseable).")
         lines.append("")
         lines.append("  Choose one:")
-        lines.append("    --allow_overwrite                     wipe existing dir, start fresh")
+        lines.append(
+            "    --allow_overwrite                     wipe existing dir, start fresh"
+        )
         lines.append("    --experiments_dir <fresh_path>        land at a fresh path")
         return "\n".join(lines)
 
@@ -1029,17 +1050,21 @@ def render_bail_message(
         mutable_drifts or mutable_trial_count or orphans
     )
     mutate_note = (
-        ""
-        if is_fully_mutable
-        else "  (NOT applicable: drift includes fatal fields)"
+        "" if is_fully_mutable else "  (NOT applicable: drift includes fatal fields)"
     )
-    lines.append(f"    --force_mutate                        patch existing dir + resume{mutate_note}")
-    lines.append("    --allow_overwrite                     wipe existing dir, start fresh")
+    lines.append(
+        f"    --force_mutate                        patch existing dir + resume{mutate_note}"
+    )
+    lines.append(
+        "    --allow_overwrite                     wipe existing dir, start fresh"
+    )
     lines.append(
         "    --experiments_dir <path>              land at a fresh path; leave existing dir alone"
     )
     lines.append("")
-    lines.append("  Combine --force_mutate --allow_overwrite to mutate where possible, wipe on fatal.")
+    lines.append(
+        "  Combine --force_mutate --allow_overwrite to mutate where possible, wipe on fatal."
+    )
     return "\n".join(lines)
 
 
@@ -1074,7 +1099,9 @@ def resolve_resume_policy(
             return ResumePolicyResult(action=ResumeAction.WIPE_AND_FRESH, report=report)
         raise ResumeBail(
             report,
-            render_bail_message(report, force_mutate=force_mutate, allow_overwrite=allow_overwrite),
+            render_bail_message(
+                report, force_mutate=force_mutate, allow_overwrite=allow_overwrite
+            ),
         )
 
     if report.state == ResumeState.CORRUPT:
@@ -1083,7 +1110,9 @@ def resolve_resume_policy(
             return ResumePolicyResult(action=ResumeAction.WIPE_AND_FRESH, report=report)
         raise ResumeBail(
             report,
-            render_bail_message(report, force_mutate=force_mutate, allow_overwrite=allow_overwrite),
+            render_bail_message(
+                report, force_mutate=force_mutate, allow_overwrite=allow_overwrite
+            ),
         )
 
     # Drift cases: MUTABLE_DRIFT or FATAL_DRIFT.
@@ -1104,7 +1133,9 @@ def resolve_resume_policy(
 
     raise ResumeBail(
         report,
-        render_bail_message(report, force_mutate=force_mutate, allow_overwrite=allow_overwrite),
+        render_bail_message(
+            report, force_mutate=force_mutate, allow_overwrite=allow_overwrite
+        ),
     )
 
 
@@ -1133,6 +1164,7 @@ def _resolve_prior_job_dir(exp_args: Dict[str, Any], job_name: str) -> Optional[
     if not job_name:
         return None
     from hpc.launch_utils import resolve_workspace_path
+
     experiments_dir = exp_args.get("experiments_dir")
     if experiments_dir:
         experiments_root = resolve_workspace_path(str(experiments_dir))
@@ -1151,9 +1183,8 @@ def _materialize_planned_config(exp_args: Dict[str, Any]) -> Optional[Dict[str, 
     """
     from hpc.harbor_utils import load_harbor_config, merge_harbor_config
 
-    harbor_config_path = (
-        exp_args.get("trace_harbor_config")
-        or exp_args.get("harbor_config")
+    harbor_config_path = exp_args.get("trace_harbor_config") or exp_args.get(
+        "harbor_config"
     )
     if not harbor_config_path:
         return None
@@ -1180,23 +1211,30 @@ def _materialize_planned_config(exp_args: Dict[str, Any]) -> Optional[Dict[str, 
     # both cases the runtime YAML's deterministic ``hosted_vllm/<id>``
     # diverges from JSON at Harbor's equality check.
     job_name_for_alias = exp_args.get("job_name")
-    if job_name_for_alias and model_name and not str(model_name).startswith(_HOSTED_VLLM_PREFIX):
+    if (
+        job_name_for_alias
+        and model_name
+        and not str(model_name).startswith(_HOSTED_VLLM_PREFIX)
+    ):
         # Only rewrite when the launcher itself would (datagen/eval paths
         # that need a vLLM server). Detect by checking whether the resolved
         # exp_args carries a vllm-server config or the launcher has stashed
         # a `_harbor_model_name` override (which would have already produced
         # the alias and been caught by the fallback chain above).
         from hpc.launch_utils import hosted_vllm_alias, generate_served_model_id
+
         # Seed with the BARE job_name (not the ``_traces``-suffixed chunk
         # name) to match the launcher's own call at
-        # ``hpc/datagen_launch_utils.py:_prepare_datagen_configuration``
-        # and ``hpc/eval_launch_utils.py``. The launcher generates a
+        # ``hpc/datagen_launch_utils.py:_prepare_datagen_configuration``.
+        # The launcher generates a
         # single synthetic per launch and reuses it across chunks; we
         # mirror that here so resume_manager's planned config matches
         # the YAML at the model_name field.
         synthetic_id = generate_served_model_id(job_name=job_name_for_alias)
         model_name = hosted_vllm_alias(synthetic_id)
-    n_concurrent = exp_args.get("trace_n_concurrent") or exp_args.get("n_concurrent") or 4
+    n_concurrent = (
+        exp_args.get("trace_n_concurrent") or exp_args.get("n_concurrent") or 4
+    )
     try:
         n_concurrent = int(n_concurrent)
     except (TypeError, ValueError):
@@ -1204,11 +1242,14 @@ def _materialize_planned_config(exp_args: Dict[str, Any]) -> Optional[Dict[str, 
 
     planned = merge_harbor_config(
         harbor_config_data,
-        agent_name=exp_args.get("trace_agent_name") or exp_args.get("harbor_agent_name"),
+        agent_name=exp_args.get("trace_agent_name")
+        or exp_args.get("harbor_agent_name"),
         model_name=str(model_name),
         n_concurrent=n_concurrent,
         endpoint_meta=exp_args.get("_harbor_endpoint_meta"),
-        agent_kwarg_overrides=list(exp_args.get("agent_kwarg") or exp_args.get("agent_kwargs") or []),
+        agent_kwarg_overrides=list(
+            exp_args.get("agent_kwarg") or exp_args.get("agent_kwargs") or []
+        ),
         extra_agent_kwargs=exp_args.get("_harbor_extra_agent_kwargs"),
     )
 
@@ -1235,10 +1276,13 @@ def _materialize_planned_config(exp_args: Dict[str, Any]) -> Optional[Dict[str, 
     # Resolve to an absolute path so the comparison against the on-disk
     # absolute path doesn't trip on absolute-vs-relative shape alone.
     from hpc.launch_utils import resolve_workspace_path
+
     experiments_dir = exp_args.get("experiments_dir")
     if planned.get("jobs_dir") in (None, "", "trace_jobs"):
         if experiments_dir:
-            planned["jobs_dir"] = str(resolve_workspace_path(str(experiments_dir)) / "trace_jobs")
+            planned["jobs_dir"] = str(
+                resolve_workspace_path(str(experiments_dir)) / "trace_jobs"
+            )
         elif base_job_name:
             planned["jobs_dir"] = str(
                 resolve_workspace_path(f"experiments/{base_job_name}") / "trace_jobs"
@@ -1310,8 +1354,7 @@ def _emit_action_summary(result: ResumePolicyResult) -> None:
         )
     elif result.action == ResumeAction.WIPE_AND_FRESH:
         msg = (
-            f"[resume_manager] Wiped {rpt.job_dir} (--allow_overwrite). "
-            f"Starting fresh."
+            f"[resume_manager] Wiped {rpt.job_dir} (--allow_overwrite). Starting fresh."
         )
     else:
         return
@@ -1326,6 +1369,7 @@ def _emit_action_summary(result: ResumePolicyResult) -> None:
 def _cli_load_planned_from_config_arg(config_path: Path) -> Dict[str, Any]:
     """Load a planned config dict from a YAML or JSON file."""
     import yaml
+
     text = config_path.read_text()
     if config_path.suffix in {".yaml", ".yml"}:
         return yaml.safe_load(text)
@@ -1367,9 +1411,7 @@ def _cli() -> int:
     job_dir = Path(args.job_dir)
 
     if args.cmd == "inspect":
-        planned = (
-            _cli_load_planned_from_config_arg(args.config) if args.config else {}
-        )
+        planned = _cli_load_planned_from_config_arg(args.config) if args.config else {}
         report = inspect_resume(job_dir, planned)
         print(json.dumps(_report_to_dict(report), default=str, indent=2))
         return 0
@@ -1377,7 +1419,9 @@ def _cli() -> int:
     if args.cmd == "diff":
         planned = _cli_load_planned_from_config_arg(args.config)
         report = inspect_resume(job_dir, planned)
-        if not (report.job_config_drift or any(td.drifts for td in report.trial_drifts)):
+        if not (
+            report.job_config_drift or any(td.drifts for td in report.trial_drifts)
+        ):
             print("No drift detected.")
             return 0
         for d in report.job_config_drift:
@@ -1395,15 +1439,21 @@ def _cli() -> int:
         report = inspect_resume(job_dir, planned)
         plan = plan_mutation(report, planned)
         if plan is None:
-            print(f"Cannot plan mutation (state={report.state.value}, has_fatal={report.has_fatal_drift}).")
+            print(
+                f"Cannot plan mutation (state={report.state.value}, has_fatal={report.has_fatal_drift})."
+            )
             return 1
         print(
             json.dumps(
                 {
                     "estimated_changes": plan.estimated_changes,
-                    "trial_config_rewrites": [str(p) for p, _ in plan.trial_config_rewrites],
+                    "trial_config_rewrites": [
+                        str(p) for p, _ in plan.trial_config_rewrites
+                    ],
                     "trial_dirs_to_wipe": [str(p) for p in plan.trial_dirs_to_wipe],
-                    "trial_results_to_quarantine": [str(p) for p in plan.trial_results_to_quarantine],
+                    "trial_results_to_quarantine": [
+                        str(p) for p in plan.trial_results_to_quarantine
+                    ],
                 },
                 indent=2,
             )
@@ -1415,7 +1465,9 @@ def _cli() -> int:
         report = inspect_resume(job_dir, planned)
         plan = plan_mutation(report, planned)
         if plan is None:
-            print(f"Cannot plan mutation (state={report.state.value}, has_fatal={report.has_fatal_drift}).")
+            print(
+                f"Cannot plan mutation (state={report.state.value}, has_fatal={report.has_fatal_drift})."
+            )
             return 1
         if not args.yes:
             print(
@@ -1434,7 +1486,11 @@ def _cli() -> int:
 
     if args.cmd == "wipe":
         if not args.yes:
-            resp = input(f"About to wipe contents of {job_dir}. Proceed? [y/N] ").strip().lower()
+            resp = (
+                input(f"About to wipe contents of {job_dir}. Proceed? [y/N] ")
+                .strip()
+                .lower()
+            )
             if resp not in {"y", "yes"}:
                 print("Aborted.")
                 return 1

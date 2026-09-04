@@ -61,6 +61,7 @@ Constraints (per upload spec):
   - Only `tests/test.sh` is touched. instruction.md, test_solution.rs,
     environment/Dockerfile, task.toml, metadata.json are preserved verbatim.
 """
+
 from __future__ import annotations
 
 import argparse

@@ -2,8 +2,8 @@ import os
 import sys
 import argparse
 import fcntl
-import time
 from huggingface_hub import snapshot_download
+
 
 def is_valid_task_dir(path):
     """
@@ -12,12 +12,16 @@ def is_valid_task_dir(path):
     """
     # Skip Git-related files and directories
     basename = os.path.basename(path)
-    if basename.startswith('.git') or basename in {'.gitignore', '.gitattributes', '.github'}:
+    if basename.startswith(".git") or basename in {
+        ".gitignore",
+        ".gitattributes",
+        ".github",
+    }:
         return False
 
     # Check if it's a directory and has instruction.md
-    return (os.path.isdir(path) and
-            os.path.isfile(os.path.join(path, 'instruction.md')))
+    return os.path.isdir(path) and os.path.isfile(os.path.join(path, "instruction.md"))
+
 
 def get_dataset_path(repo_id):
     """
@@ -29,16 +33,23 @@ def get_dataset_path(repo_id):
     """
 
     # Construct the path using HF_HUB_CACHE environment variable
-    hf_cache = os.getenv('HF_HUB_CACHE', os.path.expanduser('~/.cache/huggingface/hub'))
+    hf_cache = os.getenv("HF_HUB_CACHE", os.path.expanduser("~/.cache/huggingface/hub"))
     dataset_path = os.path.join(hf_cache, f"datasets--{repo_id.replace('/', '--')}")
 
     # Find the latest snapshot
-    snapshots_dir = os.path.join(dataset_path, 'snapshots')
+    snapshots_dir = os.path.join(dataset_path, "snapshots")
     if os.path.exists(snapshots_dir):
         try:
-            snapshots = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
+            snapshots = [
+                d
+                for d in os.listdir(snapshots_dir)
+                if os.path.isdir(os.path.join(snapshots_dir, d))
+            ]
         except OSError as e:
-            print(f"Could not read snapshots directory {snapshots_dir}: {e}", file=sys.stderr)
+            print(
+                f"Could not read snapshots directory {snapshots_dir}: {e}",
+                file=sys.stderr,
+            )
             snapshots = []
         if snapshots:
             latest_snapshot = sorted(snapshots)[-1]  # Get the latest snapshot
@@ -46,8 +57,11 @@ def get_dataset_path(repo_id):
 
             # Verify we have valid task directories
             if os.path.exists(snapshot_path):
-                task_dirs = [d for d in os.listdir(snapshot_path)
-                            if is_valid_task_dir(os.path.join(snapshot_path, d))]
+                task_dirs = [
+                    d
+                    for d in os.listdir(snapshot_path)
+                    if is_valid_task_dir(os.path.join(snapshot_path, d))
+                ]
 
                 if task_dirs:
                     print(f"Found dataset at {snapshot_path}")
@@ -59,6 +73,7 @@ def get_dataset_path(repo_id):
 
     print("Dataset not found, downloading...")
     return None
+
 
 def download_sandboxes_dataset(repo_id, local_dir=None, cache_dir=None):
     """
@@ -82,14 +97,17 @@ def download_sandboxes_dataset(repo_id, local_dir=None, cache_dir=None):
         )
 
         # Remove .gitattributes file if it exists
-        gitattributes_path = os.path.join(local_path, '.gitattributes')
+        gitattributes_path = os.path.join(local_path, ".gitattributes")
         if os.path.exists(gitattributes_path):
             os.remove(gitattributes_path)
             print("Removed .gitattributes file")
 
         # Verify we have valid task directories
-        task_dirs = [d for d in os.listdir(local_path)
-                    if is_valid_task_dir(os.path.join(local_path, d))]
+        task_dirs = [
+            d
+            for d in os.listdir(local_path)
+            if is_valid_task_dir(os.path.join(local_path, d))
+        ]
 
         if task_dirs:
             print(f"DATASET_PATH={local_path}")
@@ -105,10 +123,14 @@ def download_sandboxes_dataset(repo_id, local_dir=None, cache_dir=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Download or locate a Hugging Face dataset')
-    parser.add_argument('repo_id', help='Repository ID (e.g., mlfoundations-dev/clean-sandboxes-tasks)')
-    parser.add_argument('--local-dir', help='Local directory to save the dataset')
-    parser.add_argument('--cache-dir', help='Cache directory for huggingface hub')
+    parser = argparse.ArgumentParser(
+        description="Download or locate a Hugging Face dataset"
+    )
+    parser.add_argument(
+        "repo_id", help="Repository ID (e.g., mlfoundations-dev/clean-sandboxes-tasks)"
+    )
+    parser.add_argument("--local-dir", help="Local directory to save the dataset")
+    parser.add_argument("--cache-dir", help="Cache directory for huggingface hub")
 
     args = parser.parse_args()
 
@@ -127,17 +149,25 @@ def main():
 
             # Check if local_dir already has valid task dirs
             if os.path.isdir(args.local_dir):
-                task_dirs = [d for d in os.listdir(args.local_dir)
-                            if is_valid_task_dir(os.path.join(args.local_dir, d))]
+                task_dirs = [
+                    d
+                    for d in os.listdir(args.local_dir)
+                    if is_valid_task_dir(os.path.join(args.local_dir, d))
+                ]
                 if task_dirs:
-                    print(f"Found existing dataset at {args.local_dir} with {len(task_dirs)} tasks")
+                    print(
+                        f"Found existing dataset at {args.local_dir} with {len(task_dirs)} tasks"
+                    )
                     path = args.local_dir
             if not path:
-                print("Downloading dataset to local dir (real files, no symlinks)...", file=sys.stderr)
+                print(
+                    "Downloading dataset to local dir (real files, no symlinks)...",
+                    file=sys.stderr,
+                )
                 path = download_sandboxes_dataset(
                     repo_id=args.repo_id,
                     local_dir=args.local_dir,
-                    cache_dir=args.cache_dir
+                    cache_dir=args.cache_dir,
                 )
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -149,9 +179,7 @@ def main():
             # If not found, download it
             print("Dataset not found, downloading...", file=sys.stderr)
             path = download_sandboxes_dataset(
-                repo_id=args.repo_id,
-                local_dir=args.local_dir,
-                cache_dir=args.cache_dir
+                repo_id=args.repo_id, local_dir=args.local_dir, cache_dir=args.cache_dir
             )
 
     if path:
@@ -160,6 +188,7 @@ def main():
     else:
         print("Failed to download dataset", file=sys.stderr)
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

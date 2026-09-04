@@ -86,6 +86,7 @@ Usage::
   python data/patchers/patch_exp_rpt_stack_php_v2_v6_tasks.py \\
       --root <dir> [--dry-run] [--limit N] [--no-lint]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -108,9 +109,7 @@ PATCH_MARKER = patch_marker(DATASET_TAG)
 
 # Marker we embed at the top of tests/TestSolution.php so we can detect
 # already-patched files cheaply.
-TS_PATCH_MARKER = (
-    "// --- laion stack-php-v2-v6 patch: rewritten TestSolution class ---"
-)
+TS_PATCH_MARKER = "// --- laion stack-php-v2-v6 patch: rewritten TestSolution class ---"
 
 NEW_TEST_SH = new_test_sh(DATASET_TAG)
 
@@ -142,7 +141,9 @@ _CLASS_RE = re.compile(
     re.VERBOSE,
 )
 
-_NAMESPACE_RE = re.compile(r"^\s*namespace\s+[A-Za-z_][A-Za-z0-9_\\]*\s*;\s*$", re.MULTILINE)
+_NAMESPACE_RE = re.compile(
+    r"^\s*namespace\s+[A-Za-z_][A-Za-z0-9_\\]*\s*;\s*$", re.MULTILINE
+)
 
 _USE_RE = re.compile(
     r"^\s*use\s+(?:function\s+|const\s+)?[A-Za-z_][A-Za-z0-9_\\,\s{}]*;\s*$",
@@ -323,14 +324,18 @@ def rewrite_test_solution(src: str) -> tuple[str | None, str]:
     # 4. Sanity check: at least one ``function test`` method or ``@test``
     #    annotation. If none, the verifier will report tests_run=0 even
     #    after we patch.
-    if not re.search(r"function\s+test[A-Za-z0-9_]*\s*\(", inner, re.IGNORECASE) \
-            and "@test" not in inner.lower():
+    if (
+        not re.search(r"function\s+test[A-Za-z0-9_]*\s*\(", inner, re.IGNORECASE)
+        and "@test" not in inner.lower()
+    ):
         return None, "no_test_methods"
 
     # 5. Emit rewritten file.
     header = "<?php declare(strict_types=1);\n\n"
     header += TS_PATCH_MARKER + "\n"
-    header += "// Original class signature rewritten by v6 patcher; namespace dropped.\n\n"
+    header += (
+        "// Original class signature rewritten by v6 patcher; namespace dropped.\n\n"
+    )
     if uses:
         header += "\n".join(uses) + "\n\n"
     new_src = (
@@ -488,7 +493,9 @@ def main() -> int:
             print(line, flush=True)
 
     print()
-    print(f"=== v6 patcher summary (dry_run={args.dry_run}, lint={not args.no_lint}) ===")
+    print(
+        f"=== v6 patcher summary (dry_run={args.dry_run}, lint={not args.no_lint}) ==="
+    )
     for k, v in sorted(counts.items()):
         print(f"  {k}: {v}")
     print(f"  total: {n_total}")

@@ -2,7 +2,6 @@
 """Query sandbox_jobs for entries containing mean_drop_ei_tasks_dropped in stats JSON."""
 
 import csv
-import json
 import os
 import sys
 
@@ -26,7 +25,10 @@ def main():
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set", file=sys.stderr)
+        print(
+            "Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     client = create_client(url, key)
@@ -59,7 +61,9 @@ def main():
         for _, value in find_field(stats, "mean_drop_ei_tasks_dropped"):
             # Extract accuracy from metrics list
             metrics = row.get("metrics") or []
-            accuracy = next((m["value"] for m in metrics if m.get("name") == "accuracy"), None)
+            accuracy = next(
+                (m["value"] for m in metrics if m.get("name") == "accuracy"), None
+            )
 
             # Extract mean_drop_ei_reward from stats
             reward_val = None
@@ -67,19 +71,30 @@ def main():
                 reward_val = rv
                 break
 
-            results.append({
-                "id": row["id"],
-                "job_name": row["job_name"],
-                "accuracy": accuracy,
-                "mean_drop_ei_reward": reward_val,
-                "mean_drop_ei_tasks_dropped": value,
-            })
+            results.append(
+                {
+                    "id": row["id"],
+                    "job_name": row["job_name"],
+                    "accuracy": accuracy,
+                    "mean_drop_ei_reward": reward_val,
+                    "mean_drop_ei_tasks_dropped": value,
+                }
+            )
 
     print(f"Found {len(results)} entries with mean_drop_ei_tasks_dropped")
 
     out_path = "/Users/benjaminfeuer/Documents/mean_drop_ei_tasks_dropped.csv"
     with open(out_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["id", "job_name", "accuracy", "mean_drop_ei_reward", "mean_drop_ei_tasks_dropped"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "id",
+                "job_name",
+                "accuracy",
+                "mean_drop_ei_reward",
+                "mean_drop_ei_tasks_dropped",
+            ],
+        )
         writer.writeheader()
         writer.writerows(results)
 

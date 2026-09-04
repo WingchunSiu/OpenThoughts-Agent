@@ -70,6 +70,7 @@ Constraints (per upload spec):
   - Only `tests/test.sh` is touched. instruction.md, TestSolution.php,
     environment/Dockerfile, etc. are preserved verbatim.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,8 +84,8 @@ PATCH_MARKER = (
 
 # Markers from earlier patch generations — we want to overwrite all of these.
 PRIOR_MARKERS = (
-    "# --- laion exp_rpt_stack-php-v2 patch: tests_found gate ---",       # v2-v2
-    "# --- laion v3 patch: tests_found gate ---",                          # stack-php-large v3 misapplied
+    "# --- laion exp_rpt_stack-php-v2 patch: tests_found gate ---",  # v2-v2
+    "# --- laion v3 patch: tests_found gate ---",  # stack-php-large v3 misapplied
     "# --- laion exp_rpt_stack-php-v2 v3 patch: phpunit_xml + tests_found gate ---",  # v3
 )
 

@@ -34,7 +34,7 @@ _INSTRUCTION_HEADER = (
     "You are a workplace assistant agent. Read the conversation below. "
     "Decide what single tool you would invoke next, then write a JSON object "
     "to `/app/answer.txt` of the form:\n\n"
-    "    {\"name\": \"<tool_name>\", \"arguments\": { ... }}\n\n"
+    '    {"name": "<tool_name>", "arguments": { ... }}\n\n'
     "The verifier compares your emitted name + arguments against the expected "
     "next-step call captured from the upstream environment.\n\n"
     "Note: this is a lossy single-step conversion of a multi-turn stateful "
@@ -79,7 +79,9 @@ def convert_agent_workplace(row: dict, row_idx: int) -> HarborTask | None:
         "agent-workplace",
         str(rid) + "|" + cat + "|" + json.dumps(expected[0], sort_keys=True),
     )
-    instr = sanitize_text(_INSTRUCTION_HEADER + prompt, field_name="instruction", max_len=128 * 1024)
+    instr = sanitize_text(
+        _INSTRUCTION_HEADER + prompt, field_name="instruction", max_len=128 * 1024
+    )
     return HarborTask(
         task_id=task_id,
         instruction_md=instr,

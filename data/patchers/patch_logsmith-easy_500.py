@@ -78,6 +78,7 @@ USER agent
 # Patching logic
 # ---------------------------------------------------------------------------
 
+
 def patch_task(
     task_dir: Path,
     output_dir: Path | None = None,
@@ -167,8 +168,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Patch logsmith tasks: restructure to environment/Dockerfile + tests/test.sh, remove COPY seeds/",
     )
-    parser.add_argument(
-        "tasks_dir", help="Root directory containing task folders")
+    parser.add_argument("tasks_dir", help="Root directory containing task folders")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -187,7 +187,8 @@ def main():
         raise SystemExit(f"Not a directory: {tasks_root}")
 
     task_dirs = sorted(
-        d for d in tasks_root.iterdir()
+        d
+        for d in tasks_root.iterdir()
         if d.is_dir() and (d / "instruction.md").exists()
     )
     print(f"Found {len(task_dirs)} tasks in {tasks_root}")
@@ -199,8 +200,7 @@ def main():
     totals: dict[str, int] = {}
     errors = 0
     for td in task_dirs:
-        changes = patch_task(
-            td, output_dir=args.output_dir, dry_run=args.dry_run)
+        changes = patch_task(td, output_dir=args.output_dir, dry_run=args.dry_run)
         if changes.get("error"):
             errors += 1
             print(f"  ERROR {td.name}: {changes.get('reason')}")

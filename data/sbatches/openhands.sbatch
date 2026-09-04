@@ -222,7 +222,7 @@ start_vllm_for_shard() {
             VLLM_TOOL_CALL_PARSER="glm45" \
             VLLM_REASONING_PARSER="glm45" \
             SERVE_HTTP_PORT="$api_port" \
-        $PYTHON_BIN ${DCAGENT_DIR}/scripts/vllm/openhands_dp_debug.py \
+        $PYTHON_BIN ${DCAGENT_DIR}/hpc/vllm/openhands_dp_debug.py \
         >> "$vllm_log" 2>&1 &
 
     VLLM_PIDS[$shard_idx]=$!

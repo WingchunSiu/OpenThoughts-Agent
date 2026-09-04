@@ -39,6 +39,14 @@ COPY docker ./docker
 ENV UV_HTTP_TIMEOUT=300
 ENV UV_RETRIES=5
 RUN . /opt/openthoughts/.venv/bin/activate && uv pip install -e ".[datagen,cloud,harbor-all]"
+# Harbor is a fast-moving canonical dependency.  Pinning the merged main
+# revision here makes the image self-consistent; the bundled uv.lock remains
+# the worker runtime authority and is updated alongside this pin.
+ENV HARBOR_COMMIT=41f4320c0471ea3362a6d3160df8b6c75f0126f7
+RUN . /opt/openthoughts/.venv/bin/activate && \
+    uv pip install --no-deps --force-reinstall \
+      "harbor[daytona] @ git+https://github.com/marin-community/harbor.git@${HARBOR_COMMIT}" && \
+    python -c "import harbor, importlib.metadata as m; print('baked harbor', m.version('harbor'), harbor.__file__)"
 RUN echo "ulimit -n 65535" >> /etc/profile.d/openthoughts-ulimit.sh
 
 ENV NVIDIA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7

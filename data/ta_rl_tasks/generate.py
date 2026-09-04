@@ -21,17 +21,17 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from datasets import Dataset, load_dataset
-from huggingface_hub import snapshot_download
+from datasets import Dataset, load_dataset  # noqa: E402
+from huggingface_hub import snapshot_download  # noqa: E402
 
-from data.ta_rl_tasks.utils import (
+from data.ta_rl_tasks.utils import (  # noqa: E402
     commands_from_trace,
     create_engine,
     generate_tests,
     read_text,
     write_metadata,
 )
-from scripts.sandboxes.tasks_parquet_converter import from_parquet
+from scripts.sandboxes.tasks_parquet_converter import from_parquet  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -104,18 +104,24 @@ def build_trace_lookup(traces: Dataset) -> Dict[str, Dict[str, any]]:
     for row in traces:
         trial_name = row.get("trial_name") or row.get("task_path") or row.get("path")
         if not isinstance(trial_name, str) or not trial_name.strip():
-            LOGGER.debug("Skipping trace row lacking task identifier: %s", sorted(row.keys()))
+            LOGGER.debug(
+                "Skipping trace row lacking task identifier: %s", sorted(row.keys())
+            )
             continue
         key = _normalize_key(trial_name)
         if key in lookup:
-            LOGGER.debug("Duplicate trace detected for %s; keeping the first occurrence", key)
+            LOGGER.debug(
+                "Duplicate trace detected for %s; keeping the first occurrence", key
+            )
             continue
         lookup[key] = row
     LOGGER.info("Indexed %s traces", len(lookup))
     return lookup
 
 
-def write_solution(dest_dir: Path, *, commands: List[str], trace: Dict[str, any]) -> Dict[str, any]:
+def write_solution(
+    dest_dir: Path, *, commands: List[str], trace: Dict[str, any]
+) -> Dict[str, any]:
     if not commands:
         return {}
 
@@ -128,7 +134,9 @@ def write_solution(dest_dir: Path, *, commands: List[str], trace: Dict[str, any]
         "",
         f"# Commands reconstructed from trace '{trace.get('trial_name')}'",
     ]
-    body.append(f"# Trace success: {trace.get('success')} | command lines: {len(commands)}")
+    body.append(
+        f"# Trace success: {trace.get('success')} | command lines: {len(commands)}"
+    )
     body.append("")
     body.extend(commands)
     body_text = "\n".join(body)
@@ -358,7 +366,9 @@ def upload_dataset(dataset_dir: Path, *, upload_repo: str) -> bool:
 
 
 def main(max_tasks: Optional[int] = None) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     for config in MODEL_CONFIGS:
         LOGGER.info("Starting generation for %s", config["model"])

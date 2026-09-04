@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "OT-Agent HPC launch and data tooling"
 requires-python = ">=3.12"
 dependencies = [
-    # Core HPC + data infrastructure deps
     "pydantic>=2.0.0,<3.0.0",
     "pyyaml",
     "omegaconf",
@@ -19,7 +18,7 @@ dependencies = [
     "datasets>=2.0.0",
     "supabase>=2.22.3",
     "python-dotenv>=1.0.0",
-    "harbor[daytona] @ git+https://github.com/harbor-framework/harbor.git@penfever/otagent-latest",
+    "harbor[daytona] @ git+https://github.com/marin-community/harbor.git@main",
     "dynamic-semaphore @ git+https://github.com/penfever/dynamic-semaphore",
     "google-cloud-storage",
     "h5py",
@@ -27,7 +26,7 @@ dependencies = [
     "rapidfuzz",
     "huggingface_hub",
     "uv>=0.4.17",
-    "socksio",  # SOCKS5 proxy support for httpx (needed for JSC SSH tunnels)
+    "socksio",
 ]
 
 [project.optional-dependencies]
@@ -38,86 +37,45 @@ datagen-cpu = [
     "trufflehog>=2.2.0",
 ]
 datagen = [
+    "boto3",
+    "gcsfs",
+    "s3fs",
     "ray[default]>=2.50.0",
     "torch-c-dlpack-ext==0.1.4",
     "google-cloud-aiplatform>=1.67.0",
     "google-genai>=0.1.0",
-    "vllm[flashinfer]>=0.11.2,<=0.16.0; platform_system != 'Darwin'",
-    "transformers==4.57.3",
+    "vllm[flashinfer]>=0.19.0,<=0.20.0; platform_system != 'Darwin'",
+    "transformers>=5.3.0,<=5.5.3",
     "torch>=2.9.0,<=2.10.0; platform_system != 'Darwin'",
     "accelerate==1.12.0",
     "trufflehog>=2.2.0",
+    "marin-iris @ git+https://github.com/marin-community/marin.git@839e5e9e18299d750e6009b58f4535f77f9edafa#subdirectory=lib/iris",
 ]
-# ROCm/AMD GPU variant for datagen (OLCF Frontier MI250X) — REMOVED as a
-# real extra 2026-05-21. The rocm wheel server pins drifted away from
-# what this extra was pinning (torch 2.8 vs 2.8+rocm6.4, torchvision 0.23
-# vs 0.24.1+d801a34, etc.) and uv's universal resolver blocked iris's
-# worker-side `uv sync`. Re-introduce as a real extra only after pinning
-# every dep to versions that actually match `wheels.vllm.ai/rocm/...` AND
-# `download.pytorch.org/whl/rocm6.4`.
-#
-# ROCm users: don't pip install -e ".[datagen-rocm]". Use the install
-# script:
-#   ./hpc/setup_rl_env.sh --rocm
-# which does the right pip install --index-url + --prerelease=allow
-# combination directly, bypassing pyproject extras.
 datagen-swesmith = [
     "swesmith",
 ]
-# TPU variant for datagen + eval (Harbor + vLLM-TPU + Daytona sandbox backend).
-# Eval uses the same Harbor + vLLM path as datagen, so this single extra covers both.
-# Mirrors marin's lib/marin/pyproject.toml [vllm] extra (which targets the marin
-# TPU stack) but bumped to vllm-tpu 0.20.0 / tpu-inference 0.20.0.
-#
-# Install (run from a TPU worker via scripts/iris/dev_tpu.py, or from CI):
-#   uv pip install -e ".[datagen-tpu]"
-#
-# torch + torchvision are routed to the CPU index via [tool.uv.sources] below
-# so they coexist with the cu128 extra-index-url that [datagen] needs.
-#
-# Validated combination (resolved 2026-05-21 on a marin v6e-4, Python 3.12.13):
-#   vllm-tpu==0.20.0, tpu-inference==0.20.0, torchax==0.0.11
-#   jax==0.9.2, jaxlib==0.9.2, libtpu==0.0.39  (pulled transitively)
-#   torch==2.10.0+cpu, torchvision==0.25.0+cpu, triton==3.6.0
-#   transformers==5.5.3, huggingface-hub==1.16.0, accelerate==1.12.0
-#   harbor==0.7.0 (@penfever/otagent-latest), daytona==0.178.0
-#   ray==2.55.1, google-genai==2.5.0
-# Stage C smoke: Qwen/Qwen3.5-4B (hybrid GDN, 24 mamba + 8 attn layers) on tp=4,
-#   bf16, max_model_len=1024, max_num_seqs=2, gpu_memory_utilization=0.70,
-#   limit_mm_per_prompt={"image":0,"video":0}. 180 tok/s decode; cold init 360s,
-#   warm (XLA cache hit) 100s.
 datagen-tpu = [
-    # API-based datagen (mirrors datagen-cpu — works regardless of accelerator)
     "google-cloud-aiplatform>=1.67.0",
     "google-genai>=0.1.0",
     "accelerate==1.12.0",
     "trufflehog>=2.2.0",
-    # Local-model inference engine: vLLM TPU backend (PyPI; not built from source).
-    # vllm-tpu and tpu-inference must match versions — they're released together.
     "vllm-tpu==0.20.0",
     "tpu-inference==0.20.0",
-    # jax / jaxlib / libtpu are intentionally not pinned here — let vllm-tpu's
-    # transitive resolves pick a compatible TPU runtime cluster. If a future
-    # build needs a stricter floor, add it after dev_tpu.py confirms what
-    # versions actually land.
-    # vllm-tpu uses Triton's CPU dispatch path on the TPU host; Linux x86_64 only.
     "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
-    # CPU torch (torch_xla path); see [tool.uv.sources] for index routing.
     "torch==2.10.0",
     "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
     "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
-    # Datagen orchestration. transformers >= 5.3.0 for Qwen 3.5 hybrid GDN
-    # support (matches sft-qwen35 floor); vllm-tpu 0.20.0 may need adjustment
-    # if it pins an older transformers — dev_tpu.py will surface that.
     "ray[default]>=2.50.0",
     "transformers>=5.3.0",
+    "marin-iris @ git+https://github.com/marin-community/marin.git@839e5e9e18299d750e6009b58f4535f77f9edafa#subdirectory=lib/iris",
+    "marin-rigging @ git+https://github.com/marin-community/marin.git@839e5e9e18299d750e6009b58f4535f77f9edafa#subdirectory=lib/rigging",
 ]
 cloud = [
     "skypilot>=0.6.1",
-    "google-api-python-client",  # GCP support for SkyPilot
-    "boto3",  # S3-compatible object storage (MinIO, AWS S3)
-    "s3fs",   # Filesystem interface for S3/MinIO
+    "google-api-python-client",
+    "boto3",
+    "s3fs",
 ]
 cloud-aws = [
     "skypilot>=0.6.1",
@@ -125,7 +83,6 @@ cloud-aws = [
 ]
 cloud-lambda = [
     "skypilot>=0.6.1",
-    # Lambda Cloud only needs skypilot + API key configuration
 ]
 cloud-vast = [
     "skypilot>=0.6.1",
@@ -133,7 +90,6 @@ cloud-vast = [
 ]
 cloud-kubernetes = [
     "skypilot>=0.6.1",
-    # Kubernetes needs kubectl + kubeconfig, no extra Python deps
 ]
 cloud-all = [
     "skypilot>=0.6.1",
@@ -142,28 +98,9 @@ cloud-all = [
     "vastai-sdk>=0.1.12",
 ]
 rl = [
-    # SkyRL training framework - install with vllm extra for inference
-    # Uses mlfoundations fork with custom patches
     "skyrl[vllm] @ git+https://github.com/mlfoundations/skyrl.git",
-    "Jinja2",  # For chat templates
+    "Jinja2",
 ]
-# ROCm/AMD GPU variant for RL (e.g., OLCF Frontier with MI250X)
-# Install with: uv pip install -e ".[rl-rocm]" --index-url https://download.pytorch.org/whl/rocm6.4
-# Or use: ./hpc/setup_rl_env.sh --rocm
-# rl-rocm — REMOVED as a real extra 2026-05-21 for the same reason as
-# datagen-rocm (rocm wheel pins drift away from PyPI-side pins). ROCm RL
-# users: ./hpc/setup_rl_env.sh --rocm.
-# IMPORTANT: RL and datagen extras are INCOMPATIBLE due to version conflicts:
-#   - RL (SkyRL): torch==2.8.0, vllm==0.11.0, Python 3.12 required
-#   - datagen:    torch==2.9.0, vllm==0.11.2, Python 3.10+
-# The RL environment must be set up separately using: ./hpc/setup_rl_env.sh
-# The RL launcher will automatically use the separate environment.
-# See hpc/rl_launch_utils.py for details.
-# SFT for Qwen3.5 models (requires transformers v5+ for hybrid GDN architecture)
-# IMPORTANT: Incompatible with datagen/RL extras (transformers 4.x vs 5.x).
-# Must be installed in a separate environment.
-# Install with:
-#   uv pip install -e ".[sft-qwen35]"
 sft-qwen35 = [
     "transformers>=5.3.0",
     "torch>=2.6.0",
@@ -178,12 +115,7 @@ sft-qwen35 = [
     "liger-kernel>=0.5.0",
     "trufflehog>=2.2.0",
 ]
-# curator extra removed 2026-05-21 — bespokelabs-curator pinned
-# datasets<4.0.0 which became incompatible with harbor==0.7.0 (datasets>=4.4.1).
-# Not used by >99% of workloads. Re-add if a newer bespokelabs-curator
-# release relaxes the datasets cap.
 
-# Harbor environment backends
 harbor-docker = [
     "docker>=7.0.0",
 ]
@@ -194,11 +126,6 @@ harbor-all = [
     "docker>=7.0.0",
     "modal>=0.60.0",
 ]
-# Beam cluster setup (self-hosted Beta9 on GKE) — REMOVED 2026-05-21.
-# beta9>=0.1.0 pinned rich<13.7 and uvicorn<0.29 which became incompatible
-# with harbor==0.7.0's rich>=14.1.0 / uvicorn>=0.38.0 (base dep). Re-add
-# when a newer beta9 release relaxes those caps. Beam/Beta9 workflows were
-# shelved at the time of removal.
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -227,31 +154,48 @@ exclude = [
     "tmp*",
 ]
 
+[tool.ruff]
+# Submodules carry their own tooling and are never formatted from this repo.
+line-length = 88
+extend-exclude = [
+    "sft/llamafactory",
+    "sft/axolotl",
+    # Deliberately-buggy sample repos used by the tokviz analyzer fixtures.
+    "scripts/analysis/tokviz/repos",
+    "OpenThoughts_Agent.egg-info",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["few-shots", "templates", "*.egg-info", ".git"]
+markers = [
+    "gpu: needs a CUDA/accelerator device (torch/vllm)",
+    "cluster: needs a live SLURM or iris/CoreWeave cluster (ssh/squeue/sbatch)",
+    "daytona: needs live Daytona sandbox API + key",
+    "hf: needs HuggingFace hub access (dataset/model download or token)",
+    "supabase: needs Supabase registry creds",
+    "net: needs outbound network / a live LLM or 3rd-party API (LiteLLM/OpenAI/S3)",
+    "slow: long-running (minutes+); excluded from the fast CI lane",
+    "integration: multi-component end-to-end (implies at least one of the above)",
+]
+
 [tool.uv.pip]
-# Default: CUDA 12.8 PyTorch index
-# For ROCm/AMD GPUs (e.g., Frontier), use instead:
-#   uv pip install ... --index-url https://download.pytorch.org/whl/rocm6.4
 extra-index-url = ["https://download.pytorch.org/whl/cu128"]
 
 [dependency-groups]
-# Empty `dev` group declared so `uv sync --no-group dev` (e.g. iris worker
-# entrypoint) doesn't error with "Group `dev` is not defined". Add dev-only
-# tooling here if/when needed.
-dev = []
+dev = [
+    "boto3",
+    "matplotlib",
+    "marin-style @ git+https://github.com/marin-community/marin-style@ccbf03e7ca58486d61fff7a4e73031673d7fd8a4",
+    "marin-iris @ git+https://github.com/marin-community/marin.git@839e5e9e18299d750e6009b58f4535f77f9edafa#subdirectory=lib/iris",
+    "pytest",
+    "sympy>=1.13.3,<1.15",
+]
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
 
-# Declare mutually exclusive extras so uv's universal resolver doesn't try to
-# satisfy all variants in one solution. Without this, `uv sync` (e.g. iris's
-# worker-side install) fails with "your project requires datagen and
-# datagen-rocm" even when no extras are explicitly selected — the variants
-# have incompatible torch pins by design.
 conflicts = [
-    # The accelerator-flavored extras pin mutually incompatible torch / vllm
-    # versions (CUDA cu128, ROCm 6.4, TPU/XLA CPU). You only ever install one
-    # at a time — declaring the whole set as mutually exclusive lets uv do
-    # per-extra resolves instead of trying to find one solution for all.
     [
         { extra = "datagen" },
         { extra = "datagen-tpu" },
@@ -260,18 +204,11 @@ conflicts = [
     ],
 ]
 
-# Named PyTorch index for the TPU extra. `explicit = true` means it is ONLY
-# consulted when something is mapped to it in [tool.uv.sources], so the global
-# cu128 extra-index-url above continues to serve the [datagen]/[rl] extras.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
-# Per-extra package source routing. Each entry says "when this extra is being
-# resolved, pull this package from this named index" — so the universal
-# resolver doesn't try to find a PyTorch build that satisfies all variants
-# simultaneously (CUDA cu128 vs CPU+XLA).
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cpu", extra = "datagen-tpu" },
@@ -279,17 +216,3 @@ torch = [
 torchvision = [
     { index = "pytorch-cpu", extra = "datagen-tpu" },
 ]
-
-# =============================================================================
-# ROCm Installation Notes (for AMD GPUs like Frontier MI250X)
-# =============================================================================
-# ROCm extras (datagen-rocm, rl-rocm) require the ROCm PyTorch index:
-#
-#   # For datagen on ROCm:
-#   uv pip install -e ".[datagen-rocm]" --index-url https://download.pytorch.org/whl/rocm6.4
-#
-#   # For RL on ROCm (preferred method is setup script):
-#   ./hpc/setup_rl_env.sh --rocm
-#
-# See: https://docs.olcf.ornl.gov/software/analytics/pytorch_frontier.html
-# =============================================================================

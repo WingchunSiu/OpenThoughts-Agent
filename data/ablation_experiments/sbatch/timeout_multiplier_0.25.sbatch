@@ -211,7 +211,7 @@ start_vllm_for_shard() {
             VLLM_ALL2ALL_BACKEND="pplx" \
             VLLM_ENABLE_EPLB="false" \
             SERVE_HTTP_PORT="$api_port" \
-        $PYTHON_BIN /scratch/10000/eguha3/dc-agent/scripts/vllm/dp_debug.py \
+        $PYTHON_BIN /scratch/10000/eguha3/dc-agent/hpc/vllm/dp_debug.py \
         >> "$vllm_log" 2>&1 &
 
     VLLM_PIDS[$shard_idx]=$!

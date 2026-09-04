@@ -113,8 +113,15 @@ def register(
                 iris_job_id=excluded.iris_job_id,
                 notes=excluded.notes
             """,
-            (hf_repo, gcs_uri, mirrored_at_iso, size_bytes,
-             file_count, iris_job_id, notes),
+            (
+                hf_repo,
+                gcs_uri,
+                mirrored_at_iso,
+                size_bytes,
+                file_count,
+                iris_job_id,
+                notes,
+            ),
         )
         conn.execute("COMMIT")
 
@@ -152,6 +159,7 @@ def refresh_from_gcs(gcs_prefix: str, *, verbose: bool = False) -> list[MirrorRe
     Requires fsspec + gcsfs (already in OT-Agent's deps).
     """
     import gcsfs
+
     fs = gcsfs.GCSFileSystem()
     gcs_prefix = gcs_prefix.rstrip("/")
 
@@ -185,15 +193,17 @@ def refresh_from_gcs(gcs_prefix: str, *, verbose: bool = False) -> list[MirrorRe
             notes=data.get("notes"),
         )
         register(**record_kwargs)
-        found.append(MirrorRecord(
-            hf_repo=hf_repo,
-            gcs_uri=gcs_uri,
-            mirrored_at=record_kwargs["mirrored_at_iso"],
-            size_bytes=record_kwargs["size_bytes"],
-            file_count=record_kwargs["file_count"],
-            iris_job_id=record_kwargs["iris_job_id"],
-            notes=record_kwargs["notes"],
-        ))
+        found.append(
+            MirrorRecord(
+                hf_repo=hf_repo,
+                gcs_uri=gcs_uri,
+                mirrored_at=record_kwargs["mirrored_at_iso"],
+                size_bytes=record_kwargs["size_bytes"],
+                file_count=record_kwargs["file_count"],
+                iris_job_id=record_kwargs["iris_job_id"],
+                notes=record_kwargs["notes"],
+            )
+        )
         if verbose:
             print(f"[mirror-registry] registered {hf_repo} -> {gcs_uri}")
     return found
@@ -202,6 +212,7 @@ def refresh_from_gcs(gcs_prefix: str, *, verbose: bool = False) -> list[MirrorRe
 # ---------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------
+
 
 def _humanize_bytes(n: Optional[int]) -> str:
     if n is None:
@@ -229,24 +240,30 @@ def _main(argv: Optional[list[str]] = None) -> int:
     ps = sub.add_parser("show", help="Show one entry by HF repo.")
     ps.add_argument("hf_repo")
 
-    pa = sub.add_parser("add", help="Manually register a mirror "
-                                     "(post-hoc, when the mirror job didn't "
-                                     "write a manifest).")
+    pa = sub.add_parser(
+        "add",
+        help="Manually register a mirror "
+        "(post-hoc, when the mirror job didn't "
+        "write a manifest).",
+    )
     pa.add_argument("--hf-repo", required=True)
-    pa.add_argument("--gcs-uri", required=True,
-                    help="gs:// URI of the mirror directory.")
-    pa.add_argument("--mirrored-at", default=None,
-                    help="ISO-8601 timestamp; defaults to now.")
+    pa.add_argument(
+        "--gcs-uri", required=True, help="gs:// URI of the mirror directory."
+    )
+    pa.add_argument(
+        "--mirrored-at", default=None, help="ISO-8601 timestamp; defaults to now."
+    )
     pa.add_argument("--iris-job-id", default=None)
     pa.add_argument("--notes", default=None)
 
-    pf = sub.add_parser("forget",
-                        help="Remove an entry (does NOT delete GCS).")
+    pf = sub.add_parser("forget", help="Remove an entry (does NOT delete GCS).")
     pf.add_argument("hf_repo")
 
-    pr = sub.add_parser("refresh",
-                        help="Scan a GCS prefix for .mirror_manifest.json "
-                             "files and populate the local cache.")
+    pr = sub.add_parser(
+        "refresh",
+        help="Scan a GCS prefix for .mirror_manifest.json "
+        "files and populate the local cache.",
+    )
     pr.add_argument("--gcs-prefix", default="gs://marin-eu-west4/ot-agent/models")
 
     args = p.parse_args(argv)
@@ -259,7 +276,9 @@ def _main(argv: Optional[list[str]] = None) -> int:
         if not rows:
             print("No mirrors registered. Use `add` or `refresh` to populate.")
             return 0
-        header = f"{'HF_REPO':<55} {'SIZE':>10}  {'FILES':>6}  {'MIRRORED_AT':<25}  GCS_URI"
+        header = (
+            f"{'HF_REPO':<55} {'SIZE':>10}  {'FILES':>6}  {'MIRRORED_AT':<25}  GCS_URI"
+        )
         print(header)
         print("-" * len(header))
         for r in rows:
@@ -280,6 +299,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
 
     if args.cmd == "add":
         from datetime import datetime, timezone
+
         ts = args.mirrored_at or datetime.now(timezone.utc).isoformat()
         register(
             hf_repo=args.hf_repo,
@@ -306,4 +326,5 @@ def _main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(_main())

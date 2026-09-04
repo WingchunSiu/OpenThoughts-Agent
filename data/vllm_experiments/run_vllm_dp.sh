@@ -72,7 +72,7 @@ srun --export="$SRUN_EXPORT_ENV" --nodes=1 --ntasks=1 --overlap -w "$HEAD_NODE" 
         VLLM_ALL2ALL_BACKEND="${VLLM_ALL2ALL_BACKEND:-pplx}" \
         VLLM_ENABLE_EPLB="${VLLM_ENABLE_EPLB:-false}" \
         VLLM_EPLB_NUM_REDUNDANT_EXPERTS="${VLLM_EPLB_NUM_REDUNDANT_EXPERTS:-32}" \
-    $PYTHON_BIN ${DCAGENT_DIR}/scripts/vllm/dp_debug.py \
+    $PYTHON_BIN ${DCAGENT_DIR}/hpc/vllm/dp_debug.py \
     >> "$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
 

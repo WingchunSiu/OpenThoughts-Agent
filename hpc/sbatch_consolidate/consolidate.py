@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import urlparse
 
-from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi, snapshot_download
+from huggingface_hub import (
+    CommitOperationAdd,
+    CommitOperationDelete,
+    HfApi,
+    snapshot_download,
+)
 from huggingface_hub.utils import HfHubHTTPError
 
 
@@ -33,13 +38,23 @@ def _copy_repo_files(
         return
 
     skip_suffixes = {".bin", ".pt", ".ckpt"}
-    skip_prefixes = ("pytorch_model", "global_step", "checkpoint", "mp_rank", "zero_pp_rank")
+    skip_prefixes = (
+        "pytorch_model",
+        "global_step",
+        "checkpoint",
+        "mp_rank",
+        "zero_pp_rank",
+    )
     skip_dirs = {"logs", "wandb"}
 
     for item in src.rglob("*"):
         if item.is_dir():
             relative = item.relative_to(src)
-            if relative.name in skip_dirs or relative.name.startswith(skip_prefixes) or relative.name.startswith("checkpoint"):
+            if (
+                relative.name in skip_dirs
+                or relative.name.startswith(skip_prefixes)
+                or relative.name.startswith("checkpoint")
+            ):
                 continue
             continue
 
@@ -92,7 +107,7 @@ def _infer_model_type(candidates: Iterable[Path]) -> Optional[str]:
 
 
 def _zero_to_fp32_script(project_root: Path) -> Path:
-    script_path = project_root / "scripts" / "consolidate" / "zero_to_fp32.py"
+    script_path = project_root / "hpc" / "zero_to_fp32.py"
     if not script_path.exists():
         raise FileNotFoundError(f"Bundled zero_to_fp32.py not found at {script_path}")
     return script_path
@@ -114,7 +129,10 @@ def _load_run_summary(paths: Iterable[Path]) -> dict:
         try:
             return json.loads(path.read_text())
         except Exception as exc:  # pragma: no cover
-            print(f"Warning: failed to parse run summary at {path}: {exc}", file=sys.stderr)
+            print(
+                f"Warning: failed to parse run summary at {path}: {exc}",
+                file=sys.stderr,
+            )
     return {}
 
 
@@ -139,18 +157,26 @@ def _extract_wandb_run(url: Optional[str]) -> Optional[str]:
     return None
 
 
-def _maybe_register_with_db(project_root: Path, hf_repo: str, run_summary: dict, base_repo_hint: Optional[str]) -> None:
+def _maybe_register_with_db(
+    project_root: Path, hf_repo: str, run_summary: dict, base_repo_hint: Optional[str]
+) -> None:
     wandb_run = _extract_wandb_run(run_summary.get("wandb_link"))
     dataset_name = run_summary.get("dataset_name")
     base_model = run_summary.get("base_model_name") or base_repo_hint
     training_type = run_summary.get("training_type") or "SFT"
     if not wandb_run or not dataset_name or not base_model:
-        print("Warning: Missing wandb/dataset/base-model info; skipping Supabase registration.", file=sys.stderr)
+        print(
+            "Warning: Missing wandb/dataset/base-model info; skipping Supabase registration.",
+            file=sys.stderr,
+        )
         return
 
     script_path = project_root / "scripts" / "database" / "manual_db_push.py"
     if not script_path.exists():
-        print(f"Warning: manual_db_push not found at {script_path}; skipping registration.", file=sys.stderr)
+        print(
+            f"Warning: manual_db_push not found at {script_path}; skipping registration.",
+            file=sys.stderr,
+        )
         return
 
     cmd = [
@@ -187,7 +213,9 @@ def consolidate(
 ) -> None:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HF_API_TOKEN")
     if not token:
-        raise RuntimeError("HF_TOKEN environment variable is required for consolidation.")
+        raise RuntimeError(
+            "HF_TOKEN environment variable is required for consolidation."
+        )
 
     if not os.environ.get("DCFT"):
         os.environ["DCFT"] = str(project_root)
@@ -265,7 +293,9 @@ def consolidate(
         )
 
     for item in list(final_dir.rglob("*")):
-        if item.is_dir() and (item.name in {"logs", "wandb"} or item.name.startswith("checkpoint")):
+        if item.is_dir() and (
+            item.name in {"logs", "wandb"} or item.name.startswith("checkpoint")
+        ):
             shutil.rmtree(item, ignore_errors=True)
 
     print("Copying merged weights...")
@@ -281,28 +311,46 @@ def consolidate(
     if detected_model_type:
         print(f"Detected model type: {detected_model_type}")
     else:
-        print("Warning: unable to infer model type from configuration.", file=sys.stderr)
+        print(
+            "Warning: unable to infer model type from configuration.", file=sys.stderr
+        )
 
-    run_summary = _load_run_summary([staged_input_dir / "run_summary.json", final_dir / "run_summary.json"])
+    run_summary = _load_run_summary(
+        [staged_input_dir / "run_summary.json", final_dir / "run_summary.json"]
+    )
 
     if push_to_hub:
-        print(f"Uploading consolidated checkpoint to Hugging Face repo {output_repo}...")
+        print(
+            f"Uploading consolidated checkpoint to Hugging Face repo {output_repo}..."
+        )
         api = HfApi()
         try:
-            existing_paths = api.list_repo_files(repo_id=output_repo, repo_type="model", token=token)
+            existing_paths = api.list_repo_files(
+                repo_id=output_repo, repo_type="model", token=token
+            )
         except HfHubHTTPError as exc:
             if exc.response is not None and exc.response.status_code == 404:
                 print(f"Repo {output_repo} not found; creating it before upload...")
-                api.create_repo(repo_id=output_repo, repo_type="model", private=False, token=token, exist_ok=True)
+                api.create_repo(
+                    repo_id=output_repo,
+                    repo_type="model",
+                    private=False,
+                    token=token,
+                    exist_ok=True,
+                )
                 existing_paths = []
             else:
                 raise
-        operations = [CommitOperationDelete(path_in_repo=path) for path in existing_paths]
+        operations = [
+            CommitOperationDelete(path_in_repo=path) for path in existing_paths
+        ]
 
         for item in final_dir.rglob("*"):
             if item.is_file():
                 relative = item.relative_to(final_dir).as_posix()
-                operations.append(CommitOperationAdd(path_in_repo=relative, path_or_fileobj=str(item)))
+                operations.append(
+                    CommitOperationAdd(path_in_repo=relative, path_or_fileobj=str(item))
+                )
 
         api.create_commit(
             repo_id=output_repo,
@@ -324,15 +372,44 @@ def consolidate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Consolidate ZeRO sharded checkpoints into safetensors and upload.")
-    parser.add_argument("--input", required=True, help="Input source: either a local directory or a Hugging Face repo ID.")
-    parser.add_argument("--input-kind", choices=["local", "repo"], default="repo", help="Explicit input type to avoid re-detection confusion.")
-    parser.add_argument("--output-repo", required=True, help="Destination Hugging Face repo to upload the consolidated checkpoint.")
-    parser.add_argument("--base-repo", default="", help="Base repo to copy ancillary files from.")
-    parser.add_argument("--workdir", required=True, help="Working directory for consolidation artifacts.")
-    parser.add_argument("--commit-message", required=True, help="Commit message for the upload.")
-    parser.add_argument("--project-root", required=True, help="Path to OpenThoughts-Agent project root.")
-    parser.add_argument("--push-to-hub", default="true", help="Whether to upload/register the merged repo (default: true).")
+    parser = argparse.ArgumentParser(
+        description="Consolidate ZeRO sharded checkpoints into safetensors and upload."
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="Input source: either a local directory or a Hugging Face repo ID.",
+    )
+    parser.add_argument(
+        "--input-kind",
+        choices=["local", "repo"],
+        default="repo",
+        help="Explicit input type to avoid re-detection confusion.",
+    )
+    parser.add_argument(
+        "--output-repo",
+        required=True,
+        help="Destination Hugging Face repo to upload the consolidated checkpoint.",
+    )
+    parser.add_argument(
+        "--base-repo", default="", help="Base repo to copy ancillary files from."
+    )
+    parser.add_argument(
+        "--workdir",
+        required=True,
+        help="Working directory for consolidation artifacts.",
+    )
+    parser.add_argument(
+        "--commit-message", required=True, help="Commit message for the upload."
+    )
+    parser.add_argument(
+        "--project-root", required=True, help="Path to OpenThoughts-Agent project root."
+    )
+    parser.add_argument(
+        "--push-to-hub",
+        default="true",
+        help="Whether to upload/register the merged repo (default: true).",
+    )
     args = parser.parse_args()
 
     consolidate(

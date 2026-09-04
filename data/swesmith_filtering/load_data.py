@@ -43,7 +43,7 @@ def filter_and_upload_swesmith(
     rows: List[dict],
     filtered_questions: List[str],
     repo_id: str,
-    max_tasks: int = 10_000
+    max_tasks: int = 10_000,
 ) -> None:
     """Filter rows based on filtered questions and upload to HuggingFace"""
     question_to_row = {q: r for q, r in zip(questions, rows)}

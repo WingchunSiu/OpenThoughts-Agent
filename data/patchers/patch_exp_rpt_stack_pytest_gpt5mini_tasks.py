@@ -45,6 +45,7 @@ CLI mirrors ``patch_stack_pytest_synthetic_v4_tasks.py``::
 
 Target HF repo: ``laion/exp_rpt_stack-pytest-gpt5mini-v2``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,13 +56,9 @@ from pathlib import Path
 # Reuse the synthetic-v4 filter + mutation logic verbatim — same task
 # family, same scaffold. v4's docstring is the canonical design note.
 from data.patchers.patch_stack_pytest_synthetic_v4_tasks import (  # noqa: E402
-    IMPORT_TO_PIP_PKG,
-    STDLIB,
-    ALWAYS_INSTALLED,
     V4_MARKER,
     filter_one_task,
     _detect_pip_packages,
-    patch_test_sh,
 )
 
 
@@ -202,8 +199,16 @@ def main() -> int:
     print("=" * 60)
     yld = counts["keep"] / total * 100 if total else 0.0
     print(f"Total: {total}  Kept: {counts['keep']} ({yld:.1f}%)  Dry={args.dry_run}")
-    for k in ("keep", "drop_syntax", "drop_import", "drop_fixture",
-              "drop_relative", "drop_other", "patched", "patch_skipped"):
+    for k in (
+        "keep",
+        "drop_syntax",
+        "drop_import",
+        "drop_fixture",
+        "drop_relative",
+        "drop_other",
+        "patched",
+        "patch_skipped",
+    ):
         v = counts[k]
         print(f"  {k:<14}: {v:>5}")
         for ex in examples.get(k, [])[:5]:

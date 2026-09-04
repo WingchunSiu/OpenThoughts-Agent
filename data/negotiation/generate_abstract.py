@@ -56,11 +56,12 @@ class NegotiationGenerator(BaseDataGenerator):
             help="Random seed for reproducibility (default: 42).",
         )
         parser.add_argument(
-            "--source", "-s",
+            "--source",
+            "-s",
             type=str,
             default=None,
             help="Path to CraigslistBargain CSV or directory containing train.csv. "
-                 "If omitted, uses built-in synthetic items.",
+            "If omitted, uses built-in synthetic items.",
         )
         parser.add_argument(
             "--zopa-mode",
@@ -68,8 +69,8 @@ class NegotiationGenerator(BaseDataGenerator):
             choices=("filter", "resample"),
             default="filter",
             help="filter: skip rows without ZOPA; "
-                 "resample: regenerate reservations from list_price for missing/no-ZOPA rows "
-                 "(default: filter).",
+            "resample: regenerate reservations from list_price for missing/no-ZOPA rows "
+            "(default: filter).",
         )
         parser.add_argument(
             "--dataset-prefix",

@@ -186,6 +186,7 @@ def render_test_sh(run_command: str) -> str:
         """
     )
 
+
 def render_test_state_py(
     test_output_path: str,
 ) -> str:
@@ -198,7 +199,9 @@ def render_test_state_py(
         """
     )
 
-    indented_body = "\n".join(f"    {line}" if line else "" for line in test_body.splitlines())
+    indented_body = "\n".join(
+        f"    {line}" if line else "" for line in test_body.splitlines()
+    )
     return _TEST_STATE_TEMPLATE.format(
         test_output_path=test_output_path,
         test_body=indented_body.rstrip(),

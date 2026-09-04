@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -178,7 +177,9 @@ def format_report(
     lines.append("| Key | Group | Description | Notes |")
     lines.append("|-----|-------|-------------|-------|")
     for key, info in models.items():
-        lines.append(f"| {info['short']} | {info.get('group','')} | {info['label']} | {info.get('notes','')} |")
+        lines.append(
+            f"| {info['short']} | {info.get('group', '')} | {info['label']} | {info.get('notes', '')} |"
+        )
     lines.append("")
 
     # ── Compute scores ──
@@ -215,7 +216,9 @@ def format_report(
     # ── 1b. Harbor-style mean reward (flat mean across all trials) ──
     lines.append("### Mean Reward per Trial (Harbor 'accuracy' metric)")
     lines.append("")
-    lines.append("Flat mean of all trial rewards (errors=0). Matches Harbor leaderboard metric.")
+    lines.append(
+        "Flat mean of all trial rewards (errors=0). Matches Harbor leaderboard metric."
+    )
     lines.append("")
     lines.append("| Model | Mean Reward | Mean Reward (EI) | Trials | Trials (EI) |")
     lines.append("|-------|------------|-----------------|--------|------------|")
@@ -262,7 +265,9 @@ def format_report(
     # Mean-of-N (consistency)
     lines.append("## 2. Consistency (Mean-of-N, Common Tasks)")
     lines.append("")
-    lines.append("Mean-of-N penalizes models that succeed rarely; best-of-N rewards any success.")
+    lines.append(
+        "Mean-of-N penalizes models that succeed rarely; best-of-N rewards any success."
+    )
     lines.append("")
     lines.append("| Model | Best-of-N Mean | Mean-of-N Mean | Gap (luck factor) |")
     lines.append("|-------|---------------|---------------|-------------------|")
@@ -272,7 +277,9 @@ def format_report(
         best_avg = np.mean(best_scores)
         mean_avg = np.mean(mean_scores)
         gap = best_avg - mean_avg
-        lines.append(f"| {models[key]['short']} | {best_avg:.3f} | {mean_avg:.3f} | {gap:.3f} |")
+        lines.append(
+            f"| {models[key]['short']} | {best_avg:.3f} | {mean_avg:.3f} | {gap:.3f} |"
+        )
     lines.append("")
 
     # ── 3. Failure modes ──
@@ -284,8 +291,14 @@ def format_report(
         fm = failure_mode_summary(datasets[key])
         model_fm[key] = fm
         all_modes.update(fm.keys())
-    mode_order = ["success", "partial", "fail", "AgentTimeoutError",
-                  "ContextLengthExceededError", "no_result"]
+    mode_order = [
+        "success",
+        "partial",
+        "fail",
+        "AgentTimeoutError",
+        "ContextLengthExceededError",
+        "no_result",
+    ]
     mode_order = [m for m in mode_order if m in all_modes]
     mode_order += sorted(all_modes - set(mode_order))
 
@@ -298,7 +311,7 @@ def format_report(
             count = model_fm[key].get(mode, 0)
             total = len(datasets[key])
             if count > 0:
-                parts.append(f" {count} ({100*count/total:.0f}%) ")
+                parts.append(f" {count} ({100 * count / total:.0f}%) ")
             else:
                 parts.append(" - ")
         lines.append("|" + "|".join(parts) + "|")
@@ -307,8 +320,12 @@ def format_report(
     # ── 4. Context length ──
     lines.append("## 4. Context Length & Verbosity")
     lines.append("")
-    lines.append("| Model | Mean Chars | Median | P90 | Max | Mean Turns | Med Turns | P90 Turns |")
-    lines.append("|-------|-----------|--------|-----|-----|-----------|----------|----------|")
+    lines.append(
+        "| Model | Mean Chars | Median | P90 | Max | Mean Turns | Med Turns | P90 Turns |"
+    )
+    lines.append(
+        "|-------|-----------|--------|-----|-----|-----------|----------|----------|"
+    )
     for key in models:
         s = conversation_stats(datasets[key])
         lines.append(
@@ -322,11 +339,13 @@ def format_report(
     for group_name, group_keys in sorted(groups.items()):
         if len(group_keys) < 2:
             continue
-        lines.append(f"## 5. Within-Group Pairwise: {group_name} Variants (EI-filtered)")
+        lines.append(
+            f"## 5. Within-Group Pairwise: {group_name} Variants (EI-filtered)"
+        )
         lines.append("")
 
         for i, ka in enumerate(group_keys):
-            for kb in group_keys[i+1:]:
+            for kb in group_keys[i + 1 :]:
                 sa = model_mean_ei[ka]
                 sb = model_mean_ei[kb]
                 improved = regressed = unchanged = 0
@@ -345,7 +364,9 @@ def format_report(
                 lines.append(f"### {models[ka]['short']} → {models[kb]['short']}")
                 lines.append(f"- Tasks compared: {len(ei_tasks)} (EI-filtered)")
                 lines.append(f"- Mean Δ: **{np.mean(deltas):+.3f}**")
-                lines.append(f"- Improved: {improved}, Regressed: {regressed}, Unchanged: {unchanged}")
+                lines.append(
+                    f"- Improved: {improved}, Regressed: {regressed}, Unchanged: {unchanged}"
+                )
                 lines.append("")
         lines.append("")
 
@@ -358,10 +379,18 @@ def format_report(
 
     if sft_keys and rl_keys:
         # Find best SFT and best RL by EI-filtered mean score
-        best_sft_key = max(sft_keys, key=lambda k: np.mean([model_mean_ei[k].get(t, 0.0) for t in ei_tasks]))
-        best_rl_key = max(rl_keys, key=lambda k: np.mean([model_mean_ei[k].get(t, 0.0) for t in ei_tasks]))
+        best_sft_key = max(
+            sft_keys,
+            key=lambda k: np.mean([model_mean_ei[k].get(t, 0.0) for t in ei_tasks]),
+        )
+        best_rl_key = max(
+            rl_keys,
+            key=lambda k: np.mean([model_mean_ei[k].get(t, 0.0) for t in ei_tasks]),
+        )
 
-        lines.append(f"Best SFT: **{models[best_sft_key]['short']}**, Best RL: **{models[best_rl_key]['short']}**")
+        lines.append(
+            f"Best SFT: **{models[best_sft_key]['short']}**, Best RL: **{models[best_rl_key]['short']}**"
+        )
         lines.append(f"(on {len(ei_tasks)} EI-filtered common tasks)")
         lines.append("")
 
@@ -386,13 +415,19 @@ def format_report(
                 neither += 1
 
         lines.append(f"- Both solve: **{both}**")
-        lines.append(f"- SFT-only: **{sft_only_tasks}** — `{'`, `'.join(t[:25] for t in sft_only_list[:8])}`")
-        lines.append(f"- RL-only: **{rl_only_tasks}** — `{'`, `'.join(t[:25] for t in rl_only_list[:8])}`")
+        lines.append(
+            f"- SFT-only: **{sft_only_tasks}** — `{'`, `'.join(t[:25] for t in sft_only_list[:8])}`"
+        )
+        lines.append(
+            f"- RL-only: **{rl_only_tasks}** — `{'`, `'.join(t[:25] for t in rl_only_list[:8])}`"
+        )
         lines.append(f"- Neither: **{neither}**")
         lines.append("")
 
         # Oracle ensemble: best of any model per task (EI-filtered)
-        lines.append(f"### Oracle Ensemble (best of ALL {len(models)} models per task, EI-filtered)")
+        lines.append(
+            f"### Oracle Ensemble (best of ALL {len(models)} models per task, EI-filtered)"
+        )
         lines.append("")
         oracle_scores = []
         for task in ei_tasks:
@@ -407,10 +442,19 @@ def format_report(
         lines.append(f"- Oracle =1.0: **{oracle_eq_one}/{len(ei_tasks)}**")
 
         # Compare oracle to best single model
-        best_single_key = max(models.keys(), key=lambda k: np.mean([model_mean_ei[k].get(t, 0.0) for t in ei_tasks]))
-        best_single_mean = np.mean([model_mean_ei[best_single_key].get(t, 0.0) for t in ei_tasks])
-        lines.append(f"- Best single model: **{models[best_single_key]['short']}** ({best_single_mean:.3f})")
-        lines.append(f"- Oracle lift over best single: **{oracle_mean - best_single_mean:+.3f}**")
+        best_single_key = max(
+            models.keys(),
+            key=lambda k: np.mean([model_mean_ei[k].get(t, 0.0) for t in ei_tasks]),
+        )
+        best_single_mean = np.mean(
+            [model_mean_ei[best_single_key].get(t, 0.0) for t in ei_tasks]
+        )
+        lines.append(
+            f"- Best single model: **{models[best_single_key]['short']}** ({best_single_mean:.3f})"
+        )
+        lines.append(
+            f"- Oracle lift over best single: **{oracle_mean - best_single_mean:+.3f}**"
+        )
         lines.append("")
 
     # ── 7. Per-task detail (high variance, EI-filtered) ──
@@ -443,8 +487,12 @@ def format_report(
     all_solved = set.union(*solved_by.values()) if solved_by else set()
     all_unsolved = set(ei_tasks) - all_solved
 
-    lines.append(f"- Tasks solved by at least one model: **{len(all_solved)}/{len(ei_tasks)}**")
-    lines.append(f"- Tasks unsolved by all models: **{len(all_unsolved)}/{len(ei_tasks)}**")
+    lines.append(
+        f"- Tasks solved by at least one model: **{len(all_solved)}/{len(ei_tasks)}**"
+    )
+    lines.append(
+        f"- Tasks unsolved by all models: **{len(all_unsolved)}/{len(ei_tasks)}**"
+    )
     lines.append("")
 
     solve_count = Counter()
@@ -466,10 +514,16 @@ def format_report(
     lines.append("|-------|-------------|----------------|---------------------|")
     for key in models:
         my_solved = solved_by[key]
-        others_solved = set.union(*(solved_by[k] for k in models if k != key)) if len(models) > 1 else set()
+        others_solved = (
+            set.union(*(solved_by[k] for k in models if k != key))
+            if len(models) > 1
+            else set()
+        )
         unique = my_solved - others_solved
         examples = ", ".join(f"`{t[:20]}`" for t in sorted(unique)[:4])
-        lines.append(f"| {models[key]['short']} | {len(my_solved)} | {len(unique)} | {examples or '-'} |")
+        lines.append(
+            f"| {models[key]['short']} | {len(my_solved)} | {len(unique)} | {examples or '-'} |"
+        )
     lines.append("")
 
     report = "\n".join(lines)

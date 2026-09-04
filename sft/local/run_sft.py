@@ -84,6 +84,7 @@ class LocalSFTRunner:
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
+
         def handle_signal(signum, _frame):
             print(f"\nSignal {signum} received; shutting down...", file=sys.stderr)
             self.cleanup()
@@ -161,7 +162,10 @@ class LocalSFTRunner:
         accelerate_config = self._generate_accelerate_config()
 
         cmd = [
-            "python", "-u", "-m", "accelerate.commands.launch",
+            "python",
+            "-u",
+            "-m",
+            "accelerate.commands.launch",
             f"--config_file={accelerate_config}",
             f"--main_process_port={self.config.master_port}",
             "--tee=3",
@@ -280,7 +284,9 @@ def create_parser() -> argparse.ArgumentParser:
         "--deepspeed_config",
         help="Path to DeepSpeed config JSON (enables DeepSpeed).",
     )
-    parser.add_argument("--deepspeed-config", dest="deepspeed_config", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--deepspeed-config", dest="deepspeed_config", help=argparse.SUPPRESS
+    )
 
     parser.add_argument(
         "--master_port",
@@ -295,14 +301,18 @@ def create_parser() -> argparse.ArgumentParser:
         default=str(PROJECT_ROOT / "experiments"),
         help="Directory for experiment outputs.",
     )
-    parser.add_argument("--experiments-dir", dest="experiments_dir", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--experiments-dir", dest="experiments_dir", help=argparse.SUPPRESS
+    )
 
     parser.add_argument(
         "--dry_run",
         action="store_true",
         help="Print configuration without running.",
     )
-    parser.add_argument("--dry-run", dest="dry_run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--dry-run", dest="dry_run", action="store_true", help=argparse.SUPPRESS
+    )
 
     return parser
 

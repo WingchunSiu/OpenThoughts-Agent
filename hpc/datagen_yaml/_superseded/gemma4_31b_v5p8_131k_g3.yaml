@@ -1,6 +1,3 @@
-# G3: D3 stack (FP8 KV) v5p-8 + 131k, seqs=2
-# Slice: v5p-8 TP=4, TP=4, max_model_len=131072. FP8 KV cache mandatory
-# at this context length (bf16 KV at 131k won't fit per-chip).
 env_vars:
   MODEL_IMPL_TYPE: auto
 engine:
