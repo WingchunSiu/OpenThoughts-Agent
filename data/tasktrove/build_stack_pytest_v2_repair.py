@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Repair the three trap-always-reward pytest sources with the v4.13 contract.
+"""Repair three pytest sources whose EXIT trap always writes a reward.
 
 `DCAgent/exp_rpt_stack-pytest-v2`, `DCAgent/exp_rpt_pymethods2test-v3`, and
-`DCAgent/exp_rpt_unitsyn-python-v4` all write reward 0 or 1 from
-`trap cleanup EXIT`, so pip failures, pytest crashes, collection errors, and
-zero-test sessions look like ordinary agent outcomes. Harbor cannot retry those
-as infrastructure.
+`DCAgent/exp_rpt_unitsyn-python-v4` write reward 0 or 1 from `trap cleanup EXIT`.
+Pip failures, pytest crashes, collection errors, and zero-test sessions therefore
+look like ordinary agent outcomes, and Harbor cannot retry them as infrastructure.
 
-This builder keeps the packaged tests, installs extra dependencies without
-`|| true`, and maps ordinary collection / zero-test / test-failure outcomes to
-reward 0 while leaving dependency, malformed-test, and unexpected runner
-failures without a reward. The two solution.py sources keep their
-first-`*.py`-to-`/app/solution.py` copy so agents that write a different
-filename still match `from solution import *`.
+The builder changes only the verifier contract: no EXIT trap, no `|| true`,
+collection / zero-test / test-failure → reward 0, and dependency or runner
+failures leave no reward. Images, instructions, hidden tests, and packaged
+oracles stay byte-identical. Extra pip names that the old script already tried
+to install are remapped (`sklearn` → `scikit-learn`) so those installs can
+actually succeed.
 """
 
 from __future__ import annotations
@@ -45,13 +44,7 @@ from data.tasktrove.build_storage_repair import (
 
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
 REQUIRED_SOURCE_MEMBERS = REQUIRED_MEMBERS | {"tests/test_solution.py"}
-CHANGED_MEMBER_ALLOWLIST = frozenset(
-    {
-        "environment/Dockerfile",
-        "tests/test.sh",
-        "tests/requirements.txt",
-    }
-)
+CHANGED_MEMBER_ALLOWLIST = frozenset({"tests/test.sh", "tests/requirements.txt"})
 STDLIB_PIP_PACKAGES = frozenset({"__future__"})
 PIP_NAME_FIXES = {
     "PIL": "Pillow",
@@ -85,7 +78,7 @@ class SourceSpec:
     source: str
     source_sha256: str
     output: str
-    copy_solution: bool = False
+    install_pytest: bool = False
 
 
 SPECS = (
@@ -93,54 +86,48 @@ SPECS = (
         source="DCAgent__exp_rpt_stack-pytest-v2",
         source_sha256="8bfac7f44ff1ea23db6f516802a4072e549b780ec63f94b159980da2313f91b2",
         output="DCAgent__exp_rpt_stack-pytest-v3",
+        install_pytest=True,
     ),
     SourceSpec(
         source="DCAgent__exp_rpt_pymethods2test-v3",
         source_sha256="58e55e5ea9bfc39f8d360b1123202dc793e6ff815e15bd440aa713b993521175",
         output="DCAgent__exp_rpt_pymethods2test-v4",
-        copy_solution=True,
     ),
     SourceSpec(
         source="DCAgent__exp_rpt_unitsyn-python-v4",
         source_sha256="6682ba420380164bf14ba60efdfcbed30fb35cd9eef0b38e31c4fd68db9887b3",
         output="DCAgent__exp_rpt_unitsyn-python-v5",
-        copy_solution=True,
     ),
 )
 
-PYTEST_DOCKERFILE = """FROM python:3.12-slim-bookworm
-
-WORKDIR /app
-RUN mkdir -p /output && chmod 777 /output
-RUN apt-get update \\
-    && apt-get install -y --no-install-recommends bsdutils git \\
-    && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /app/.venv \\
-    && /app/.venv/bin/pip install --no-cache-dir pytest
-ENV PATH=/app/.venv/bin:$PATH
-"""
-
-COPY_SOLUTION_BLOCK = """if [ ! -f /app/solution.py ]; then
-    for f in /app/*.py; do
-        [ -f "$f" ] && cp "$f" /app/solution.py && break
-    done
-fi
-"""
-
-# Byte-compatible with the TaskTrove v4.13 stack-pytest-large-v3 wrapper.
-_PYTEST_TEST_SH_HEAD = r"""#!/bin/bash
+_COMMON_HEAD = r"""#!/bin/bash
 set -euo pipefail
 
 LOGS_DIR=/logs/verifier
 REWARD="$LOGS_DIR/reward.txt"
 mkdir -p "$LOGS_DIR"
 rm -f "$REWARD"
+"""
 
-# Dependency setup is infrastructure. Leave no reward if it fails so Harbor retries.
+_INSTALL_PYTEST_BLOCK = r"""
+# venv + pytest install are infrastructure. Leave no reward if they fail.
+if [ ! -d /app/.venv ]; then
+    python3 -m venv /app/.venv
+fi
 source /app/.venv/bin/activate
+pip install --quiet --disable-pip-version-check pytest
 if [ -s /tests/requirements.txt ]; then
     pip install --quiet --disable-pip-version-check -r /tests/requirements.txt
 fi
+"""
+
+_IMAGE_REQUIREMENTS_BLOCK = r"""
+if [ -s /tests/requirements.txt ]; then
+    pip3 install --quiet --disable-pip-version-check -r /tests/requirements.txt
+fi
+"""
+
+_COMMON_PRE_PYTEST = r"""
 python3 -m pytest --version >/dev/null
 python3 - <<'PY'
 import ast
@@ -154,7 +141,7 @@ cd /app
 """
 
 _PYTEST_TEST_SH_TAIL = r"""set +e
-pytest /tests/test_solution.py -v --tb=short \
+python3 -m pytest /tests/test_solution.py -v --tb=short \
     --junitxml="$LOGS_DIR/pytest.xml" 2>&1 | tee "$LOGS_DIR/pytest_output.txt"
 PYTEST_EXIT=${PIPESTATUS[0]}
 
@@ -204,15 +191,14 @@ exit 1
 """
 
 
-def pytest_test_sh(*, copy_solution: bool = False) -> str:
-    """Return the v4.13 pytest wrapper, optionally copying `/app/*.py`."""
-    if not copy_solution:
-        return _PYTEST_TEST_SH_HEAD + _PYTEST_TEST_SH_TAIL
-    return _PYTEST_TEST_SH_HEAD + COPY_SOLUTION_BLOCK + _PYTEST_TEST_SH_TAIL
+def pytest_test_sh(*, install_pytest: bool = False) -> str:
+    """Return the fail-closed pytest wrapper for this source's original image."""
+    deps = _INSTALL_PYTEST_BLOCK if install_pytest else _IMAGE_REQUIREMENTS_BLOCK
+    return _COMMON_HEAD + deps + _COMMON_PRE_PYTEST + _PYTEST_TEST_SH_TAIL
 
 
-PYTEST_TEST_SH = pytest_test_sh()
-PYTEST_TEST_SH_SOLUTION = pytest_test_sh(copy_solution=True)
+PYTEST_TEST_SH = pytest_test_sh(install_pytest=True)
+PYTEST_TEST_SH_IMAGE = pytest_test_sh(install_pytest=False)
 
 
 def score_pytest_run(
@@ -252,7 +238,7 @@ def _add_requirement(packages: list[str], seen: set[str], raw: str) -> None:
 
 
 def extract_requirements(test_sh: str, test_source: str = "") -> list[str]:
-    """Return extra pip requirements from the trap verifier and hidden tests."""
+    """Return extra pip requirements the old verifier already tried to install."""
     packages: list[str] = []
     seen: set[str] = set()
     for match in PIP_INSTALL_RE.finditer(test_sh):
@@ -275,14 +261,13 @@ def extract_requirements(test_sh: str, test_source: str = "") -> list[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.append(node.module.split(".")[0])
     for mod in imported:
-        mapped = TEST_IMPORT_PACKAGES.get(mod)
-        if mapped is not None:
+        if TEST_IMPORT_PACKAGES.get(mod) is not None:
             _add_requirement(packages, seen, mod)
     return packages
 
 
 def drop_reasons(files: dict[str, bytes]) -> list[str]:
-    """Return reasons a packaged pytest task cannot be repaired in place."""
+    """Return reasons a packaged pytest task cannot produce a valid reward."""
     source = files["tests/test_solution.py"].decode(errors="replace")
     try:
         with warnings.catch_warnings():
@@ -312,9 +297,9 @@ def _changed_members(
 
 
 def patch_task(
-    files: dict[str, bytes], *, copy_solution: bool = False
+    files: dict[str, bytes], *, install_pytest: bool = False
 ) -> dict[str, bytes]:
-    """Replace the trap-always-reward verifier with the v4.13 pytest wrapper."""
+    """Replace the trap-always-reward verifier. Leave the image and tests alone."""
     script = files["tests/test.sh"].decode()
     if "trap cleanup EXIT" not in script:
         raise ValueError("source verifier does not use the trap-always-reward contract")
@@ -322,11 +307,11 @@ def patch_task(
     requirements = extract_requirements(
         script, files["tests/test_solution.py"].decode(errors="replace")
     )
-    output["environment/Dockerfile"] = PYTEST_DOCKERFILE.encode()
-    output["tests/test.sh"] = pytest_test_sh(copy_solution=copy_solution).encode()
-    output["tests/requirements.txt"] = (
-        ("\n".join(requirements) + "\n").encode() if requirements else b""
-    )
+    output["tests/test.sh"] = pytest_test_sh(install_pytest=install_pytest).encode()
+    if requirements:
+        output["tests/requirements.txt"] = ("\n".join(requirements) + "\n").encode()
+    else:
+        output.pop("tests/requirements.txt", None)
     changed = _changed_members(files, output)
     unexpected = changed - CHANGED_MEMBER_ALLOWLIST
     if unexpected:
@@ -335,7 +320,7 @@ def patch_task(
 
 
 def transform_task(
-    files: dict[str, bytes], *, copy_solution: bool = False
+    files: dict[str, bytes], *, install_pytest: bool = False
 ) -> tuple[dict[str, bytes] | None, list[str]]:
     missing = REQUIRED_SOURCE_MEMBERS - files.keys()
     if missing:
@@ -343,7 +328,7 @@ def transform_task(
     reasons = drop_reasons(files)
     if reasons:
         return None, reasons
-    return patch_task(files, copy_solution=copy_solution), []
+    return patch_task(files, install_pytest=install_pytest), []
 
 
 def _validate_shell(script: bytes, validated: set[str]) -> None:
@@ -363,7 +348,7 @@ def validate_transformed_task(
     transformed: dict[str, bytes],
     validated_shells: set[str],
     *,
-    copy_solution: bool,
+    install_pytest: bool,
 ) -> None:
     missing = REQUIRED_SOURCE_MEMBERS - transformed.keys()
     if missing:
@@ -372,17 +357,19 @@ def validate_transformed_task(
     unexpected = changed - CHANGED_MEMBER_ALLOWLIST
     if unexpected:
         raise ValueError(f"unexpected changed members: {sorted(unexpected)}")
+    if original["environment/Dockerfile"] != transformed["environment/Dockerfile"]:
+        raise ValueError("Dockerfile was modified")
     TaskConfig.model_validate_toml(transformed["task.toml"].decode("utf-8"))
-    expected = pytest_test_sh(copy_solution=copy_solution).encode()
+    expected = pytest_test_sh(install_pytest=install_pytest).encode()
     _validate_shell(transformed["tests/test.sh"], validated_shells)
     if transformed["tests/test.sh"] != expected:
-        raise ValueError("transformed verifier is not the v4.13 pytest wrapper")
+        raise ValueError("transformed verifier is not the fail-closed pytest wrapper")
     if b"trap cleanup EXIT" in transformed["tests/test.sh"]:
         raise ValueError("transformed verifier still writes reward from EXIT")
     if b"|| true" in transformed["tests/test.sh"]:
         raise ValueError("transformed verifier swallows dependency failures")
-    if copy_solution and b"/app/solution.py" not in transformed["tests/test.sh"]:
-        raise ValueError("solution-style verifier dropped the solution.py copy")
+    if b'cp "$f" /app/solution.py' in transformed["tests/test.sh"]:
+        raise ValueError("transformed verifier still copies an arbitrary .py")
     if original.get("solution/solution.py") != transformed.get("solution/solution.py"):
         raise ValueError("packaged oracle was modified")
 
@@ -428,7 +415,7 @@ def build(spec: SourceSpec, source: Path, output: Path) -> dict[str, object]:
                 paths.add(path)
                 files = read_task(row["task_binary"])
                 transformed, reasons = transform_task(
-                    files, copy_solution=spec.copy_solution
+                    files, install_pytest=spec.install_pytest
                 )
                 if transformed is None:
                     dropped_paths.append(path)
@@ -438,7 +425,7 @@ def build(spec: SourceSpec, source: Path, output: Path) -> dict[str, object]:
                     files,
                     transformed,
                     validated_shells,
-                    copy_solution=spec.copy_solution,
+                    install_pytest=spec.install_pytest,
                 )
                 transformed_rows.append(
                     {"path": path, "task_binary": write_task(transformed)}
@@ -465,7 +452,7 @@ def build(spec: SourceSpec, source: Path, output: Path) -> dict[str, object]:
         "output_sha256": file_sha256(output),
         "dropped_paths": dropped_paths,
         "dropped_paths_sha256": file_sha256(dropped_file),
-        "copy_solution": spec.copy_solution,
+        "install_pytest": spec.install_pytest,
     }
 
 

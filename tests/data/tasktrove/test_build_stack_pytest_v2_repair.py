@@ -6,7 +6,7 @@ import pytest
 
 from data.tasktrove.build_stack_pytest_v2_repair import (
     PYTEST_TEST_SH,
-    PYTEST_TEST_SH_SOLUTION,
+    PYTEST_TEST_SH_IMAGE,
     drop_reasons,
     extract_requirements,
     patch_task,
@@ -157,21 +157,20 @@ def test_drop_reasons_reject_unparseable_and_empty_suites() -> None:
     assert drop_reasons(_task()) == []
 
 
-def test_patch_task_replaces_trap_verifier_and_keeps_tests() -> None:
+def test_patch_task_replaces_trap_and_keeps_image_and_tests() -> None:
     original = _task()
-    transformed = patch_task(original)
+    transformed = patch_task(original, install_pytest=True)
 
     assert transformed["tests/test.sh"] == PYTEST_TEST_SH.encode()
-    assert b"trap cleanup EXIT" not in transformed["tests/test.sh"]
-    assert b"|| true" not in transformed["tests/test.sh"]
+    assert transformed["environment/Dockerfile"] == original["environment/Dockerfile"]
     assert transformed["tests/test_solution.py"] == original["tests/test_solution.py"]
     assert transformed["instruction.md"] == original["instruction.md"]
     assert transformed["task.toml"] == original["task.toml"]
+    assert b"trap cleanup EXIT" not in transformed["tests/test.sh"]
+    assert b"|| true" not in transformed["tests/test.sh"]
     assert transformed["tests/requirements.txt"] == (
         b"scikit-learn\nPyYAML\nPillow\nnumpy\n"
     )
-    assert b"python:3.12-slim-bookworm" in transformed["environment/Dockerfile"]
-    assert b"pip install --no-cache-dir pytest" in transformed["environment/Dockerfile"]
 
 
 def test_patch_task_rejects_unknown_verifier_contract() -> None:
@@ -181,22 +180,23 @@ def test_patch_task_rejects_unknown_verifier_contract() -> None:
 
 def test_wrapper_is_valid_shell_and_does_not_prewrite_reward() -> None:
     subprocess.run(["bash", "-n"], input=PYTEST_TEST_SH.encode(), check=True)
+    subprocess.run(["bash", "-n"], input=PYTEST_TEST_SH_IMAGE.encode(), check=True)
     assert "trap cleanup EXIT" not in PYTEST_TEST_SH
-    assert PYTEST_TEST_SH.index('rm -f "$REWARD"') < PYTEST_TEST_SH.index("pytest ")
+    assert PYTEST_TEST_SH.index('rm -f "$REWARD"') < PYTEST_TEST_SH.index("pytest")
 
 
-def test_pytest_only_source_writes_empty_requirements() -> None:
+def test_pytest_only_source_omits_empty_requirements() -> None:
     script = TRAP_VERIFIER.replace(
         "pip install --quiet sklearn yaml PIL __future__ numpy 2>/dev/null || true\n",
         "",
     )
     transformed = patch_task(_task(**{"tests/test.sh": script.encode()}))
     assert extract_requirements(script) == []
-    assert transformed["tests/requirements.txt"] == b""
+    assert "tests/requirements.txt" not in transformed
 
 
 def test_transform_task_drops_invalid_rows() -> None:
-    patched, reasons = transform_task(_task())
+    patched, reasons = transform_task(_task(), install_pytest=True)
     assert reasons == []
     assert patched is not None
     assert patched["tests/test.sh"] == PYTEST_TEST_SH.encode()
@@ -208,21 +208,23 @@ def test_transform_task_drops_invalid_rows() -> None:
     assert reasons == ["syntax_error"]
 
 
-def test_solution_source_keeps_oracle_and_copies_solution_py() -> None:
+def test_solution_source_keeps_oracle_and_does_not_copy_filenames() -> None:
+    dockerfile = b"FROM python:3.10-slim\nWORKDIR /app\nRUN pip install pytest\n"
     original = _task(
         **{
+            "environment/Dockerfile": dockerfile,
             "tests/test.sh": SOLUTION_TRAP.encode(),
             "tests/test_solution.py": SOLUTION_TEST.encode(),
             "solution/solution.py": b"def add(a, b):\n    return a + b\n",
         }
     )
-    transformed = patch_task(original, copy_solution=True)
+    transformed = patch_task(original, install_pytest=False)
 
-    assert transformed["tests/test.sh"] == PYTEST_TEST_SH_SOLUTION.encode()
-    assert transformed["tests/test.sh"] == pytest_test_sh(copy_solution=True).encode()
-    assert b"/app/solution.py" in transformed["tests/test.sh"]
+    assert transformed["tests/test.sh"] == PYTEST_TEST_SH_IMAGE.encode()
+    assert transformed["tests/test.sh"] == pytest_test_sh(install_pytest=False).encode()
+    assert b'cp "$f" /app/solution.py' not in transformed["tests/test.sh"]
     assert b"|| true" not in transformed["tests/test.sh"]
+    assert transformed["environment/Dockerfile"] == dockerfile
     assert transformed["solution/solution.py"] == original["solution/solution.py"]
     assert transformed["tests/test_solution.py"] == original["tests/test_solution.py"]
     assert transformed["tests/requirements.txt"] == b"numpy\n"
-    subprocess.run(["bash", "-n"], input=PYTEST_TEST_SH_SOLUTION.encode(), check=True)
