@@ -6,9 +6,11 @@ import pytest
 
 from data.tasktrove.build_stack_pytest_v2_repair import (
     PYTEST_TEST_SH,
+    PYTEST_TEST_SH_SOLUTION,
     drop_reasons,
     extract_requirements,
     patch_task,
+    pytest_test_sh,
     score_pytest_run,
     transform_task,
 )
@@ -51,6 +53,39 @@ import pytest
 
 # def test_greet():
 #     assert False
+"""
+
+SOLUTION_TRAP = """#!/bin/bash
+set -e
+mkdir -p /logs/verifier
+cleanup() {
+    if [ $? -eq 0 ]; then
+        echo "1" > /logs/verifier/reward.txt
+    else
+        echo "0" > /logs/verifier/reward.txt
+    fi
+}
+trap cleanup EXIT
+cd /app
+pip3 install --quiet pytest 2>/dev/null || true
+if [ ! -f /app/solution.py ]; then
+    for f in /app/*.py; do
+        [ -f "$f" ] && cp "$f" /app/solution.py && break
+    done
+fi
+pytest /tests/test_solution.py -v --tb=short
+"""
+
+SOLUTION_TEST = """\
+import sys
+sys.path.insert(0, '/app')
+from solution import *
+import unittest
+import numpy as np
+
+class TestAdd(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(1, 2), 3)
 """
 
 
@@ -106,6 +141,10 @@ def test_extract_requirements_remaps_and_drops_stdlib() -> None:
         "Pillow",
         "numpy",
     ]
+
+
+def test_extract_requirements_adds_known_test_imports() -> None:
+    assert extract_requirements(SOLUTION_TRAP, SOLUTION_TEST) == ["numpy"]
 
 
 def test_drop_reasons_reject_unparseable_and_empty_suites() -> None:
@@ -167,3 +206,23 @@ def test_transform_task_drops_invalid_rows() -> None:
     )
     assert dropped is None
     assert reasons == ["syntax_error"]
+
+
+def test_solution_source_keeps_oracle_and_copies_solution_py() -> None:
+    original = _task(
+        **{
+            "tests/test.sh": SOLUTION_TRAP.encode(),
+            "tests/test_solution.py": SOLUTION_TEST.encode(),
+            "solution/solution.py": b"def add(a, b):\n    return a + b\n",
+        }
+    )
+    transformed = patch_task(original, copy_solution=True)
+
+    assert transformed["tests/test.sh"] == PYTEST_TEST_SH_SOLUTION.encode()
+    assert transformed["tests/test.sh"] == pytest_test_sh(copy_solution=True).encode()
+    assert b"/app/solution.py" in transformed["tests/test.sh"]
+    assert b"|| true" not in transformed["tests/test.sh"]
+    assert transformed["solution/solution.py"] == original["solution/solution.py"]
+    assert transformed["tests/test_solution.py"] == original["tests/test_solution.py"]
+    assert transformed["tests/requirements.txt"] == b"numpy\n"
+    subprocess.run(["bash", "-n"], input=PYTEST_TEST_SH_SOLUTION.encode(), check=True)

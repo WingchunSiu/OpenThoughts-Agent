@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Repair DCAgent/exp_rpt_stack-pytest-v2 with the v4.13 pytest reward contract.
+"""Repair the three trap-always-reward pytest sources with the v4.13 contract.
 
-Every source verifier uses `trap cleanup EXIT` and therefore writes reward 0 or 1
-for pip failures, pytest crashes, collection errors, and zero-test sessions.
-Harbor cannot retry those as infrastructure. This builder keeps the packaged
-tests, installs extra dependencies without `|| true`, and maps ordinary
-collection / zero-test / test-failure outcomes to reward 0 while leaving
-dependency, malformed-test, and unexpected runner failures without a reward.
+`DCAgent/exp_rpt_stack-pytest-v2`, `DCAgent/exp_rpt_pymethods2test-v3`, and
+`DCAgent/exp_rpt_unitsyn-python-v4` all write reward 0 or 1 from
+`trap cleanup EXIT`, so pip failures, pytest crashes, collection errors, and
+zero-test sessions look like ordinary agent outcomes. Harbor cannot retry those
+as infrastructure.
+
+This builder keeps the packaged tests, installs extra dependencies without
+`|| true`, and maps ordinary collection / zero-test / test-failure outcomes to
+reward 0 while leaving dependency, malformed-test, and unexpected runner
+failures without a reward. The two solution.py sources keep their
+first-`*.py`-to-`/app/solution.py` copy so agents that write a different
+filename still match `from solution import *`.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import re
 import subprocess
 import warnings
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
@@ -37,9 +44,6 @@ from data.tasktrove.build_storage_repair import (
 )
 
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
-SOURCE_DATASET = "DCAgent__exp_rpt_stack-pytest-v2"
-SOURCE_SHA256 = "8bfac7f44ff1ea23db6f516802a4072e549b780ec63f94b159980da2313f91b2"
-OUTPUT_DATASET = "DCAgent__exp_rpt_stack-pytest-v3"
 REQUIRED_SOURCE_MEMBERS = REQUIRED_MEMBERS | {"tests/test_solution.py"}
 CHANGED_MEMBER_ALLOWLIST = frozenset(
     {
@@ -55,7 +59,54 @@ PIP_NAME_FIXES = {
     "sklearn": "scikit-learn",
     "yaml": "PyYAML",
 }
-PIP_INSTALL_RE = re.compile(r"pip install --quiet ([^\n]+)")
+TEST_IMPORT_PACKAGES = {
+    "PIL": "Pillow",
+    "aiohttp": "aiohttp",
+    "boto3": "boto3",
+    "bs4": "beautifulsoup4",
+    "cv2": "opencv-python",
+    "django": "django",
+    "fastapi": "fastapi",
+    "flask": "flask",
+    "matplotlib": "matplotlib",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "requests": "requests",
+    "scipy": "scipy",
+    "sklearn": "scikit-learn",
+    "torch": "torch",
+    "yaml": "PyYAML",
+}
+PIP_INSTALL_RE = re.compile(r"pip3? install --quiet ([^\n]+)")
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    source: str
+    source_sha256: str
+    output: str
+    copy_solution: bool = False
+
+
+SPECS = (
+    SourceSpec(
+        source="DCAgent__exp_rpt_stack-pytest-v2",
+        source_sha256="8bfac7f44ff1ea23db6f516802a4072e549b780ec63f94b159980da2313f91b2",
+        output="DCAgent__exp_rpt_stack-pytest-v3",
+    ),
+    SourceSpec(
+        source="DCAgent__exp_rpt_pymethods2test-v3",
+        source_sha256="58e55e5ea9bfc39f8d360b1123202dc793e6ff815e15bd440aa713b993521175",
+        output="DCAgent__exp_rpt_pymethods2test-v4",
+        copy_solution=True,
+    ),
+    SourceSpec(
+        source="DCAgent__exp_rpt_unitsyn-python-v4",
+        source_sha256="6682ba420380164bf14ba60efdfcbed30fb35cd9eef0b38e31c4fd68db9887b3",
+        output="DCAgent__exp_rpt_unitsyn-python-v5",
+        copy_solution=True,
+    ),
+)
 
 PYTEST_DOCKERFILE = """FROM python:3.12-slim-bookworm
 
@@ -69,8 +120,15 @@ RUN python3 -m venv /app/.venv \\
 ENV PATH=/app/.venv/bin:$PATH
 """
 
+COPY_SOLUTION_BLOCK = """if [ ! -f /app/solution.py ]; then
+    for f in /app/*.py; do
+        [ -f "$f" ] && cp "$f" /app/solution.py && break
+    done
+fi
+"""
+
 # Byte-compatible with the TaskTrove v4.13 stack-pytest-large-v3 wrapper.
-PYTEST_TEST_SH = r"""#!/bin/bash
+_PYTEST_TEST_SH_HEAD = r"""#!/bin/bash
 set -euo pipefail
 
 LOGS_DIR=/logs/verifier
@@ -93,7 +151,9 @@ PY
 
 export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
 cd /app
-set +e
+"""
+
+_PYTEST_TEST_SH_TAIL = r"""set +e
 pytest /tests/test_solution.py -v --tb=short \
     --junitxml="$LOGS_DIR/pytest.xml" 2>&1 | tee "$LOGS_DIR/pytest_output.txt"
 PYTEST_EXIT=${PIPESTATUS[0]}
@@ -144,6 +204,17 @@ exit 1
 """
 
 
+def pytest_test_sh(*, copy_solution: bool = False) -> str:
+    """Return the v4.13 pytest wrapper, optionally copying `/app/*.py`."""
+    if not copy_solution:
+        return _PYTEST_TEST_SH_HEAD + _PYTEST_TEST_SH_TAIL
+    return _PYTEST_TEST_SH_HEAD + COPY_SOLUTION_BLOCK + _PYTEST_TEST_SH_TAIL
+
+
+PYTEST_TEST_SH = pytest_test_sh()
+PYTEST_TEST_SH_SOLUTION = pytest_test_sh(copy_solution=True)
+
+
 def score_pytest_run(
     *,
     pytest_exit: int,
@@ -171,20 +242,42 @@ def score_pytest_run(
     return 0
 
 
-def extract_requirements(test_sh: str) -> list[str]:
-    """Return extra pip requirements from a v2 trap-based verifier."""
+def _add_requirement(packages: list[str], seen: set[str], raw: str) -> None:
+    if raw in {"pytest", *STDLIB_PIP_PACKAGES}:
+        return
+    name = PIP_NAME_FIXES.get(raw, raw)
+    if name not in seen:
+        seen.add(name)
+        packages.append(name)
+
+
+def extract_requirements(test_sh: str, test_source: str = "") -> list[str]:
+    """Return extra pip requirements from the trap verifier and hidden tests."""
     packages: list[str] = []
     seen: set[str] = set()
     for match in PIP_INSTALL_RE.finditer(test_sh):
         rest = match.group(1)
         rest = rest.replace("2>/dev/null", "").replace("|| true", "")
         for raw in rest.split():
-            if raw in {"pytest", *STDLIB_PIP_PACKAGES}:
-                continue
-            name = PIP_NAME_FIXES.get(raw, raw)
-            if name not in seen:
-                seen.add(name)
-                packages.append(name)
+            _add_requirement(packages, seen, raw)
+    if not test_source:
+        return packages
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(test_source)
+    except SyntaxError:
+        return packages
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module.split(".")[0])
+    for mod in imported:
+        mapped = TEST_IMPORT_PACKAGES.get(mod)
+        if mapped is not None:
+            _add_requirement(packages, seen, mod)
     return packages
 
 
@@ -218,15 +311,19 @@ def _changed_members(
     }
 
 
-def patch_task(files: dict[str, bytes]) -> dict[str, bytes]:
+def patch_task(
+    files: dict[str, bytes], *, copy_solution: bool = False
+) -> dict[str, bytes]:
     """Replace the trap-always-reward verifier with the v4.13 pytest wrapper."""
     script = files["tests/test.sh"].decode()
     if "trap cleanup EXIT" not in script:
         raise ValueError("source verifier does not use the trap-always-reward contract")
     output = dict(files)
-    requirements = extract_requirements(script)
+    requirements = extract_requirements(
+        script, files["tests/test_solution.py"].decode(errors="replace")
+    )
     output["environment/Dockerfile"] = PYTEST_DOCKERFILE.encode()
-    output["tests/test.sh"] = PYTEST_TEST_SH.encode()
+    output["tests/test.sh"] = pytest_test_sh(copy_solution=copy_solution).encode()
     output["tests/requirements.txt"] = (
         ("\n".join(requirements) + "\n").encode() if requirements else b""
     )
@@ -238,7 +335,7 @@ def patch_task(files: dict[str, bytes]) -> dict[str, bytes]:
 
 
 def transform_task(
-    files: dict[str, bytes],
+    files: dict[str, bytes], *, copy_solution: bool = False
 ) -> tuple[dict[str, bytes] | None, list[str]]:
     missing = REQUIRED_SOURCE_MEMBERS - files.keys()
     if missing:
@@ -246,7 +343,7 @@ def transform_task(
     reasons = drop_reasons(files)
     if reasons:
         return None, reasons
-    return patch_task(files), []
+    return patch_task(files, copy_solution=copy_solution), []
 
 
 def _validate_shell(script: bytes, validated: set[str]) -> None:
@@ -265,6 +362,8 @@ def validate_transformed_task(
     original: dict[str, bytes],
     transformed: dict[str, bytes],
     validated_shells: set[str],
+    *,
+    copy_solution: bool,
 ) -> None:
     missing = REQUIRED_SOURCE_MEMBERS - transformed.keys()
     if missing:
@@ -274,30 +373,35 @@ def validate_transformed_task(
     if unexpected:
         raise ValueError(f"unexpected changed members: {sorted(unexpected)}")
     TaskConfig.model_validate_toml(transformed["task.toml"].decode("utf-8"))
+    expected = pytest_test_sh(copy_solution=copy_solution).encode()
     _validate_shell(transformed["tests/test.sh"], validated_shells)
-    if transformed["tests/test.sh"] != PYTEST_TEST_SH.encode():
+    if transformed["tests/test.sh"] != expected:
         raise ValueError("transformed verifier is not the v4.13 pytest wrapper")
     if b"trap cleanup EXIT" in transformed["tests/test.sh"]:
         raise ValueError("transformed verifier still writes reward from EXIT")
     if b"|| true" in transformed["tests/test.sh"]:
         raise ValueError("transformed verifier swallows dependency failures")
+    if copy_solution and b"/app/solution.py" not in transformed["tests/test.sh"]:
+        raise ValueError("solution-style verifier dropped the solution.py copy")
+    if original.get("solution/solution.py") != transformed.get("solution/solution.py"):
+        raise ValueError("packaged oracle was modified")
 
 
-def source_parquet(explicit: Path | None) -> Path:
-    if explicit is not None:
-        return explicit.resolve()
+def source_parquet(spec: SourceSpec, source_root: Path | None) -> Path:
+    if source_root is not None:
+        return (source_root / spec.source / "tasks.parquet").resolve()
     return Path(
         hf_hub_download(
             TASKTROVE_REPO,
-            f"{SOURCE_DATASET}/tasks.parquet",
+            f"{spec.source}/tasks.parquet",
             repo_type="dataset",
         )
     )
 
 
-def build(source: Path, output: Path) -> dict[str, object]:
-    if file_sha256(source) != SOURCE_SHA256:
-        raise ValueError(f"source hash mismatch: {source}")
+def build(spec: SourceSpec, source: Path, output: Path) -> dict[str, object]:
+    if file_sha256(source) != spec.source_sha256:
+        raise ValueError(f"source hash mismatch: {spec.source}")
     parquet = pq.ParquetFile(source)
     if parquet.schema_arrow != TASK_SCHEMA:
         raise ValueError(f"unexpected source schema: {parquet.schema_arrow}")
@@ -323,12 +427,19 @@ def build(source: Path, output: Path) -> dict[str, object]:
                     raise ValueError(f"duplicate path: {path}")
                 paths.add(path)
                 files = read_task(row["task_binary"])
-                transformed, reasons = transform_task(files)
+                transformed, reasons = transform_task(
+                    files, copy_solution=spec.copy_solution
+                )
                 if transformed is None:
                     dropped_paths.append(path)
                     drop_counts.update(reasons)
                     continue
-                validate_transformed_task(files, transformed, validated_shells)
+                validate_transformed_task(
+                    files,
+                    transformed,
+                    validated_shells,
+                    copy_solution=spec.copy_solution,
+                )
                 transformed_rows.append(
                     {"path": path, "task_binary": write_task(transformed)}
                 )
@@ -340,32 +451,49 @@ def build(source: Path, output: Path) -> dict[str, object]:
     finally:
         writer.close()
     if kept_rows < MIN_TASKS:
-        raise ValueError(f"standing-order minimum violated: {kept_rows}")
+        raise ValueError(f"standing-order minimum violated: {spec.output}={kept_rows}")
     dropped_file = output.parent / "dropped_paths.txt"
     dropped_file.write_text("".join(f"{path}\n" for path in dropped_paths))
     return {
-        "source_dataset": SOURCE_DATASET,
-        "output_dataset": OUTPUT_DATASET,
+        "source_dataset": spec.source,
+        "output_dataset": spec.output,
         "source_rows": source_rows,
         "kept_rows": kept_rows,
         "dropped_rows": source_rows - kept_rows,
         "drop_reasons": dict(sorted(drop_counts.items())),
-        "source_sha256": SOURCE_SHA256,
+        "source_sha256": spec.source_sha256,
         "output_sha256": file_sha256(output),
         "dropped_paths": dropped_paths,
         "dropped_paths_sha256": file_sha256(dropped_file),
+        "copy_solution": spec.copy_solution,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", type=Path, required=True)
-    parser.add_argument("--source", type=Path)
+    parser.add_argument("--source-root", type=Path)
+    parser.add_argument(
+        "--only",
+        action="append",
+        dest="only",
+        help="Build only this source directory name. Repeatable.",
+    )
     args = parser.parse_args()
-    output = args.stage / "datasets" / OUTPUT_DATASET / "tasks.parquet"
-    report = build(source_parquet(args.source), output)
-    (args.stage / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps(report, indent=2))
+    selected = SPECS
+    if args.only:
+        wanted = set(args.only)
+        selected = tuple(spec for spec in SPECS if spec.source in wanted)
+        missing = wanted - {spec.source for spec in selected}
+        if missing:
+            raise ValueError(f"unknown source: {sorted(missing)}")
+    reports = []
+    for spec in selected:
+        output = args.stage / "datasets" / spec.output / "tasks.parquet"
+        reports.append(build(spec, source_parquet(spec, args.source_root), output))
+    manifest = {"datasets": reports}
+    (args.stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(json.dumps(manifest, indent=2))
 
 
 if __name__ == "__main__":
