@@ -1,4 +1,4 @@
-name: Nightly uv-lock fork-pin refresh
+name: uv-lock fork-pin refresh
 
 # Keep the git dependencies that track a moving branch fresh in uv.lock.
 #
@@ -9,17 +9,12 @@ name: Nightly uv-lock fork-pin refresh
 # the opencode baseURL fix (PR #8), so every agentic-eval trial scored 0 because the
 # agent built "undefined/chat/completions" and never contacted the model.
 #
-# This job re-resolves the fork pins to their current branch HEAD each night and keeps
-# one PR current until its required review arrives. The PR auto-merges after approval.
+# When manually dispatched, this job re-resolves the fork pins to their current branch
+# HEAD and keeps one PR current until its required review arrives. The PR auto-merges
+# after approval.
 # Add more packages to the `uv lock --upgrade-package` line to track more forks.
-#
-# NOTE: scheduled workflows run only from the repository's DEFAULT branch, so this file
-# must be merged to the default branch to fire on schedule. `workflow_dispatch` lets you
-# run it by hand from any branch that has it.
 
 on:
-  schedule:
-    - cron: "0 4 * * *"
   workflow_dispatch: {}
   pull_request_target:
     types: [closed]
