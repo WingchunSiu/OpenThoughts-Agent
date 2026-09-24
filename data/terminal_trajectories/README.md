@@ -80,12 +80,20 @@ pass rates for difficulty calibration.
 
 The current validation order is:
 
-1. Run dynamic oracle, no-op, partial-solution, and model rollout checks on
-   LiteCoder-Terminal-RL-preview. Its 602 tasks already have Harbor structure;
-   the remaining questions concern reproducibility, verifier correctness, and
-   model difficulty.
+1. LiteCoder-Terminal-RL-preview: dynamic oracle + no-op checks ran on a
+   stratified 25-task sample (2026-09-23, Modal sandboxes). Only 9/25 tasks pass
+   both gates; all failures are task-side defects (missing image dependencies,
+   dead external fetches, environment/solution desync), none are always-reward
+   verifiers. The dataset is not RL-ready as published. Next: oracle-filter all
+   602 tasks on CPU sandboxes, then run partial-solution and model rollout
+   checks on the healthy subset only. See
+   `outputs/litecoder-terminal-audit/dynamic-pilot-2026-09-23.md`.
 2. Sample LFM2-Terminal trajectories and measure how often their terminal
    observations contain enough file evidence for deterministic reconstruction.
+   LFM2 is the dominant Terminal-Universe input (139,841 trajectories -> 46,037
+   environments, 95.2% post-completion sufficiency), but its Terminus-2
+   shell-batch format has no structured Read/Write/Edit calls, so expect replay
+   alone to be insufficient and budget for model-based completion.
 3. Use SWE-Hero or Open-SWE-Traces only after linking each trajectory back to
    its upstream repository task and checking TaskTrove overlap. Their public
    trajectory rows are useful SFT material but are not standalone Harbor tasks.
@@ -93,11 +101,15 @@ The current validation order is:
    the source-specific evidence audit passes.
 
 [Terminal-Universe](https://arxiv.org/abs/2609.04148) is a method reference, not
-a directly importable source. Its published paper reports reconstructed
-environments and generated tasks but does not currently release the pipeline,
-reconstructed workspaces, or Harbor-style task packages. Reproduction therefore
-requires source adapters, deterministic replay of file evidence, model-based
-environment completion, a sufficiency judge, task and verifier synthesis, and
-sandbox validation. Some trajectories cannot recover files that were never
-observed. Terminal-Universe also uses LiteCoder-Terminal among its inputs, so
+a directly importable source. As of 2026-09-24 the paper still releases no
+pipeline code, reconstructed environments, generated tasks, corpus, or weights,
+and reports no compute cost. Its replay recovers only read/write/edit evidence:
+shell side effects (`echo > f`, `sed -i`, compiler outputs) are invisible to it,
+and replay-only workspace sufficiency is ~40% (terminal) / ~20% (SWE), so
+model-based environment completion is mandatory rather than optional. Its
+training loop is teacher re-solving in reconstructed environments with verifier
+filtering, then SFT — notably, its own ablation shows SFT on the raw source
+trajectories scores *below* the base model (36.7 vs 47.0 on Terminal-Bench 2.1).
+Terminal-Universe also uses LiteCoder-Terminal trajectories among its inputs, so
 derived tasks require provenance tracking and overlap checks before inclusion.
+See SOURCE_RESEARCH.md for the full analysis.

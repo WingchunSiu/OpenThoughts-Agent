@@ -28,7 +28,7 @@ All 602 task configs allow internet. 602 verifier scripts install or download de
 
 602 task configs reference a mutable `:latest` Docker image tag. Pin or remove those image references before a stable TaskTrove release.
 
-Dynamic oracle/no-op/partial-solution gates were not run by this static report.
+Dynamic oracle/no-op/partial-solution gates were not run by this static report. A first dynamic pilot followed on 2026-09-23 (`dynamic-pilot-2026-09-23.md`): 25 stratified tasks in fresh Modal containers, oracle + nop. Result: 9/25 PASS, 16/25 oracle failures (all task-side defects: missing image deps, dead external URLs, environment/solution desync), 0 always-reward verifiers, 0 infrastructure failures. The dataset is not RL-ready as published; run the full-602 oracle filter before any GPU pilot.
 
 The packaged Parquet is a local generated artifact. Recreate it with `--package-parquet`; this report records its checksum.
 
